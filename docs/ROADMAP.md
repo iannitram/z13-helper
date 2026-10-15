@@ -357,42 +357,68 @@ side button, fans, profiles and the QAM plugin back without any other step.
 
 ---
 
-## 9b. Phase 12c — Post-SteamOS-update care inside Z13-Helper ⏳ (added 2026-10-15, Ian)
+## 9b. Phase 12c — Post-update tasks in the Updates panel ⏳ (added 2026-10-15, widened same day, Ian)
 
-Today the after-an-update routine lives in the maintainer's notes (Bucket 1 =
-always re-apply/verify, Bucket 2 = re-apply + re-test whether upstream fixed it), worked by hand. The
-Z13-*hardware* items in it belong in Z13-Helper, so anyone running SteamOS on a Z13 gets them and
-`./install.sh --repair` becomes the whole post-update step. **Rule: only what's about this laptop's
-hardware on SteamOS.** Items about one person's own setup (other apps, networking, dev toolchains,
-package-manager restores, sudoers) stay in that person's notes.
+**Why.** A SteamOS atomic update ("nuclear update") wipes `/usr`, Valve's grub file and the pacman
+keyring, and rolls `/etc` changes back unless they're registered. Today the maintainer re-applies
+things by hand from a wiki checklist. Ian wants the app to do it, **selectively**: tick what you need,
+see what it will run, run it, read the log.
 
-**Bring in (priority order):**
-1. **amdgpu display-stability kernel args** (`dcdebugmask=0x20e10 gpu_recovery=1 cwsr_enable=0
-   sg_display=0 abmlevel=0`; wiki "HARD RULE": always re-apply, never skip). Today
-   `~/.local/bin/restore-amdgpu-grub.sh` → `update-grub` → reboot. Move the script into `tooling/`
-   + the install manifest; `install_check` compares `/proc/cmdline` and `/etc/default/grub-steamos`
-   against the wanted set and says which of "needs re-apply" / "applied, reboot pending" / "live" is
-   true. Re-apply only with sudo **and** a prompt (it edits Valve's file); never auto-reboot — the app
-   shows "reboot to finish". Use `update-grub`, never `grub-mkconfig` (wiki gotcha #1).
-2. **MT7925 Bluetooth mitigations** (the Z13's Wi-Fi/BT card): udev no-autosuspend rule,
-   `bt-mt7925-cycle.service`, `mt7925-bt-resume.service` + `.sh`, wireplumber SBC-only drop-in.
-   Into `packaging/host/` + the manifest + the atomic-update keep-list, like the fan resume hook.
-3. **"After an update" detection:** record `BUILD_ID` in `install.json`; when it changes, the app's
-   tray/Updates panel says "SteamOS updated — run Repair" (the Repair button already exists), and
-   Decky shows the same line in Game Mode.
-4. **Keep-list health:** generalise the registry one-liner (every path in
-   `/etc/atomic-update.conf.d/*.conf` exists) into `install_check`, reporting ours as red and
-   others' as info.
-5. **Bucket 2 "has upstream fixed it?" probes**, shown as info rows, never acted on:
-   MES firmware ≥ `0x7f` (then `cwsr_enable=0` can go), mt7925 BT firmware newer than `20250305`,
-   kernel ≥ 6.19 (DCN 3.5 cursor/vblank fix → start peeling `dcdebugmask` bits). Each links the
-   wiki's retirement steps.
+**The feature.**
+- **"After SteamOS update" tab in Updates.** One row per task:
+  - its status: ✅ fine · ⚠️ needs re-apply · 🔁 applied, reboot pending · ℹ️ info only · — not
+    applicable here
+  - what it fixes, in one line
+  - a checkbox
+  **Run selected** shows the plan (each command, what needs sudo, network or a reboot) and asks first.
+  It then streams the log as **Repair install** does, backing up any file it replaces.
+- **Order is automatic:** pacman keyring first (when any selected task uses pacman), then the rest,
+  reboot-needing ones last. The app **never reboots by itself**; it ends with a "Reboot to finish"
+  button.
+- **Detecting an update:** `install.json` records SteamOS's `BUILD_ID`. When it changes, the tray and
+  the Updates button say "SteamOS updated: N post-update tasks need attention", and the Decky panel
+  shows the same line in Game Mode.
+- **Without the GUI:** `./install.sh --post-update` (pick from a list) or `--post-update --only
+  amdgpu,rocm`, for SSH or Game Mode. `--repair` keeps doing what it does today (Z13-Helper's own
+  files) and then lists any post-update tasks still pending.
+- **One task = one small recipe** with id, title, one-line "fixes", a read-only `check`, an
+  idempotent `apply`, and flags (`sudo`, `network`, `reboot`, `pacman`, `default_on`). Built-in
+  recipes live in `tooling/post-update/`. **Local recipes** in `~/.config/z13-helper/post-update.d/`
+  appear in the same table, so personal items run from the app without going into the public repo.
+- **Safety:** checks never write. Applies refuse on anything that isn't SteamOS on a GZ302. Grub only
+  through `update-grub`, never `grub-mkconfig`. `steamos-readonly` is always re-enabled, even after
+  a failure. Logs follow the logging opt-in.
 
-**Not here:** anything that needs a reboot to *test*, or retires a workaround by itself. The app
-reports; Ian decides. When an item moves in, its wiki row changes to "handled by Z13-Helper
-(`install.sh --repair`)" so the two lists don't drift.
+**Candidates from the maintainer's post-update checklist**, scanned 2026-10-15. P1 = first:
 
----
+| # | Task | Fixes | Check (read-only) | Apply | Needs | Tier |
+|---|---|---|---|---|---|---|
+| 1 | **amdgpu display + MES stability** ("the graphics glitch") | Game Mode display freezes (DMCUB `flip_done` timeouts), idle reboots, MES (GPU scheduler) firmware wedges on Strix Halo | `/proc/cmdline` and `/etc/default/grub-steamos` both carry `dcdebugmask=0x20e10 gpu_recovery=1 cwsr_enable=0 sg_display=0 abmlevel=0` | add the args to `grub-steamos` (Valve's file, so never registered), `update-grub` | sudo, reboot | **built-in, on; P1** |
+| 2 | **pacman keyring** | "required key missing from keyring" on every pacman step after an update | `pacman-key --list-keys` count (0 after an update; ~180 when healthy) | `steamos-readonly disable` → `pacman-key --init` → `--populate` → `enable` | sudo | built-in; runs automatically before pacman tasks; P1 |
+| 3 | **Carry-forward list health** | registered `/etc` files silently missing after a slot switch | every path in `/etc/atomic-update.conf.d/*.conf` exists (ours red, others info) | — (shows what's missing) | — | built-in, info; P1 |
+| 4 | **Save SteamOS's own `/etc` snapshot** | SteamOS keeps per-update `/etc` backups in `/var/lib/steamos-atomupd/etc_backup/`, but per slot, so the next switch loses them | a new snapshot there with no copy under `~/.local/share/z13-helper/etc-backups/` | copy it to `/home` | sudo (read) | built-in, on; P2 |
+| 5 | **MT7925 Bluetooth workarounds** (the Z13's Wi-Fi/BT card) | A2DP and HID drops, connect-time race after resume | udev no-autosuspend rule, `bt-mt7925-cycle.service`, `mt7925-bt-resume.service` + `.sh`, wireplumber SBC-only drop-in present and enabled | install from `packaging/host/`, register in the keep-list | sudo | built-in, on; P2 |
+| 6 | **ROCm** (local LLMs on Strix Halo) | `/opt/rocm` survives, but the update strips `fmt` and `google-glog` and drops `/etc/ld.so.conf.d/00-rocm.conf`, so `rocminfo` won't run | `/opt/rocm` exists and `rocminfo` runs; `00-rocm.conf` and `profile.d/rocm.sh` present | `pacman -S --needed fmt google-glog` → write `00-rocm.conf` + `ldconfig` → `profile.d/rocm.sh` (PATH, `ROCM_PATH`) | sudo, network, pacman | **optional pack**, offered only when `/opt/rocm` exists; P2 |
+| 7 | **"Has upstream fixed it?" probes** | knowing when a workaround can be retired | MES FW ≥ `0x7f` (then `cwsr_enable=0` can go) · mt7925 BT FW newer than `20250305` · kernel ≥ 6.19 (DCN 3.5 cursor fix: peel `dcdebugmask` bits) · kernel has Android binder again | — (links the retirement steps; never acts) | — | built-in, info; P2 |
+| 8 | **Dev headers + `.pc` files** | `pkg-config`, gcc and Tauri builds on the host break | the stripped-`.pc` diff (`pacman -Qql` vs `/usr/lib/pkgconfig`) | extract only the missing `.pc` files from cached packages (`bsdtar`), not a full `--overwrite` reinstall (the rootfs is 5 GB) | sudo, pacman | optional pack, off; P3 |
+| 9 | **Coredump size cap** | crash dumps filling the small rootfs | `/etc/systemd/coredump.conf.d/50-limit.conf` present | install it | sudo | optional pack, off; P3 |
+| — | Already handled by `install.sh --repair` | z13ctl permissions, fan resume hook, lightbar reset + polkit rule, InputPlumber mask, Z13-Helper's keep-list lines | (existing checks) | (existing) | — | shown as rows so the tab is complete |
+
+**Local recipes, not in the repo** (the maintainer's own setup; written as
+`~/.config/z13-helper/post-update.d/*.toml` once the format exists): Waydroid restore and the
+out-of-tree binder module build (per kernel), the rootless-podman LLM stack, Tailscale-up, the
+network split-DNS dispatcher, sudoers drop-ins, the native-build container. When one moves into a
+recipe, its wiki row changes to "Z13-Helper post-update task `<id>`", so the two lists don't drift.
+
+**Order of work:**
+1. The recipe format, the runner and `--post-update` in `install.sh`, with tasks 1–3.
+2. The Updates-panel tab and the update detection.
+3. Tasks 4–7.
+4. Local recipes.
+5. The optional packs (8, 9).
+
+**Done when:** after a real SteamOS update, the tray says so; one tab shows what's broken; ticking
+amdgpu + ROCm and pressing Run fixes both with a single reboot; the health report is green.
 
 ## 10. Phase 14 — Feature backlog 💤 (from the 2026-10-09 research, priority order)
 0. ✅ **Crash and error log** (2026-10-12, v0.4.1): `src/app_log.py` + Help → Error log; app log, crash reports and hard-crash recovery under `~/.local/state/z13-helper/`. The diagnostics panel below can grow out of the same window.

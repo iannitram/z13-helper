@@ -69,13 +69,19 @@ captured from Desktop Mode.
 
 The full plan, with reasons and status, is [`docs/ROADMAP.md`](docs/ROADMAP.md). Next up:
 
-1. **Post-SteamOS-update care** (§9b): move the Z13-specific steps from the maintainer's
-   after-an-update checklist into `install.sh --repair` and the health report:
-   - the amdgpu display-stability kernel arguments
+1. **Post-update tasks in the Updates panel** (§9b). After a SteamOS update, a new tab lists what
+   the update broke. You tick what you want, see exactly what will run, and run it; the app never
+   reboots on its own. Planned tasks:
+   - the amdgpu display and GPU-scheduler stability fix (Game Mode display freezes)
+   - pacman keyring re-init
+   - a carry-forward list health check
+   - saving SteamOS's own `/etc` snapshot
    - the MT7925 Bluetooth workarounds
-   - "SteamOS updated, run Repair" detection
-   - checking that SteamOS's carry-forward list is intact
    - "has upstream fixed it yet?" checks
+   - optional packs: ROCm restore, dev headers, a coredump size cap
+
+   Also: "SteamOS updated" detection, `./install.sh --post-update` for SSH or Game Mode, and local
+   recipes so you can add your own tasks without changing the app.
 2. **Settle the frozen-tach question** from the fan trace, and tune or narrow the rule.
 3. **Game Mode polish** (§9):
    - make Steam's own TDP, charge-limit and profile controls work on the Z13, through a small
