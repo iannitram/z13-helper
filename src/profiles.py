@@ -21,10 +21,10 @@ Store: ~/.config/z13-helper/profiles.json
 
 null means "leave that subsystem to the firmware / don't touch it".
 
-This file is stdlib-only and self-contained on purpose: the desktop app
-imports it inside the Flatpak, a copy runs on the host as the `z13-profile`
-CLI (what z13-restore-profile calls at login), and the Decky backend shells
-to that CLI in Game Mode. One engine, three callers.
+This file is stdlib-only and needs nothing but host.py (the host seam) on
+purpose: the desktop app imports it inside the Flatpak, a copy runs on the host
+as the `z13-profile` CLI (what z13-restore-profile calls at login), and the
+Decky backend shells to that CLI in Game Mode. One engine, three callers.
 
 CLI:
     z13-profile list [--json]      names (and which is active)
@@ -37,9 +37,15 @@ CLI:
 import argparse
 import json
 import os
-import subprocess
 import sys
 import time
+
+# Installed as ~/.local/bin/z13-profile, the host seam sits in ~/.local/lib/z13-helper/
+# (install.sh puts it there). In the Flatpak and the tests it's next to this file.
+_HOST_LIB = os.path.expanduser("~/.local/lib/z13-helper")
+if os.path.isdir(_HOST_LIB) and _HOST_LIB not in sys.path:
+    sys.path.append(_HOST_LIB)
+import host  # noqa: E402
 
 STORE_PATH = os.path.expanduser("~/.config/z13-helper/profiles.json")
 MAX_FANS_PATH = os.path.expanduser("~/.config/z13-helper/max-fans.json")
@@ -312,25 +318,6 @@ def validate_curve(curve):
 # Apply engine
 # ----------------------------------------------------------------------
 
-def _in_flatpak():
-    return os.path.exists("/.flatpak-info") or "FLATPAK_ID" in os.environ
-
-
-def host_runner(argv, timeout=120):
-    """Run a host command; tunnels out of the Flatpak sandbox when needed."""
-    cmd = list(argv)
-    if _in_flatpak():
-        cmd = ["flatpak-spawn", "--host"] + cmd
-    try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-        out = ((p.stdout or "") + (p.stderr or "")).strip()
-        return p.returncode, out
-    except subprocess.TimeoutExpired:
-        return 124, "timed out"
-    except OSError as e:
-        return 127, str(e)
-
-
 def _runtime_dir():
     """Where the lightbar-reset stamp lives: $XDG_RUNTIME_DIR, or /tmp.
 
@@ -358,7 +345,7 @@ def lightbar_failure_kind(out):
     """Classify a failed lightbar write, or None if it isn't one we can recover.
 
     'wedged': the USB endpoint itself is stuck ("connection timed out" from
-    z13ctl, or our own subprocess timeout) -- needs a USB reset.
+    z13ctl, or host.run's own timeout) -- needs a USB reset.
     'stale': the daemon is writing to a hidraw node that no longer exists
     ("no such device" / ENODEV), e.g. after a reset re-enumerated the device
     under new nodes -- needs only a daemon restart.
@@ -393,21 +380,21 @@ def _stamp_rate_limited(stamp, now, skipped_msg):
     return True, None
 
 
-def restart_lightbar_daemon(runner, *, sleep=time.sleep):
+def restart_lightbar_daemon(*, sleep=time.sleep):
     """Restart the z13ctl user daemon so it drops any cached hidraw path.
 
     On restart the daemon re-applies its own saved state (lighting, battery
     limit, custom fan curve), so nothing else needs to be re-pushed here.
     Returns (ok, message).
     """
-    rc, out = runner(["systemctl", "--user", "restart", "--no-ask-password", Z13CTL_SERVICE], timeout=30)
+    rc, out, _ = host.run(["systemctl", "--user", "restart", "--no-ask-password", Z13CTL_SERVICE], timeout=30)
     if rc != 0:
         return False, f"daemon restart failed ({out or f'rc={rc}'})"
     sleep(LIGHTBAR_DAEMON_RESTART_WAIT_S)
     return True, "daemon restarted"
 
 
-def recover_lightbar(runner=None, *, sleep=time.sleep, now=time.time):
+def recover_lightbar(*, sleep=time.sleep, now=time.time):
     """Reset the wedged lightbar via the root oneshot, then restart the z13ctl
     daemon (it caches the hidraw path, which the reset invalidates). Returns
     (ok, message).
@@ -423,24 +410,23 @@ def recover_lightbar(runner=None, *, sleep=time.sleep, now=time.time):
 
     decky/main.py carries a copy of this (the Decky backend can't import src/).
     """
-    runner = runner or host_runner
     ok, msg = _stamp_rate_limited(lightbar_stamp_path(), now,
                                    lambda age: f"lightbar reset skipped (last one {age} s ago)")
     if not ok:
         return False, msg
     # --no-ask-password: without the polkit rule, fail instead of popping a
     # password dialog from a background apply.
-    rc, out = runner(["systemctl", "start", "--no-ask-password", LIGHTBAR_RESET_UNIT], timeout=30)
+    rc, out, _ = host.run(["systemctl", "start", "--no-ask-password", LIGHTBAR_RESET_UNIT], timeout=30)
     if rc != 0:
         return False, f"lightbar reset failed ({out or f'rc={rc}'})"
     sleep(LIGHTBAR_RESET_SETTLE_S)
-    daemon_ok, daemon_msg = restart_lightbar_daemon(runner, sleep=sleep)
+    daemon_ok, daemon_msg = restart_lightbar_daemon(sleep=sleep)
     if not daemon_ok:
         return True, f"lightbar reset, but {daemon_msg}"
     return True, "lightbar reset"
 
 
-def recover_lightbar_stale(runner=None, *, sleep=time.sleep, now=time.time):
+def recover_lightbar_stale(*, sleep=time.sleep, now=time.time):
     """Recover from a stale daemon handle (ENODEV) without a USB reset: the
     daemon is simply holding a dead hidraw path, so restarting it is enough.
     Rate-limited like recover_lightbar(), but via its own stamp so the two
@@ -449,12 +435,11 @@ def recover_lightbar_stale(runner=None, *, sleep=time.sleep, now=time.time):
 
     decky/main.py carries a copy of this.
     """
-    runner = runner or host_runner
     ok, msg = _stamp_rate_limited(lightbar_daemon_stamp_path(), now,
                                    lambda age: f"daemon restart skipped (last one {age} s ago)")
     if not ok:
         return False, msg
-    return restart_lightbar_daemon(runner, sleep=sleep)
+    return restart_lightbar_daemon(sleep=sleep)
 
 
 def _max_fans_state():
@@ -471,7 +456,7 @@ def curve_spec(curve):
     return ",".join(f"{int(t)}:{int(p)}%" for t, p in curve)
 
 
-def apply(profile, *, previous=None, runner=host_runner, z13ctl=Z13CTL,
+def apply(profile, *, previous=None, z13ctl=Z13CTL,
           skip_hooks=False):
     """Put the machine into the state `profile` describes.
 
@@ -486,7 +471,7 @@ def apply(profile, *, previous=None, runner=host_runner, z13ctl=Z13CTL,
     results = []
 
     def step(name, argv, ok_msg=None, timeout=120):
-        rc, out = runner(argv, timeout=timeout)
+        rc, out, _ = host.run(argv, timeout=timeout)
         ok = rc == 0
         results.append((name, ok, ok_msg if (ok and ok_msg) else (out or f"rc={rc}")))
         return ok
@@ -541,7 +526,7 @@ def apply(profile, *, previous=None, runner=host_runner, z13ctl=Z13CTL,
     # 5. Undervolt (needs ryzen_smu; absent on stock SteamOS -> reported, not fatal).
     uv = profile.get("undervolt")
     if uv is not None:
-        rc, out = runner([z13ctl, "undervolt", "--set", str(uv)])
+        rc, out, _ = host.run([z13ctl, "undervolt", "--set", str(uv)], timeout=120)
         if rc == 0:
             results.append(("undervolt", True, f"{uv}"))
         else:
@@ -554,18 +539,18 @@ def apply(profile, *, previous=None, runner=host_runner, z13ctl=Z13CTL,
     if br:
         for dev in LIGHTING_DEVICES:
             argv = [z13ctl, "--device", dev, "brightness", br]
-            rc, out = runner(argv, timeout=30)
+            rc, out, _ = host.run(argv, timeout=30)
             if rc != 0 and dev == "lightbar":
                 kind = lightbar_failure_kind(out)
                 if kind == "wedged":
-                    rec_ok, rec_msg = recover_lightbar(runner)
+                    rec_ok, rec_msg = recover_lightbar()
                 elif kind == "stale":
-                    rec_ok, rec_msg = recover_lightbar_stale(runner)
+                    rec_ok, rec_msg = recover_lightbar_stale()
                 else:
                     rec_ok = None
                 if rec_ok is not None:
                     if rec_ok:
-                        rc, out = runner(argv, timeout=30)
+                        rc, out, _ = host.run(argv, timeout=30)
                         if rc == 0:
                             results.append((f"brightness ({dev})", True, f"{br} (lightbar recovered)"))
                             continue

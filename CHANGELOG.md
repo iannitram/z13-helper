@@ -19,6 +19,13 @@ the device but not yet verified on the Z13. Plan and status: `docs/ROADMAP.md`.
   tracebacks still reach stderr/the journal. A missing key means on, so existing installs keep
   logging. On-device check pending.
 
+### Changed
+- **One host-command seam** (`src/host.py`) for the desktop app, the `z13-profile` CLI and the
+  Decky plugin. It replaces five hand-rolled runners and three `_in_flatpak()` copies, and gives
+  every Decky child the deck env (incl. the `LD_LIBRARY_PATH` fix) in one place. `install.sh`
+  installs it to `~/.local/lib/z13-helper/` (for `z13-profile`) and into Decky's `py_modules/`;
+  run `./install.sh --repair` after updating. On-device check pending.
+
 ## 0.5.0 — 2026-10-15
 
 ### Changed

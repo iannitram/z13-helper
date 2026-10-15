@@ -20,10 +20,9 @@ Game Mode has Steam's own brightness slider; this is for Desktop Mode only.
 
 import logging
 import os
-import subprocess
 import threading
 
-from hardware_controller import _in_flatpak
+import host
 
 logger = logging.getLogger(__name__)
 
@@ -145,9 +144,8 @@ class _KdeBackend:
 class _SysfsBackend:
     name = "sysfs"
 
-    def __init__(self, path: str, runner=None):
+    def __init__(self, path: str):
         self.path = path
-        self._runner = runner or _host_write
         self._max = _read_int(os.path.join(path, "max_brightness")) or 0
         # Host writes are subprocesses: run them off the GUI thread, always
         # writing only the latest requested value (slider drags fire fast).
@@ -173,26 +171,16 @@ class _SysfsBackend:
                 while self._want is None:
                     self._cond.wait()
                 raw, self._want = self._want, None
-            ok, err = self._runner(os.path.join(self.path, "brightness"), raw)
-            if not ok:
-                logger.error("Screen brightness write failed: %s", err)
-
-
-def _host_write(path: str, value: int):
-    cmd = ["tee", path]
-    if _in_flatpak():
-        cmd = ["flatpak-spawn", "--host"] + cmd
-    try:
-        p = subprocess.run(cmd, input=f"{value}\n", capture_output=True, text=True, timeout=10)
-        return p.returncode == 0, (p.stderr or "").strip()
-    except (subprocess.TimeoutExpired, OSError) as e:
-        return False, str(e)
+            rc, out, _ = host.run(["tee", os.path.join(self.path, "brightness")],
+                                  timeout=10, input=f"{raw}\n")
+            if rc != 0:
+                logger.error("Screen brightness write failed: %s", out)
 
 
 class ScreenBrightness:
     """Picks a backend at construction. `backend` is None if neither works."""
 
-    def __init__(self, bus=None, backlight_root: str = BACKLIGHT_ROOT, runner=None):
+    def __init__(self, bus=None, backlight_root: str = BACKLIGHT_ROOT):
         self.backend = None
         if bus is not None:
             try:
@@ -204,7 +192,7 @@ class ScreenBrightness:
         if self.backend is None:
             path = find_backlight(backlight_root)
             if path:
-                sysfs = _SysfsBackend(path, runner)
+                sysfs = _SysfsBackend(path)
                 if sysfs.available():
                     self.backend = sysfs
         logger.info("Screen brightness backend: %s", self.backend.name if self.backend else "none")

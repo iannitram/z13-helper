@@ -25,10 +25,11 @@ from PyQt6.QtCore import QTimer, Qt, pyqtSlot, pyqtSignal
 from PyQt6.QtDBus import QDBusConnection
 from PyQt6.QtGui import QFont, QIcon, QPainter, QColor, QPixmap, QAction
 
-from hardware_controller import HardwareController, _in_flatpak
+from hardware_controller import HardwareController
 from sensor_reader import SensorReader
 from config_manager import ConfigManager
 import app_log
+import host
 import install_record
 import max_fans_state
 import profiles
@@ -460,7 +461,7 @@ class DashboardUI(QMainWindow):
         self.batt_100.setChecked(self.battery_slider.value() == 100)
         self._highlight_brightness(self.config.get("brightness", "medium"))
         self._sync_screen_brightness(force=True)
-        rc, out, _ = update_watch.host_run(["systemctl", "--user", "is-enabled", _SERVICE], timeout=10)
+        rc, out, _ = host.run(["systemctl", "--user", "is-enabled", _SERVICE], timeout=10)
         self.startup.blockSignals(True)
         self.startup.setChecked(rc == 0 and out.strip() == "enabled")
         self.startup.blockSignals(False)
@@ -627,7 +628,7 @@ class DashboardUI(QMainWindow):
     def _toggle_startup(self, on):
         verb = "enable" if on else "disable"
         self.control._submit(f"Run on Startup {'on' if on else 'off'}",
-                             lambda: update_watch.host_run(["systemctl", "--user", verb, _SERVICE], timeout=15))
+                             lambda: host.run(["systemctl", "--user", verb, _SERVICE], timeout=15))
 
     # ------------------------------------------------------------------
     # Updates
@@ -795,7 +796,7 @@ class DashboardUI(QMainWindow):
         PRESS lines back. Legacy InputPlumber D-Bus fallback kept for machines
         where InputPlumber still owns the button.
         """
-        if _in_flatpak():
+        if host.in_flatpak():
             if self._start_host_side_button_reader():
                 return
         else:

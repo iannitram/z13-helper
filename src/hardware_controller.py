@@ -1,8 +1,8 @@
 import os
 import re
-import subprocess
 import logging
 
+import host
 import profiles
 
 logger = logging.getLogger(__name__)
@@ -12,16 +12,6 @@ _RE_TDP_LINE   = re.compile(r"PL([123])\s+\([^)]+\):\s+(\d+)")
 _RE_FAN_LINE   = re.compile(r"(\d+)°C:\s+(\d+)/255\s*\(\s*(\d+)%\)")
 _RE_FAN_HEADER = re.compile(r"Fans:\s+(\d+)\s*RPM,\s*mode:\s*(\w+)")
 
-
-def _in_flatpak() -> bool:
-    """True when running inside a Flatpak sandbox.
-
-    Inside a Flatpak we cannot reach the host's /home/deck/.local/bin/z13ctl
-    directly — z13ctl needs hardware access (asus-wmi sysfs, hidraw, ryzen_smu)
-    that is unavailable in the sandbox. We tunnel calls back to the host with
-    `flatpak-spawn --host`.
-    """
-    return os.path.exists("/.flatpak-info") or "FLATPAK_ID" in os.environ
 
 _DEFAULT_Z13CTL = os.path.expanduser("~/.local/bin/z13ctl")
 
@@ -36,32 +26,28 @@ class HardwareController:
         if z13ctl_path is None:
             # Inside Flatpak, host paths are not visible to os.path.exists.
             # Trust the default path and let flatpak-spawn resolve it on the host.
-            if _in_flatpak():
+            if host.in_flatpak():
                 z13ctl_path = _DEFAULT_Z13CTL
             else:
                 z13ctl_path = _DEFAULT_Z13CTL if os.path.exists(_DEFAULT_Z13CTL) else "z13ctl"
         self.z13ctl_path = z13ctl_path
-        self._flatpak = _in_flatpak()
 
     def _run_command(self, args, quiet: bool = False, timeout: float = 120):
+        """z13ctl's output; RuntimeError when it fails (ProfileControl relies on that)."""
         cmd = [self.z13ctl_path] + args
-        if self._flatpak:
-            # Tunnel out to the host so z13ctl can touch real hardware.
-            cmd = ["flatpak-spawn", "--host"] + cmd
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=timeout)
-            return result.stdout.strip()
-        except subprocess.TimeoutExpired:
+        r = host.run(cmd, timeout=timeout)
+        if r.timed_out:
             if not quiet:
                 logger.error(f"Command '{' '.join(cmd)}' timed out after {timeout} s")
             raise RuntimeError(f"z13ctl command timed out after {timeout} s")
-        except subprocess.CalledProcessError as e:
-            if not quiet:
-                logger.error(f"Command '{' '.join(cmd)}' failed: {e.stderr.strip()}")
-            raise RuntimeError(f"z13ctl command failed: {e.stderr.strip()}")
-        except FileNotFoundError:
+        if r.rc == host.RC_NOT_FOUND:
             logger.error(f"z13ctl not found at: {self.z13ctl_path}")
             raise RuntimeError("z13ctl executable not found.")
+        if r.rc != 0:
+            if not quiet:
+                logger.error(f"Command '{' '.join(cmd)}' failed: {r.out}")
+            raise RuntimeError(f"z13ctl command failed: {r.out}")
+        return r.out
 
     # --- Write commands ---
 
@@ -132,7 +118,7 @@ class HardwareController:
                     recover = {"wedged": profiles.recover_lightbar,
                                "stale": profiles.recover_lightbar_stale}.get(kind)
                     if recover:
-                        ok, msg = recover(profiles.host_runner)
+                        ok, msg = recover()
                         if ok:
                             try:
                                 self._run_command(argv, timeout=30)

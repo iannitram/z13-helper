@@ -81,7 +81,7 @@ CHECK="$REPO/tooling/install_check.py"
 INSTALLERS="$REPO/src/installers.py"
 PLUGIN_DIR="$HOME/homebrew/plugins/z13-helper"
 PLUGIN_FILES=(plugin.json package.json main.py dist/index.js dist/index.js.map
-              py_modules/fan_watchdog.py py_modules/sensor_reader.py)
+              py_modules/fan_watchdog.py py_modules/sensor_reader.py py_modules/host.py)
 # py_modules/X comes from src/X (shared with the desktop app, installed root-owned:
 # docs/adr/0001-decky-imports-root-owned-copies.md); everything else from decky/.
 plugin_src() { [[ $1 == py_modules/* ]] && echo "$REPO/src/${1#py_modules/}" || echo "$REPO/decky/$1"; }

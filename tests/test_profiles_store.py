@@ -5,7 +5,6 @@ import json
 import pytest
 
 import profiles
-from conftest import FakeRunner
 
 GOOD_CURVE = [[40, 20], [50, 35], [60, 55], [70, 75], [75, 90], [80, 100], [85, 100], [90, 100]]
 
@@ -258,24 +257,23 @@ def test_validate_curve_allows_flat_segments():
 # apply_by_name
 # ----------------------------------------------------------------------
 
-def test_apply_by_name_sets_active_and_runs_previous_exit_hook(profiles_env):
+def test_apply_by_name_sets_active_and_runs_previous_exit_hook(profiles_env, fake_host):
     profiles.set_active("Boondock")
-    runner = FakeRunner()
-    profiles.apply_by_name("Balanced", runner=runner, z13ctl="z13ctl")
-    assert runner.calls[0][0] == "bash" and runner.calls[0][-1].endswith("boondock off")
+    profiles.apply_by_name("Balanced", z13ctl="z13ctl")
+    assert fake_host.argvs[0][0] == "bash" and fake_host.argvs[0][-1].endswith("boondock off")
     assert profiles.active_name() == "Balanced"
 
 
-def test_apply_by_name_keeps_active_when_profile_write_fails(profiles_env):
+def test_apply_by_name_keeps_active_when_profile_write_fails(profiles_env, fake_host):
     profiles.set_active("Silent")
-    runner = FakeRunner().fail(lambda a: "profile" in a)
-    profiles.apply_by_name("Turbo", runner=runner, z13ctl="z13ctl")
+    fake_host.fail(lambda a: "profile" in a)
+    profiles.apply_by_name("Turbo", z13ctl="z13ctl")
     assert profiles.active_name() == "Silent"
 
 
-def test_apply_by_name_unknown(profiles_env):
+def test_apply_by_name_unknown(profiles_env, fake_host):
     with pytest.raises(KeyError):
-        profiles.apply_by_name("Nope", runner=FakeRunner())
+        profiles.apply_by_name("Nope")
 
 
 # ----------------------------------------------------------------------
@@ -283,17 +281,16 @@ def test_apply_by_name_unknown(profiles_env):
 # ----------------------------------------------------------------------
 
 @pytest.fixture
-def cli_runner(profiles_env, monkeypatch):
-    """main() takes no runner; inject one by wrapping profiles.apply."""
-    runner = FakeRunner()
+def cli_host(profiles_env, monkeypatch, fake_host):
+    """main() with the fake host and a plain `z13ctl` path (wraps profiles.apply)."""
     real_apply = profiles.apply
     monkeypatch.setattr(profiles, "apply",
-                        lambda p, **kw: real_apply(p, runner=runner, z13ctl="z13ctl", **kw))
-    return runner
+                        lambda p, **kw: real_apply(p, z13ctl="z13ctl", **kw))
+    return fake_host
 
 
-def bash_calls(runner):
-    return [a[-1] for a in runner.calls if a[0] == "bash"]
+def bash_calls(fake_host):
+    return [a[-1] for a in fake_host.argvs if a[0] == "bash"]
 
 
 def test_cli_list(profiles_env, capsys):
@@ -328,7 +325,7 @@ def test_cli_show_unknown(profiles_env, capsys):
     assert "Nope" in capsys.readouterr().err
 
 
-def test_cli_apply_prints_one_line_per_step(profiles_env, cli_runner, capsys):
+def test_cli_apply_prints_one_line_per_step(profiles_env, cli_host, capsys):
     assert profiles.main(["apply", "Silent"]) == 0
     out = capsys.readouterr().out.splitlines()
     assert out[0] == "Applying profile: Silent"
@@ -336,37 +333,37 @@ def test_cli_apply_prints_one_line_per_step(profiles_env, cli_runner, capsys):
     assert profiles.active_name() == "Silent"
 
 
-def test_cli_apply_returns_1_on_any_failed_step(profiles_env, cli_runner, capsys):
-    cli_runner.fail(lambda a: "lightbar" in a)
+def test_cli_apply_returns_1_on_any_failed_step(profiles_env, cli_host, capsys):
+    cli_host.fail(lambda a: "lightbar" in a)
     assert profiles.main(["apply", "Silent"]) == 1
     assert any(line.lstrip().startswith("ERR") for line in capsys.readouterr().out.splitlines())
 
 
-def test_cli_apply_unknown(profiles_env, cli_runner, capsys):
+def test_cli_apply_unknown(profiles_env, cli_host, capsys):
     assert profiles.main(["apply", "Nope"]) == 1
-    assert cli_runner.calls == []
+    assert cli_host.argvs == []
 
 
-def test_cli_apply_runs_hooks(profiles_env, cli_runner):
+def test_cli_apply_runs_hooks(profiles_env, cli_host):
     profiles.main(["apply", "Boondock"])
-    assert len(bash_calls(cli_runner)) == 1 and bash_calls(cli_runner)[0].endswith("boondock on")
+    assert len(bash_calls(cli_host)) == 1 and bash_calls(cli_host)[0].endswith("boondock on")
 
 
-def test_cli_apply_no_hooks(profiles_env, cli_runner):
+def test_cli_apply_no_hooks(profiles_env, cli_host):
     profiles.main(["apply", "Boondock", "--no-hooks"])
-    assert bash_calls(cli_runner) == []
+    assert bash_calls(cli_host) == []
     assert profiles.active_name() == "Boondock"
 
 
-def test_cli_restore_reapplies_active_without_hooks(profiles_env, cli_runner, capsys):
+def test_cli_restore_reapplies_active_without_hooks(profiles_env, cli_host, capsys):
     profiles.set_active("Boondock")
     assert profiles.main(["restore"]) == 0
     assert "Applying profile: Boondock" in capsys.readouterr().out
-    assert bash_calls(cli_runner) == []               # no `boondock on` at login
-    assert ["z13ctl", "profile", "--set", "quiet"] in cli_runner.calls
+    assert bash_calls(cli_host) == []               # no `boondock on` at login
+    assert ["z13ctl", "profile", "--set", "quiet"] in cli_host.argvs
 
 
-def test_cli_restore_with_no_active(profiles_env, cli_runner, capsys):
+def test_cli_restore_with_no_active(profiles_env, cli_host, capsys):
     profiles_env.store.parent.mkdir(parents=True)
     profiles_env.store.write_text(json.dumps({"version": 1, "active": None, "profiles": []}))
     assert profiles.main(["restore"]) == 1

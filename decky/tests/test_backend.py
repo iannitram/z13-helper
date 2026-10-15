@@ -12,16 +12,22 @@ import sys
 import tempfile
 import types
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 MAIN = os.path.join(os.path.dirname(HERE), "main.py")
 # Installed, main.py imports the shared modules from its py_modules/ (copies of src/).
 SRC = os.path.join(os.path.dirname(os.path.dirname(HERE)), "src")
-if SRC not in sys.path:
-    sys.path.insert(0, SRC)
+# The fake host is shared with the pytest suite (tests/fake_host.py).
+TESTS = os.path.join(os.path.dirname(os.path.dirname(HERE)), "tests")
+for _p in (SRC, TESTS):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 import fan_watchdog  # noqa: E402
+import host  # noqa: E402
 import sensor_reader  # noqa: E402
+from fake_host import FakeHost  # noqa: E402
 
 _SETTINGS = tempfile.mkdtemp(prefix="z13-helper-settings-")
 # main.py does `import decky` at import time; give it a stand-in.
@@ -64,19 +70,19 @@ def _store(active="Balanced"):
     ]}
 
 
-class FakeRunner:
-    """Stands in for main._run; records argv, answers by matching a substring."""
+FAIL_OUT = "write /dev/hidraw5: connection timed out"
 
-    def __init__(self, fail_if=()):
-        self.calls = []
-        self.fail_if = fail_if
 
-    def __call__(self, argv, timeout=15):
-        self.calls.append((list(argv), timeout))
-        line = " ".join(argv)
-        if any(s in line for s in self.fail_if):
-            return 1, "write /dev/hidraw5: connection timed out"
-        return 0, ""
+def fake_host(test, fail_if=(), out=FAIL_OUT):
+    """A FakeHost installed as host.run for the rest of `test`; calls whose argv
+    contains a fail_if substring answer (1, out)."""
+    fh = FakeHost()
+    for sub in fail_if:
+        fh.fail(sub, out=out)
+    patcher = mock.patch.object(host, "run", fh.run)
+    patcher.start()
+    test.addCleanup(patcher.stop)
+    return fh
 
 
 class ClampTdpTest(unittest.TestCase):
@@ -175,39 +181,42 @@ class StoreTest(unittest.TestCase):
 
     def test_apply_tdp_on_writes_store_then_z13ctl(self):
         self._write(_store("Balanced"))
-        run = FakeRunner()
-        res = m.apply_tdp(True, 60, 40, 30, runner=run)
+        run = fake_host(self)
+        res = m.apply_tdp(True, 60, 40, 30)
         self.assertTrue(res["ok"] and res["saved"])
         self.assertEqual(m.active_profile(self._read())["tdp"],
                          {"pl1": 60, "pl2": 60, "pl3": 60, "force": False})
         self.assertEqual(len(run.calls), 1)
-        argv = run.calls[0][0]
+        argv = run.calls[0].argv
         self.assertEqual(argv[argv.index("tdp"):], ["tdp", "--set", "60", "--pl2", "60", "--pl3", "60"])
+        self.assertTrue(run.calls[0].as_deck)
 
     def test_apply_tdp_off_clears_and_reapplies_profile(self):
         self._write(_store("Boondock"))
-        run = FakeRunner()
-        res = m.apply_tdp(False, 20, 30, 40, runner=run)
+        run = fake_host(self)
+        res = m.apply_tdp(False, 20, 30, 40)
         self.assertTrue(res["ok"])
         self.assertIsNone(m.active_profile(self._read())["tdp"])
-        argv, timeout = run.calls[0]
-        self.assertEqual(argv[:len(m.Z13_PROFILE)], m.Z13_PROFILE)  # as deck, like set_app_profile
+        argv, timeout, as_deck, _ = run.calls[0]
+        self.assertEqual(argv[:len(m.Z13_PROFILE)], m.Z13_PROFILE)
+        self.assertTrue(as_deck)  # like set_app_profile
         self.assertTrue(argv[-4].endswith("/z13-profile"))
         self.assertEqual(argv[-3:], ["apply", "Boondock", "--no-hooks"])
         self.assertGreaterEqual(timeout, 60)
 
     def test_apply_tdp_hw_failure_still_saved(self):
         self._write(_store("Balanced"))
-        res = m.apply_tdp(True, 20, 30, 40, runner=FakeRunner(fail_if=("tdp",)))
+        fake_host(self, fail_if=("tdp",))
+        res = m.apply_tdp(True, 20, 30, 40)
         self.assertFalse(res["ok"])
         self.assertTrue(res["saved"])
 
     def test_apply_tdp_no_store_touches_nothing(self):
-        run = FakeRunner()
+        run = fake_host(self)
         orig = m._ensure_store
         m._ensure_store = lambda: None
         try:
-            res = m.apply_tdp(True, 20, 30, 40, runner=run)
+            res = m.apply_tdp(True, 20, 30, 40)
         finally:
             m._ensure_store = orig
         self.assertFalse(res["saved"])
@@ -223,33 +232,36 @@ class StoreTest(unittest.TestCase):
         spec.loader.exec_module(engine)
         for args in ((True, 20, 30, 40), (True, 93, 5, 5), (True, 75, 75, 75), (False, 0, 0, 0)):
             self._write(_store("Balanced"))
-            m.apply_tdp(*args, runner=FakeRunner())
-            m.apply_battery_limit(42, runner=FakeRunner())
+            fake_host(self)
+            m.apply_tdp(*args)
+            m.apply_battery_limit(42)
             for p in self._read()["profiles"]:
                 engine.validate(p)
 
     def test_apply_battery_limit(self):
         self._write(_store("Silent"))
-        run = FakeRunner()
-        res = m.apply_battery_limit(63, runner=run)
+        run = fake_host(self)
+        res = m.apply_battery_limit(63)
         self.assertTrue(res["ok"] and res["saved"])
         self.assertEqual(res["value"], 65)
         self.assertEqual(m.active_profile(self._read())["battery_limit"], 65)
-        self.assertEqual(run.calls[0][0][-3:], ["batterylimit", "--set", "65"])
+        self.assertEqual(run.calls[0].argv[-3:], ["batterylimit", "--set", "65"])
+        self.assertTrue(run.calls[0].as_deck)
 
 
 class BrightnessTest(unittest.TestCase):
     def test_one_call_per_device(self):
-        run = FakeRunner()
-        res = m.set_brightness_per_device("low", runner=run)
+        run = fake_host(self)
+        res = m.set_brightness_per_device("low")
         self.assertEqual(res, {"ok": True, "failed": [], "message": "Brightness low"})
-        devs = [a[a.index("--device") + 1] for a, _ in run.calls]
+        devs = [a[a.index("--device") + 1] for a in run.argvs]
         self.assertEqual(devs, ["keyboard", "lightbar"])
 
     def test_wedged_lightbar_does_not_fail_keyboard(self):
         recovers = []
+        fake_host(self, fail_if=("--device lightbar",))
         res = m.set_brightness_per_device(
-            "high", runner=FakeRunner(fail_if=("--device lightbar",)),
+            "high",
             recover=lambda: recovers.append(1) or (False, "lightbar reset skipped"))
         self.assertTrue(res["ok"])
         self.assertEqual(res["failed"], ["lightbar"])
@@ -257,14 +269,15 @@ class BrightnessTest(unittest.TestCase):
         self.assertEqual(recovers, [1])
 
     def test_all_failed(self):
-        res = m.set_brightness_per_device("off", runner=FakeRunner(fail_if=("brightness",)),
+        fake_host(self, fail_if=("brightness",))
+        res = m.set_brightness_per_device("off",
                                           recover=lambda: (False, "skipped"))
         self.assertFalse(res["ok"])
         self.assertEqual(res["failed"], ["keyboard", "lightbar"])
 
     def test_bad_level_runs_nothing(self):
-        run = FakeRunner()
-        self.assertFalse(m.set_brightness_per_device("max", runner=run)["ok"])
+        run = fake_host(self)
+        self.assertFalse(m.set_brightness_per_device("max")["ok"])
         self.assertEqual(run.calls, [])
 
 
@@ -277,30 +290,24 @@ class LightbarRecoveryTest(unittest.TestCase):
         self.daemon_stamp = os.path.join(d, "z13-lightbar-daemon-restart.stamp")
         self.slept = []
 
-    def recover(self, run, now=1000.0):
-        return m.recover_lightbar(run, sleep=self.slept.append, now=lambda: now, stamp=self.stamp)
+    def recover(self, now=1000.0):
+        return m.recover_lightbar(sleep=self.slept.append, now=lambda: now, stamp=self.stamp)
 
-    def recover_stale(self, run, now=1000.0):
-        return m.recover_lightbar_stale(run, sleep=self.slept.append, now=lambda: now, stamp=self.daemon_stamp)
+    def recover_stale(self, now=1000.0):
+        return m.recover_lightbar_stale(sleep=self.slept.append, now=lambda: now, stamp=self.daemon_stamp)
 
     def test_timeout_gets_one_reset_daemon_restart_and_one_retry_keyboard_first(self):
-        class Wedged(FakeRunner):
-            def __call__(inner, argv, timeout=15):
-                inner.calls.append((list(argv), timeout))
-                line = " ".join(argv)
-                if "--device lightbar" in line and not any("systemctl" in a for a, _ in inner.calls):
-                    return 1, "init packet 1: write /dev/hidraw5: connection timed out"
-                return 0, ""
-        run = Wedged()
-        res = m.set_brightness_per_device(
-            "low", runner=run, recover=lambda: self.recover(run))
-        lines = [" ".join(a) for a, _ in run.calls]
+        # The lightbar times out once; the retry after the reset succeeds.
+        run = fake_host(self).fail("--device lightbar", times=1,
+                                   out="init packet 1: write /dev/hidraw5: connection timed out")
+        res = m.set_brightness_per_device("low", recover=self.recover)
+        lines = run.lines
         self.assertEqual(len(lines), 5)
         self.assertIn("--device keyboard", lines[0])
         self.assertIn("--device lightbar", lines[1])
-        # The reset unit always runs directly as root (no _as_deck wrapping); the
-        # daemon restart goes through _as_deck, which prefixes a runuser hop only
-        # when this process itself is root -- check containment, not a fixed prefix.
+        # The reset unit runs as this backend's own user; the daemon restart and
+        # the lighting writes as deck (host.run adds the runuser hop under root).
+        self.assertEqual([c.as_deck for c in run.calls], [True, True, False, True, True])
         self.assertTrue(lines[2].startswith("systemctl start"))
         self.assertTrue(lines[2].endswith(m.LIGHTBAR_RESET_UNIT))
         self.assertIn("systemctl --user restart", lines[3])
@@ -311,17 +318,11 @@ class LightbarRecoveryTest(unittest.TestCase):
         self.assertEqual(self.slept, [m.LIGHTBAR_RESET_SETTLE_S, m.LIGHTBAR_DAEMON_RESTART_WAIT_S])
 
     def test_stale_gets_one_daemon_restart_and_one_retry_no_usb_reset(self):
-        class Stale(FakeRunner):
-            def __call__(inner, argv, timeout=15):
-                inner.calls.append((list(argv), timeout))
-                line = " ".join(argv)
-                if "--device lightbar" in line and not any("systemctl" in a for a, _ in inner.calls):
-                    return 1, "init packet 1: write /dev/hidraw5: no such device"
-                return 0, ""
-        run = Stale()
-        res = m.set_brightness_per_device(
-            "low", runner=run, recover_stale=lambda: self.recover_stale(run))
-        lines = [" ".join(a) for a, _ in run.calls]
+        # ENODEV once; the retry after the daemon restart succeeds.
+        run = fake_host(self).fail("--device lightbar", times=1,
+                                   out="init packet 1: write /dev/hidraw5: no such device")
+        res = m.set_brightness_per_device("low", recover_stale=self.recover_stale)
+        lines = run.lines
         self.assertEqual(len(lines), 4)
         self.assertIn("--device keyboard", lines[0])
         self.assertIn("--device lightbar", lines[1])
@@ -334,76 +335,67 @@ class LightbarRecoveryTest(unittest.TestCase):
         self.assertEqual(self.slept, [m.LIGHTBAR_DAEMON_RESTART_WAIT_S])
 
     def test_unrecognised_failure_no_recovery(self):
-        class Gone(FakeRunner):
-            def __call__(inner, argv, timeout=15):
-                inner.calls.append((list(argv), timeout))
-                return (1, "permission denied") if "lightbar" in " ".join(argv) else (0, "")
-        run = Gone()
-        res = m.set_brightness_per_device("low", runner=run)
+        run = fake_host(self, fail_if=("lightbar",), out="permission denied")
+        res = m.set_brightness_per_device("low")
         self.assertEqual(len(run.calls), 2)
         self.assertEqual(res["failed"], ["lightbar"])
 
     def test_still_wedged_after_reset_retries_only_once(self):
-        run = FakeRunner(fail_if=("--device lightbar",))
+        run = fake_host(self, fail_if=("--device lightbar",))
         res = m.set_brightness_per_device(
-            "low", runner=run, recover=lambda: self.recover(run))
-        lightbar = [a for a, _ in run.calls if "lightbar" in a]
+            "low", recover=self.recover)
+        lightbar = [a for a in run.argvs if "lightbar" in a]
         self.assertEqual(len(lightbar), 2)      # first write + exactly one retry
         self.assertEqual(res["failed"], ["lightbar"])
         self.assertIn("still wedged", res["message"])
 
     def test_still_stale_after_daemon_restart_retries_only_once(self):
-        class AlwaysStale(FakeRunner):
-            def __call__(inner, argv, timeout=15):
-                inner.calls.append((list(argv), timeout))
-                line = " ".join(argv)
-                return (1, "write /dev/hidraw5: no such device") if "lightbar" in line else (0, "")
-        run = AlwaysStale()
+        run = fake_host(self, fail_if=("lightbar",), out="write /dev/hidraw5: no such device")
         res = m.set_brightness_per_device(
-            "low", runner=run, recover_stale=lambda: self.recover_stale(run))
-        lightbar = [a for a, _ in run.calls if "lightbar" in a]
+            "low", recover_stale=self.recover_stale)
+        lightbar = [a for a in run.argvs if "lightbar" in a]
         self.assertEqual(len(lightbar), 2)      # first write + exactly one retry
         self.assertEqual(res["failed"], ["lightbar"])
         self.assertIn("still failing after a daemon restart", res["message"])
 
     def test_rate_limit(self):
-        run = FakeRunner()
-        self.assertEqual(self.recover(run, now=1000.0)[0], True)
+        run = fake_host(self)
+        self.assertEqual(self.recover(now=1000.0)[0], True)
         os.utime(self.stamp, (1000.0, 1000.0))
-        ok, msg = self.recover(run, now=1000.0 + m.LIGHTBAR_RESET_MIN_GAP_S - 1)
+        ok, msg = self.recover(now=1000.0 + m.LIGHTBAR_RESET_MIN_GAP_S - 1)
         self.assertFalse(ok)
         self.assertIn("skipped", msg)
-        self.assertEqual(len([a for a, _ in run.calls if "systemctl start" in " ".join(a)]), 1)
-        self.assertTrue(self.recover(run, now=1000.0 + m.LIGHTBAR_RESET_MIN_GAP_S + 1)[0])
-        self.assertEqual(len([a for a, _ in run.calls if "systemctl start" in " ".join(a)]), 2)
+        self.assertEqual(len([a for a in run.argvs if "systemctl start" in " ".join(a)]), 1)
+        self.assertTrue(self.recover(now=1000.0 + m.LIGHTBAR_RESET_MIN_GAP_S + 1)[0])
+        self.assertEqual(len([a for a in run.argvs if "systemctl start" in " ".join(a)]), 2)
 
     def test_stale_rate_limit(self):
-        run = FakeRunner()
-        self.assertEqual(self.recover_stale(run, now=1000.0)[0], True)
+        run = fake_host(self)
+        self.assertEqual(self.recover_stale(now=1000.0)[0], True)
         os.utime(self.daemon_stamp, (1000.0, 1000.0))
-        ok, msg = self.recover_stale(run, now=1000.0 + m.LIGHTBAR_RESET_MIN_GAP_S - 1)
+        ok, msg = self.recover_stale(now=1000.0 + m.LIGHTBAR_RESET_MIN_GAP_S - 1)
         self.assertFalse(ok)
         self.assertIn("skipped", msg)
         self.assertEqual(len(run.calls), 1)
-        self.assertTrue(self.recover_stale(run, now=1000.0 + m.LIGHTBAR_RESET_MIN_GAP_S + 1)[0])
+        self.assertTrue(self.recover_stale(now=1000.0 + m.LIGHTBAR_RESET_MIN_GAP_S + 1)[0])
         self.assertEqual(len(run.calls), 2)
 
     def test_reset_unit_failure_is_reported(self):
-        run = FakeRunner(fail_if=("systemctl start",))
-        ok, msg = self.recover(run)
+        run = fake_host(self, fail_if=("systemctl start",))
+        ok, msg = self.recover()
         self.assertFalse(ok)
         self.assertIn("reset failed", msg)
         self.assertEqual(self.slept, [])
 
     def test_daemon_restart_failure_is_reported_but_reset_still_counts_as_ok(self):
-        run = FakeRunner(fail_if=("systemctl --user restart",))
-        ok, msg = self.recover(run)
+        run = fake_host(self, fail_if=("systemctl --user restart",))
+        ok, msg = self.recover()
         self.assertTrue(ok)      # the USB reset itself succeeded
         self.assertIn("daemon restart failed", msg)
 
     def test_stale_daemon_restart_failure_means_not_ok(self):
-        run = FakeRunner(fail_if=("systemctl --user restart",))
-        ok, msg = self.recover_stale(run)
+        run = fake_host(self, fail_if=("systemctl --user restart",))
+        ok, msg = self.recover_stale()
         self.assertFalse(ok)
         self.assertIn("daemon restart failed", msg)
 
@@ -451,11 +443,11 @@ class MaxFansOffTest(unittest.TestCase):
         m._update_max_fans = lambda **kw: saved.update(kw)
         m._read_store = lambda path=None: _store("Silent")
         try:
-            run = FakeRunner(fail_if=("fancurve",))
-            self.assertFalse(m.set_max_fans_blocking(False, runner=run))
+            run = fake_host(self, fail_if=("fancurve",))
+            self.assertFalse(m.set_max_fans_blocking(False))
             self.assertEqual(saved, {})
-            run = FakeRunner()
-            self.assertTrue(m.set_max_fans_blocking(False, runner=run))
+            run = fake_host(self)
+            self.assertTrue(m.set_max_fans_blocking(False))
             self.assertEqual(run.calls[0][0][-2:], ["fancurve", "--reset"])
             self.assertEqual(saved, {"enabled": False})
         finally:
@@ -524,8 +516,8 @@ class DeckyFansTest(unittest.TestCase):
         m._current_platform_profile = self._orig
 
     def test_commands(self):
-        run = FakeRunner()
-        fans = m.DeckyFans(run)
+        run = fake_host(self)
+        fans = m.DeckyFans()
         fans.rewrite_profile()
         fans.set_fans_max()
         fans.set_fancurve_pwm([(40, 51), (50, 102.0)])
@@ -537,13 +529,13 @@ class DeckyFansTest(unittest.TestCase):
         self.assertTrue(all(c[0][0] == m.Z13CTL for c in run.calls))
 
     def test_failure_raises(self):
-        fans = m.DeckyFans(FakeRunner(fail_if=("profile",)))
+        fans = (fake_host(self, fail_if=("profile",)) and m.DeckyFans())
         with self.assertRaises(RuntimeError):
             fans.rewrite_profile()
 
     def test_failed_rewrite_means_no_bare_curve_write(self):
-        run = FakeRunner(fail_if=("profile",))
-        wd = m.make_fan_watchdog(StalledSensors(), m.DeckyFans(run), may_act=lambda: True)
+        run = fake_host(self, fail_if=("profile",))
+        wd = m.make_fan_watchdog(StalledSensors(), m.DeckyFans(), may_act=lambda: True)
         msgs = [wd.tick() for _ in range(fan_watchdog.STALL_TICKS)]
         self.assertTrue(msgs[-1].startswith("Fan recovery failed:"))
         self.assertEqual([c[0][1] for c in run.calls], ["profile"])
@@ -561,8 +553,8 @@ class FanWatchdogLoopTest(unittest.TestCase):
         m._write_lock = None
 
     def test_stall_recovers_through_z13ctl_in_order(self):
-        run = FakeRunner()
-        wd = m.make_fan_watchdog(StalledSensors(), m.DeckyFans(run), may_act=lambda: True)
+        run = fake_host(self)
+        wd = m.make_fan_watchdog(StalledSensors(), m.DeckyFans(), may_act=lambda: True)
         msgs = [asyncio.run(m.fan_watchdog_tick(wd)) for _ in range(fan_watchdog.STALL_TICKS)]
         self.assertEqual(msgs[-1], "Fans were stalled at 0 RPM; profile and curve re-applied")
         self.assertEqual([c[0][1:3] for c in run.calls],
@@ -570,21 +562,21 @@ class FanWatchdogLoopTest(unittest.TestCase):
 
     def test_max_fans_flag_comes_from_shared_state(self):
         m._load_max_fans = lambda: {"enabled": True}
-        run = FakeRunner()
-        wd = m.make_fan_watchdog(StalledSensors(), m.DeckyFans(run), may_act=lambda: True)
+        run = fake_host(self)
+        wd = m.make_fan_watchdog(StalledSensors(), m.DeckyFans(), may_act=lambda: True)
         for _ in range(fan_watchdog.STALL_TICKS):
             asyncio.run(m.fan_watchdog_tick(wd))
         self.assertEqual(run.calls[-1][0][1:], ["fancurve", "--set", m.MAX_FANS_SPEC])
 
     def test_outside_game_mode_nothing_is_written(self):
-        run = FakeRunner()
-        wd = m.make_fan_watchdog(StalledSensors(), m.DeckyFans(run), may_act=lambda: False)
+        run = fake_host(self)
+        wd = m.make_fan_watchdog(StalledSensors(), m.DeckyFans(), may_act=lambda: False)
         for _ in range(10):
             asyncio.run(m.fan_watchdog_tick(wd))
         self.assertEqual(run.calls, [])
 
     def test_default_gate_is_game_mode(self):
-        wd = m.make_fan_watchdog(StalledSensors(), m.DeckyFans(FakeRunner()))
+        wd = m.make_fan_watchdog(StalledSensors(), (fake_host(self) and m.DeckyFans()))
         self.assertIs(wd._may_act, m._in_gamemode)
 
     def test_tick_skipped_while_a_write_holds_the_lock(self):
@@ -610,7 +602,7 @@ class FanWatchdogLoopTest(unittest.TestCase):
         owner = (os.getuid(), os.getgid())
         trace = m.make_fan_trace(path, owner=owner)
         self.assertIsNotNone(trace)
-        wd = m.make_fan_watchdog(StalledSensors(), m.DeckyFans(FakeRunner()),
+        wd = m.make_fan_watchdog(StalledSensors(), (fake_host(self) and m.DeckyFans()),
                                  may_act=lambda: True, trace=trace)
         for _ in range(fan_watchdog.STALL_TICKS):
             asyncio.run(m.fan_watchdog_tick(wd))
@@ -718,12 +710,20 @@ class DesktopAppCheckTest(unittest.TestCase):
         finally:
             srv.close()
 
-    def test_profile_engine_runs_as_deck_without_runuser_unless_root(self):
-        if os.geteuid() == 0:
-            self.assertEqual(m.Z13_PROFILE[:3], ["runuser", "-u", "deck"])
-        else:
-            self.assertNotIn("runuser", m.Z13_PROFILE)
-        self.assertEqual(m.Z13_PROFILE[-1], "/home/deck/.local/bin/z13-profile")
+    def test_profile_engine_runs_as_deck(self):
+        self.assertEqual(m.Z13_PROFILE, ["/home/deck/.local/bin/z13-profile"])
+        run = fake_host(self)
+        m._run(m.Z13_PROFILE + ["list", "--json"], as_deck=True)
+        self.assertEqual(run.calls[0].argv, m.Z13_PROFILE + ["list", "--json"])
+        self.assertTrue(run.calls[0].as_deck)
+
+    def test_session_checks_ask_deck_systemd(self):
+        run = fake_host(self, fail_if=("plasma-workspace",), out="")
+        self.assertTrue(m._in_gamemode())
+        self.assertFalse(m._desktop_session_active())
+        self.assertEqual([c.argv[-1] for c in run.calls],
+                         ["gamescope-session.target", "plasma-workspace.target"])
+        self.assertTrue(all(c.as_deck and c.argv[:2] == ["systemctl", "--user"] for c in run.calls))
 
     def test_paths_match_the_app(self):
         self.assertTrue(REAL["DESKTOP_APP_SOCKET"].endswith("/app/io.github.iannitram.Z13Helper/z13-helper.sock"))

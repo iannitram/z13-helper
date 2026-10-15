@@ -26,6 +26,17 @@ the Updates panel's **Repair install** button and the wedged-lightbar auto-reset
 - Entry point: `main.py` → `src/dashboard_ui.py` (main window/tray) + `hardware_controller.py`
   (z13ctl wrapper) + `sensor_reader.py` (hwmon sysfs) + `fans_window.py` (Fans + Power: TDP/fan curve/undervolt) + `profiles.py` (profile engine, also the host `z13-profile` CLI)
   + `config_manager.py` + `evdev_listener.py` (side-button reader). Plan: `docs/ROADMAP.md`.
+- **Every host command goes through `src/host.py`** (stdlib only): `host.run(argv, timeout=,
+  as_deck=, input=)` returns `Result(rc, out, timed_out)` and never raises (timeout → rc 124, missing
+  binary → 127). It picks its mode once: Flatpak (prefix `flatpak-spawn --host`), plain host user,
+  Decky as deck, or root. Under Decky/root children get the deck env (`/run/user/1000`, deck's session
+  bus, and the host's `LD_LIBRARY_PATH` back from `LD_LIBRARY_PATH_ORIG`; the loader's own broke every
+  `systemctl`), and `as_deck=True` adds `runuser -u deck -- env HOME=/home/deck …` under root. Don't
+  add `subprocess` calls to app/Decky modules; the exceptions are the stdin-fed host Python runners
+  (`updates_dialog`, the side-button reader in `dashboard_ui`). Three copies on disk: the Flatpak's,
+  `~/.local/lib/z13-helper/host.py` (for `z13-profile`; profiles.py adds that folder to `sys.path`),
+  and Decky's root-owned `py_modules/host.py` (ADR 0001). Tests: the `fake_host` fixture
+  (`tests/fake_host.py`, shared with `decky/tests`) records argv and scripts results.
 
 ## Repo layout (post-consolidation 2026-07-14)
 

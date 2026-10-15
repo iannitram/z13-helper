@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import (
     QAbstractItemView, QHeaderView, QMessageBox, QPlainTextEdit,
 )
 
+import host
 import install_record
 import update_watch
 from theme import TURBO, TEXT_DIM
@@ -21,7 +22,7 @@ _INSTALLERS_SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "inst
 def _installer_cmd(action, target):
     """Run installers.py on the host: inside the Flatpak the sandbox has no
     network and no sudo, so the file is fed to the host's python3 on stdin."""
-    if update_watch._in_flatpak():
+    if host.in_flatpak():
         return ["flatpak-spawn", "--host", "python3", "-u", "-", action, target], True
     return ["python3", "-u", _INSTALLERS_SRC, action, target], False
 
@@ -231,8 +232,8 @@ class UpdatesDialog(QDialog):
         if not repo:
             self._refresh_repair()
             return
-        in_fp = update_watch._in_flatpak()
-        rc, _, _ = update_watch.host_run(["test", "-f", f"{repo}/install.sh"], timeout=10)
+        in_fp = host.in_flatpak()
+        rc, _, _ = host.run(["test", "-f", f"{repo}/install.sh"], timeout=10)
         if rc != 0:
             QMessageBox.warning(self, "Repair install",
                                 f"{repo}/install.sh was not found on the host.\n"
