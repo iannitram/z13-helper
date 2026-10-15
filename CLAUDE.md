@@ -31,7 +31,7 @@ the Updates panel's **Repair install** button and the wedged-lightbar auto-reset
 
 ```
 main.py, src/, assets/, flatpak/   ← the app (canonical, current)
-README.md                          ← full app README (the "side-button odyssey" writeup)
+README.md                          ← what the app does, install, how it works, credits
 docs/
   BUTTON-AND-INPUTPLUMBER.md       ← READ THIS for the side-button bug + fix (synthesis)
   ROADMAP.md                       ← THE plan (rewritten 2026-10-09)
