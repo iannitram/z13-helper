@@ -22,6 +22,81 @@ the glue and the self-repair around it.
 
 ---
 
+## Screenshots
+
+| Main window | Fans + Power |
+|---|---|
+| ![Main window: performance mode tiles, profile, Max Fans, lighting, screen brightness, battery limit](docs/screenshots/main-window.png) | ![Fans + Power window: platform profile, SPL/sPPT/fPPT power limits and the 8-point fan curve editor](docs/screenshots/fans-power.png) |
+
+![Help → Error log → Fan trace: one line per reading with temperature, both fan RPMs, the ACPI fan, curve mode, Max Fans and how long each reading has been unchanged](docs/screenshots/fan-trace.png)
+
+These are rendered from the real app with live readings: `tooling/screenshots.py`, offscreen, nothing
+written to the hardware. A Game Mode (Decky) screenshot is still to come; Game Mode can't be
+captured from Desktop Mode.
+
+## What works so far
+
+**Verified on the device** (GZ302EA, SteamOS 3.8.28):
+- ✅ Desktop app: mode tiles, profiles, power limits, the fan curve editor, Max Fans, keyboard and
+  lightbar brightness, screen brightness, battery limit, tray, error log.
+- ✅ Profiles: built-in and custom, and `z13-profile`. The active profile is restored at login and
+  after resume.
+- ✅ Fan watchdog: dropped-curve and stall recovery in Desktop Mode. The fan trace is written by both
+  front-ends.
+- ✅ Side button: shows/hides the window in Desktop Mode; Quick Access Menu / Steam menu in Game Mode.
+- ✅ The desktop app is running after every switch to Desktop Mode. The app takes over from a
+  session-restored copy, and the Decky plugin restarts a missing app.
+- ✅ `install.sh` / `--repair` / the health report, including the migration from "Z13 Controller".
+- ✅ z13ctl 1.4.2 with its daemon; the battery limit is re-applied at login.
+
+**Written and tested off-device, not yet confirmed in real use:**
+- ⚠️ Decky plugin controls in Game Mode: profiles, power limits, charge limit, brightness and
+  telemetry. The backend loads, but the panel hasn't been walked through end to end. Its profile
+  switching was broken until 0.5.0.
+- ⚠️ A fan recovery made by the Decky watchdog in Game Mode. Nothing has triggered one yet.
+- ⚠️ Automatic rear-lightbar recovery, and the Updates panel's **Repair install** button.
+
+**Known gaps:**
+- ❌ Undervolt (Curve Optimizer) needs the `ryzen_smu` kernel module, which stock SteamOS doesn't
+  ship. The control stays hidden.
+- ❌ Steam's own TDP and charge-limit controls in the Quick Access Menu don't appear on this model.
+  Use the Decky plugin.
+- 🔍 Under investigation: with Max Fans on, a fan running flat out can report exactly the same RPM
+  for over a minute. That can trip the frozen-tach rule when the fan is actually fine, and each
+  recovery briefly stops the fans. The fan trace is collecting evidence.
+
+## Roadmap
+
+The full plan, with reasons and status, is [`docs/ROADMAP.md`](docs/ROADMAP.md). Next up:
+
+1. **Logging opt-in:** now that the repo is public, `install.sh` will ask before turning on error
+   and fan-trace logging. The logs never leave the machine either way.
+2. **Post-SteamOS-update care** (§9b): move the Z13-specific steps from the maintainer's
+   after-an-update checklist into `install.sh --repair` and the health report:
+   - the amdgpu display-stability kernel arguments
+   - the MT7925 Bluetooth workarounds
+   - "SteamOS updated, run Repair" detection
+   - checking that SteamOS's carry-forward list is intact
+   - "has upstream fixed it yet?" checks
+3. **Settle the frozen-tach question** from the fan trace, and tune or narrow the rule.
+4. **Game Mode polish** (§9):
+   - make Steam's own TDP, charge-limit and profile controls work on the Z13, through a small
+     steamos-manager service backed by z13ctl
+   - a 48–180 Hz VRR display profile for gamescope
+5. **Lean on z13ctl 1.4** (§8):
+   - mirror profiles into z13ctl's named profiles, with AC/battery autoswitch
+   - drop the parts of the watchdog the daemon now covers
+   - use its event socket instead of polling
+6. **Display and lighting** (§5):
+   - refresh rate and panel overdrive
+   - lighting modes and colours
+   - separate keyboard and rear-light zones
+7. **Backlog** (§10): a diagnostics panel, battery health, richer telemetry, tablet mode on folio
+   detach, auto-rotation, sleep hygiene, CPU boost/EPP per profile, the GPU performance level, a
+   boot-sound toggle, and a VRAM/GTT info page.
+
+---
+
 ## What it does
 
 ### Desktop app (Desktop Mode)
