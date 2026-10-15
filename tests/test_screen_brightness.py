@@ -36,21 +36,20 @@ def test_find_backlight_prefers_panel_driver(tmp_path):
     assert sb.find_backlight(str(tmp_path)) == str(amd)
 
 
-def test_sysfs_fallback_reads_and_writes_latest(tmp_path):
+def test_sysfs_fallback_reads_and_writes_latest(tmp_path, fake_host, monkeypatch):
     bl = _backlight(tmp_path, "amdgpu_bl0", 31225, 62451)
-    writes, done = [], threading.Event()
+    done = threading.Event()
+    run = fake_host.run
+    monkeypatch.setattr(sb.host, "run", lambda *a, **kw: (run(*a, **kw), done.set())[0])
 
-    def runner(path, value):
-        writes.append((path, value))
-        done.set()
-        return True, ""
-
-    s = sb.ScreenBrightness(bus=None, backlight_root=str(tmp_path), runner=runner)
+    s = sb.ScreenBrightness(bus=None, backlight_root=str(tmp_path))
     assert s.available() and s.backend.name == "sysfs"
     assert s.get() == 50
     s.set(0)                                   # clamped to MIN_PERCENT, not 0
     assert done.wait(2)
-    assert writes[-1] == (str(bl / "brightness"), sb.to_raw(sb.MIN_PERCENT, 62451))
+    call = fake_host.calls[-1]
+    assert call.argv == ["tee", str(bl / "brightness")]
+    assert call.input == f"{sb.to_raw(sb.MIN_PERCENT, 62451)}\n"
 
 
 def test_no_backlight_at_all(tmp_path):

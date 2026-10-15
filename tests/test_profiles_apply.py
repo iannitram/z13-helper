@@ -5,7 +5,7 @@ import json
 import pytest
 
 import profiles
-from conftest import FakeRunner
+from fake_host import FakeHost
 
 Z = "z13ctl"
 CURVE = [[30, 10], [40, 20], [50, 40], [60, 60], [70, 80], [80, 100], [90, 100], [100, 100]]
@@ -45,14 +45,14 @@ EXPECTED_ORDER = ["exit hook", "profile", "tdp", "fans", "undervolt",
 # order
 # ----------------------------------------------------------------------
 
-def test_write_order(profiles_env, runner):
+def test_write_order(profiles_env, fake_host):
     prev = full_profile("Previous", hooks={"enter": "", "exit": "exit-cmd"})
-    results = profiles.apply(full_profile(), previous=prev, runner=runner, z13ctl=Z)
+    results = profiles.apply(full_profile(), previous=prev, z13ctl=Z)
 
     assert names(results) == EXPECTED_ORDER
     assert all(ok for _, ok, _ in results)
-    # The runner saw the same order, with the right argv for each step.
-    assert runner.calls == [
+    # The fake_host saw the same order, with the right argv for each step.
+    assert fake_host.argvs == [
         ["bash", "-lc", "exit-cmd"],
         [Z, "profile", "--set", "performance"],
         [Z, "tdp", "--set", "50", "--pl2", "60", "--pl3", "70"],
@@ -69,28 +69,24 @@ def test_curve_spec_format():
     assert profiles.curve_spec([[40, 50], [50.0, "75"]]) == "40:50%,50:75%"
 
 
-def test_tdp_force_flag(profiles_env, runner):
+def test_tdp_force_flag(profiles_env, fake_host):
     p = bare_profile(tdp={"pl1": 80, "pl2": 85, "pl3": 90, "force": True})
-    profiles.apply(p, runner=runner, z13ctl=Z)
-    tdp = [a for a in runner.calls if a[1] == "tdp"]
+    profiles.apply(p, z13ctl=Z)
+    tdp = [a for a in fake_host.argvs if a[1] == "tdp"]
     assert tdp == [[Z, "tdp", "--set", "80", "--pl2", "85", "--pl3", "90", "--force"]]
 
 
-def test_null_fields_are_left_alone(profiles_env, runner):
-    results = profiles.apply(bare_profile(), runner=runner, z13ctl=Z)
+def test_null_fields_are_left_alone(profiles_env, fake_host):
+    results = profiles.apply(bare_profile(), z13ctl=Z)
     # Only the platform profile is written; fans report firmware auto without a call.
-    assert runner.calls == [[Z, "profile", "--set", "balanced"]]
+    assert fake_host.argvs == [[Z, "profile", "--set", "balanced"]]
     assert names(results) == ["profile", "fans"]
     assert results[1] == ("fans", True, "firmware auto")
 
 
-def test_brightness_has_short_timeout(profiles_env):
-    seen = []
-
-    def r(argv, timeout=120):
-        seen.append((argv[1:3], timeout))
-        return 0, ""
-    profiles.apply(bare_profile(brightness="low"), runner=r, z13ctl=Z)
+def test_brightness_has_short_timeout(profiles_env, fake_host):
+    profiles.apply(bare_profile(brightness="low"), z13ctl=Z)
+    seen = [(c.argv[1:3], c.timeout) for c in fake_host.calls]
     assert (["--device", "keyboard"], 30) in seen
     assert (["--device", "lightbar"], 30) in seen
 
@@ -101,27 +97,27 @@ def test_brightness_has_short_timeout(profiles_env):
 
 @pytest.mark.parametrize("failing", ["profile", "tdp", "fancurve", "undervolt", "keyboard",
                                      "batterylimit", "enter-cmd"])
-def test_one_failing_step_does_not_stop_the_rest(profiles_env, failing):
-    runner = FakeRunner().fail(lambda a: failing in a, rc=1, out=f"{failing} broke")
+def test_one_failing_step_does_not_stop_the_rest(profiles_env, failing, fake_host):
+    fake_host.fail(lambda a: failing in a, rc=1, out=f"{failing} broke")
     prev = full_profile("Previous", hooks={"enter": "", "exit": "exit-cmd"})
-    results = profiles.apply(full_profile(), previous=prev, runner=runner, z13ctl=Z)
+    results = profiles.apply(full_profile(), previous=prev, z13ctl=Z)
 
     assert names(results) == EXPECTED_ORDER          # every step still ran
-    assert len(runner.calls) == len(EXPECTED_ORDER)
+    assert len(fake_host.argvs) == len(EXPECTED_ORDER)
     bad = [(s, msg) for s, ok, msg in results if not ok]
     assert len(bad) == 1
     assert "broke" in bad[0][1]
 
 
-def test_failure_message_falls_back_to_rc(profiles_env):
-    runner = FakeRunner().fail(lambda a: "batterylimit" in a, rc=3, out="")
-    results = profiles.apply(bare_profile(battery_limit=60), runner=runner, z13ctl=Z)
+def test_failure_message_falls_back_to_rc(profiles_env, fake_host):
+    fake_host.fail(lambda a: "batterylimit" in a, rc=3, out="")
+    results = profiles.apply(bare_profile(battery_limit=60), z13ctl=Z)
     assert ("battery limit", False, "rc=3") in results
 
 
-def test_lightbar_failure_does_not_block_keyboard(profiles_env):
-    runner = FakeRunner().fail(lambda a: "lightbar" in a, rc=124, out="timed out")
-    results = profiles.apply(bare_profile(brightness="high"), runner=runner, z13ctl=Z)
+def test_lightbar_failure_does_not_block_keyboard(profiles_env, fake_host):
+    fake_host.fail(lambda a: "lightbar" in a, rc=124, out="timed out")
+    results = profiles.apply(bare_profile(brightness="high"), z13ctl=Z)
     assert ("brightness (keyboard)", True, "high") in results
     lb = [r for r in results if r[0] == "brightness (lightbar)"]
     assert len(lb) == 1 and lb[0][1] is False
@@ -138,30 +134,20 @@ RESET = ["systemctl", "start", "--no-ask-password", "z13-lightbar-reset.service"
 RESTART = ["systemctl", "--user", "restart", "--no-ask-password", "z13ctl.service"]
 
 
-class WedgedUntilReset(FakeRunner):
-    """The lightbar times out until the reset unit has been started."""
-
-    def __call__(self, argv, timeout=120):
-        self.calls.append(list(argv))
-        if "lightbar" in argv and RESET not in self.calls:
-            return 1, WEDGED
-        return 0, ""
+def wedged_until_reset(fake_host):
+    """The lightbar times out once; the reset (and the retry after it) then succeed."""
+    return fake_host.fail(lambda a: "lightbar" in a, out=WEDGED, times=1)
 
 
-class StaleUntilDaemonRestart(FakeRunner):
-    """The lightbar reports ENODEV until the daemon has been restarted."""
-
-    def __call__(self, argv, timeout=120):
-        self.calls.append(list(argv))
-        if "lightbar" in argv and RESTART not in self.calls:
-            return 1, STALE
-        return 0, ""
+def stale_until_daemon_restart(fake_host):
+    """The lightbar reports ENODEV once; the retry after the daemon restart succeeds."""
+    return fake_host.fail(lambda a: "lightbar" in a, out=STALE, times=1)
 
 
-def test_wedged_lightbar_recovers_once_and_retries_once(profiles_env):
-    runner = WedgedUntilReset()
-    results = profiles.apply(bare_profile(brightness="low", battery_limit=80), runner=runner, z13ctl=Z)
-    assert runner.calls == [
+def test_wedged_lightbar_recovers_once_and_retries_once(profiles_env, fake_host):
+    wedged_until_reset(fake_host)
+    results = profiles.apply(bare_profile(brightness="low", battery_limit=80), z13ctl=Z)
+    assert fake_host.argvs == [
         [Z, "profile", "--set", "balanced"],
         [Z, "--device", "keyboard", "brightness", "low"],     # keyboard first, before any reset
         [Z, "--device", "lightbar", "brightness", "low"],
@@ -175,10 +161,10 @@ def test_wedged_lightbar_recovers_once_and_retries_once(profiles_env):
     assert profiles_env.lightbar_stamp.exists()
 
 
-def test_stale_lightbar_recovers_with_daemon_restart_only(profiles_env):
-    runner = StaleUntilDaemonRestart()
-    results = profiles.apply(bare_profile(brightness="low", battery_limit=80), runner=runner, z13ctl=Z)
-    assert runner.calls == [
+def test_stale_lightbar_recovers_with_daemon_restart_only(profiles_env, fake_host):
+    stale_until_daemon_restart(fake_host)
+    results = profiles.apply(bare_profile(brightness="low", battery_limit=80), z13ctl=Z)
+    assert fake_host.argvs == [
         [Z, "profile", "--set", "balanced"],
         [Z, "--device", "keyboard", "brightness", "low"],     # keyboard first, before any recovery
         [Z, "--device", "lightbar", "brightness", "low"],
@@ -186,147 +172,145 @@ def test_stale_lightbar_recovers_with_daemon_restart_only(profiles_env):
         [Z, "--device", "lightbar", "brightness", "low"],     # exactly one retry
         [Z, "batterylimit", "--set", "80"],
     ]
-    assert RESET not in runner.calls
+    assert RESET not in fake_host.argvs
     assert ("brightness (keyboard)", True, "low") in results
     assert ("brightness (lightbar)", True, "low (lightbar recovered)") in results
     assert profiles_env.lightbar_daemon_stamp.exists()
 
 
-def test_wedged_daemon_restart_failure_is_reported_but_still_retries_once(profiles_env):
-    runner = (FakeRunner()
+def test_wedged_daemon_restart_failure_is_reported_but_still_retries_once(profiles_env, fake_host):
+    (fake_host
               .fail(lambda a: "lightbar" in a, rc=1, out=WEDGED)
               .fail(lambda a: a == RESTART, rc=1, out="Unit z13ctl.service not loaded."))
-    results = profiles.apply(bare_profile(brightness="low"), runner=runner, z13ctl=Z)
-    assert runner.calls.count(RESET) == 1
-    assert runner.calls.count(RESTART) == 1
-    lightbar_writes = [a for a in runner.calls if "lightbar" in a]
+    results = profiles.apply(bare_profile(brightness="low"), z13ctl=Z)
+    assert fake_host.argvs.count(RESET) == 1
+    assert fake_host.argvs.count(RESTART) == 1
+    lightbar_writes = [a for a in fake_host.argvs if "lightbar" in a]
     assert len(lightbar_writes) == 2          # the write, plus exactly one retry
     msg = dict((s, m) for s, _, m in results)["brightness (lightbar)"]
     assert "daemon restart failed" in msg
 
 
-def test_stale_daemon_restart_failure_is_reported_without_retry(profiles_env):
-    runner = (FakeRunner()
+def test_stale_daemon_restart_failure_is_reported_without_retry(profiles_env, fake_host):
+    (fake_host
               .fail(lambda a: "lightbar" in a, rc=1, out=STALE)
               .fail(lambda a: a == RESTART, rc=1, out="Unit z13ctl.service not loaded."))
-    results = profiles.apply(bare_profile(brightness="low"), runner=runner, z13ctl=Z)
-    assert RESET not in runner.calls
-    assert runner.calls.count(RESTART) == 1
-    lightbar_writes = [a for a in runner.calls if "lightbar" in a]
+    results = profiles.apply(bare_profile(brightness="low"), z13ctl=Z)
+    assert RESET not in fake_host.argvs
+    assert fake_host.argvs.count(RESTART) == 1
+    lightbar_writes = [a for a in fake_host.argvs if "lightbar" in a]
     assert len(lightbar_writes) == 1          # recovery itself failed: no retry
     msg = dict((s, m) for s, _, m in results)["brightness (lightbar)"]
     assert "daemon restart failed" in msg
 
 
-def test_still_wedged_after_reset_is_not_retried_again(profiles_env):
-    runner = FakeRunner().fail(lambda a: "lightbar" in a, rc=1, out=WEDGED)
-    results = profiles.apply(bare_profile(brightness="low"), runner=runner, z13ctl=Z)
-    lightbar_writes = [a for a in runner.calls if "lightbar" in a]
+def test_still_wedged_after_reset_is_not_retried_again(profiles_env, fake_host):
+    fake_host.fail(lambda a: "lightbar" in a, rc=1, out=WEDGED)
+    results = profiles.apply(bare_profile(brightness="low"), z13ctl=Z)
+    lightbar_writes = [a for a in fake_host.argvs if "lightbar" in a]
     assert len(lightbar_writes) == 2
-    assert runner.calls.count(RESET) == 1
-    assert runner.calls.count(RESTART) == 1
+    assert fake_host.argvs.count(RESET) == 1
+    assert fake_host.argvs.count(RESTART) == 1
     assert ("brightness (lightbar)", False) == results[-1][:2]
 
 
-def test_still_stale_after_daemon_restart_is_not_retried_again(profiles_env):
-    runner = FakeRunner().fail(lambda a: "lightbar" in a, rc=1, out=STALE)
-    results = profiles.apply(bare_profile(brightness="low"), runner=runner, z13ctl=Z)
-    lightbar_writes = [a for a in runner.calls if "lightbar" in a]
+def test_still_stale_after_daemon_restart_is_not_retried_again(profiles_env, fake_host):
+    fake_host.fail(lambda a: "lightbar" in a, rc=1, out=STALE)
+    results = profiles.apply(bare_profile(brightness="low"), z13ctl=Z)
+    lightbar_writes = [a for a in fake_host.argvs if "lightbar" in a]
     assert len(lightbar_writes) == 2
-    assert RESET not in runner.calls
-    assert runner.calls.count(RESTART) == 1
+    assert RESET not in fake_host.argvs
+    assert fake_host.argvs.count(RESTART) == 1
     assert ("brightness (lightbar)", False) == results[-1][:2]
 
 
-def test_unrecognised_lightbar_failure_triggers_no_recovery(profiles_env):
-    runner = FakeRunner().fail(lambda a: "lightbar" in a, rc=1, out="permission denied")
-    results = profiles.apply(bare_profile(brightness="low"), runner=runner, z13ctl=Z)
-    assert RESET not in runner.calls
-    assert RESTART not in runner.calls
+def test_unrecognised_lightbar_failure_triggers_no_recovery(profiles_env, fake_host):
+    fake_host.fail(lambda a: "lightbar" in a, rc=1, out="permission denied")
+    results = profiles.apply(bare_profile(brightness="low"), z13ctl=Z)
+    assert RESET not in fake_host.argvs
+    assert RESTART not in fake_host.argvs
     assert ("brightness (lightbar)", False, "permission denied") in results
 
 
-def test_keyboard_timeout_never_resets_anything(profiles_env):
-    runner = FakeRunner().fail(lambda a: "keyboard" in a, rc=1, out=WEDGED)
-    profiles.apply(bare_profile(brightness="low"), runner=runner, z13ctl=Z)
-    assert RESET not in runner.calls
-    assert len([a for a in runner.calls if "keyboard" in a]) == 1
+def test_keyboard_timeout_never_resets_anything(profiles_env, fake_host):
+    fake_host.fail(lambda a: "keyboard" in a, rc=1, out=WEDGED)
+    profiles.apply(bare_profile(brightness="low"), z13ctl=Z)
+    assert RESET not in fake_host.argvs
+    assert len([a for a in fake_host.argvs if "keyboard" in a]) == 1
 
 
-def test_reset_is_rate_limited(profiles_env):
-    r1 = WedgedUntilReset()
-    profiles.apply(bare_profile(brightness="low"), runner=r1, z13ctl=Z)
-    assert r1.calls.count(RESET) == 1
+def test_reset_is_rate_limited(profiles_env, fake_host, monkeypatch):
+    r1 = wedged_until_reset(fake_host)
+    profiles.apply(bare_profile(brightness="low"), z13ctl=Z)
+    assert r1.argvs.count(RESET) == 1
     # Wedged again a minute later: no second reset, no retry.
-    r2 = FakeRunner().fail(lambda a: "lightbar" in a, rc=1, out=WEDGED)
-    results = profiles.apply(bare_profile(brightness="low"), runner=r2, z13ctl=Z)
-    assert RESET not in r2.calls
-    assert len([a for a in r2.calls if "lightbar" in a]) == 1
+    r2 = FakeHost().install(monkeypatch.setattr).fail(lambda a: "lightbar" in a, rc=1, out=WEDGED)
+    results = profiles.apply(bare_profile(brightness="low"), z13ctl=Z)
+    assert RESET not in r2.argvs
+    assert len([a for a in r2.argvs if "lightbar" in a]) == 1
     msg = dict((s, m) for s, _, m in results)["brightness (lightbar)"]
     assert "skipped" in msg
 
 
-def test_stale_daemon_restart_is_rate_limited(profiles_env):
-    r1 = StaleUntilDaemonRestart()
-    profiles.apply(bare_profile(brightness="low"), runner=r1, z13ctl=Z)
-    assert r1.calls.count(RESTART) == 1
+def test_stale_daemon_restart_is_rate_limited(profiles_env, fake_host, monkeypatch):
+    r1 = stale_until_daemon_restart(fake_host)
+    profiles.apply(bare_profile(brightness="low"), z13ctl=Z)
+    assert r1.argvs.count(RESTART) == 1
     # Stale again a minute later: no second daemon restart, no retry.
-    r2 = FakeRunner().fail(lambda a: "lightbar" in a, rc=1, out=STALE)
-    results = profiles.apply(bare_profile(brightness="low"), runner=r2, z13ctl=Z)
-    assert RESTART not in r2.calls
-    assert len([a for a in r2.calls if "lightbar" in a]) == 1
+    r2 = FakeHost().install(monkeypatch.setattr).fail(lambda a: "lightbar" in a, rc=1, out=STALE)
+    results = profiles.apply(bare_profile(brightness="low"), z13ctl=Z)
+    assert RESTART not in r2.argvs
+    assert len([a for a in r2.argvs if "lightbar" in a]) == 1
     msg = dict((s, m) for s, _, m in results)["brightness (lightbar)"]
     assert "skipped" in msg
 
 
-def test_recover_lightbar_rate_limit_window(profiles_env):
-    runner = FakeRunner()
+def test_recover_lightbar_rate_limit_window(profiles_env, fake_host):
     slept = []
-    assert profiles.recover_lightbar(runner, sleep=slept.append, now=lambda: 5000.0)[0]
+    assert profiles.recover_lightbar(sleep=slept.append, now=lambda: 5000.0)[0]
     stamp = profiles_env.lightbar_stamp
     import os
     os.utime(stamp, (5000.0, 5000.0))
-    ok, msg = profiles.recover_lightbar(runner, sleep=slept.append,
+    ok, msg = profiles.recover_lightbar(sleep=slept.append,
                                         now=lambda: 5000.0 + profiles.LIGHTBAR_RESET_MIN_GAP_S - 1)
     assert not ok and "skipped" in msg
-    assert profiles.recover_lightbar(runner, sleep=slept.append,
+    assert profiles.recover_lightbar(sleep=slept.append,
                                      now=lambda: 5000.0 + profiles.LIGHTBAR_RESET_MIN_GAP_S + 1)[0]
-    assert runner.calls == [RESET, RESTART, RESET, RESTART]
+    assert fake_host.argvs == [RESET, RESTART, RESET, RESTART]
     assert slept == [profiles.LIGHTBAR_RESET_SETTLE_S, profiles.LIGHTBAR_DAEMON_RESTART_WAIT_S] * 2
 
 
-def test_recover_lightbar_stale_rate_limit_window(profiles_env):
-    runner = FakeRunner()
+def test_recover_lightbar_stale_rate_limit_window(profiles_env, fake_host):
     slept = []
-    assert profiles.recover_lightbar_stale(runner, sleep=slept.append, now=lambda: 5000.0)[0]
+    assert profiles.recover_lightbar_stale(sleep=slept.append, now=lambda: 5000.0)[0]
     stamp = profiles_env.lightbar_daemon_stamp
     import os
     os.utime(stamp, (5000.0, 5000.0))
-    ok, msg = profiles.recover_lightbar_stale(runner, sleep=slept.append,
+    ok, msg = profiles.recover_lightbar_stale(sleep=slept.append,
                                               now=lambda: 5000.0 + profiles.LIGHTBAR_RESET_MIN_GAP_S - 1)
     assert not ok and "skipped" in msg
-    assert profiles.recover_lightbar_stale(runner, sleep=slept.append,
+    assert profiles.recover_lightbar_stale(sleep=slept.append,
                                            now=lambda: 5000.0 + profiles.LIGHTBAR_RESET_MIN_GAP_S + 1)[0]
-    assert runner.calls == [RESTART, RESTART]
+    assert fake_host.argvs == [RESTART, RESTART]
     assert slept == [profiles.LIGHTBAR_DAEMON_RESTART_WAIT_S] * 2
 
 
-def test_recover_lightbar_reports_unit_failure(profiles_env):
-    runner = FakeRunner().fail(lambda a: a[0] == "systemctl", rc=1, out="Interactive authentication required.")
-    ok, msg = profiles.recover_lightbar(runner, sleep=lambda s: None)
+def test_recover_lightbar_reports_unit_failure(profiles_env, fake_host):
+    fake_host.fail(lambda a: a[0] == "systemctl", rc=1, out="Interactive authentication required.")
+    ok, msg = profiles.recover_lightbar(sleep=lambda s: None)
     assert not ok and "Interactive authentication required" in msg
 
 
-def test_recover_lightbar_daemon_restart_failure_is_folded_into_message(profiles_env):
-    runner = FakeRunner().fail(lambda a: a == RESTART, rc=1, out="Unit z13ctl.service not loaded.")
-    ok, msg = profiles.recover_lightbar(runner, sleep=lambda s: None)
+def test_recover_lightbar_daemon_restart_failure_is_folded_into_message(profiles_env, fake_host):
+    fake_host.fail(lambda a: a == RESTART, rc=1, out="Unit z13ctl.service not loaded.")
+    ok, msg = profiles.recover_lightbar(sleep=lambda s: None)
     assert ok      # the USB reset itself succeeded; only the daemon restart failed
     assert "daemon restart failed" in msg
 
 
-def test_recover_lightbar_stale_reports_daemon_restart_failure(profiles_env):
-    runner = FakeRunner().fail(lambda a: a == RESTART, rc=1, out="Unit z13ctl.service not loaded.")
-    ok, msg = profiles.recover_lightbar_stale(runner, sleep=lambda s: None)
+def test_recover_lightbar_stale_reports_daemon_restart_failure(profiles_env, fake_host):
+    fake_host.fail(lambda a: a == RESTART, rc=1, out="Unit z13ctl.service not loaded.")
+    ok, msg = profiles.recover_lightbar_stale(sleep=lambda s: None)
     assert not ok
     assert "daemon restart failed" in msg
 
@@ -363,42 +347,42 @@ def test_stamp_lives_in_runtime_dir(tmp_path, monkeypatch):
 # hooks
 # ----------------------------------------------------------------------
 
-def hook_calls(runner):
-    return [a[-1] for a in runner.calls if a[0] == "bash"]
+def hook_calls(fake_host):
+    return [a[-1] for a in fake_host.argvs if a[0] == "bash"]
 
 
-def test_exit_hook_runs_first_when_switching(profiles_env, runner):
+def test_exit_hook_runs_first_when_switching(profiles_env, fake_host):
     prev = bare_profile("Boondock", hooks={"enter": "boondock on", "exit": "boondock off"})
     nxt = bare_profile("Balanced", hooks={"enter": "say hi", "exit": ""})
-    profiles.apply(nxt, previous=prev, runner=runner, z13ctl=Z)
-    assert runner.calls[0] == ["bash", "-lc", "boondock off"]
-    assert hook_calls(runner) == ["boondock off", "say hi"]
+    profiles.apply(nxt, previous=prev, z13ctl=Z)
+    assert fake_host.argvs[0] == ["bash", "-lc", "boondock off"]
+    assert hook_calls(fake_host) == ["boondock off", "say hi"]
 
 
-def test_exit_hook_skipped_when_reapplying_same_profile(profiles_env, runner):
+def test_exit_hook_skipped_when_reapplying_same_profile(profiles_env, fake_host):
     p = bare_profile("Boondock", hooks={"enter": "boondock on", "exit": "boondock off"})
-    profiles.apply(p, previous=dict(p), runner=runner, z13ctl=Z)
-    assert hook_calls(runner) == ["boondock on"]
+    profiles.apply(p, previous=dict(p), z13ctl=Z)
+    assert hook_calls(fake_host) == ["boondock on"]
 
 
-def test_no_previous_no_exit_hook(profiles_env, runner):
+def test_no_previous_no_exit_hook(profiles_env, fake_host):
     p = bare_profile(hooks={"enter": "", "exit": "never"})
-    profiles.apply(p, previous=None, runner=runner, z13ctl=Z)
-    assert hook_calls(runner) == []
+    profiles.apply(p, previous=None, z13ctl=Z)
+    assert hook_calls(fake_host) == []
 
 
 @pytest.mark.parametrize("hooks", [{"enter": "", "exit": "   "}, {}, None])
-def test_blank_or_missing_hooks_are_not_run(profiles_env, runner, hooks):
+def test_blank_or_missing_hooks_are_not_run(profiles_env, fake_host, hooks):
     prev = bare_profile("Prev", hooks=hooks)
-    profiles.apply(bare_profile("Next", hooks=hooks), previous=prev, runner=runner, z13ctl=Z)
-    assert hook_calls(runner) == []
+    profiles.apply(bare_profile("Next", hooks=hooks), previous=prev, z13ctl=Z)
+    assert hook_calls(fake_host) == []
 
 
-def test_skip_hooks_skips_both(profiles_env, runner):
+def test_skip_hooks_skips_both(profiles_env, fake_host):
     prev = bare_profile("Boondock", hooks={"enter": "boondock on", "exit": "boondock off"})
     nxt = bare_profile("Balanced", hooks={"enter": "say hi", "exit": ""})
-    results = profiles.apply(nxt, previous=prev, runner=runner, z13ctl=Z, skip_hooks=True)
-    assert hook_calls(runner) == []
+    results = profiles.apply(nxt, previous=prev, z13ctl=Z, skip_hooks=True)
+    assert hook_calls(fake_host) == []
     assert "exit hook" not in names(results) and "enter hook" not in names(results)
 
 
@@ -415,11 +399,11 @@ def read_max_fans(paths):
     return json.loads(paths.max_fans.read_text())
 
 
-def test_max_fans_on_keeps_100_percent_and_saves_profile_curve(profiles_env, runner):
+def test_max_fans_on_keeps_100_percent_and_saves_profile_curve(profiles_env, fake_host):
     write_max_fans(profiles_env, enabled=True, saved_curve=[[1, 2]] * 8, other="kept")
-    results = profiles.apply(full_profile(), runner=runner, z13ctl=Z)
+    results = profiles.apply(full_profile(), z13ctl=Z)
 
-    fan_calls = [a for a in runner.calls if a[1] == "fancurve"]
+    fan_calls = [a for a in fake_host.argvs if a[1] == "fancurve"]
     assert fan_calls == [[Z, "fancurve", "--set", profiles.MAX_FANS_SPEC]]
     assert ("fans", True, "Max Fans stays ON (100%)") in results
 
@@ -439,23 +423,23 @@ def test_max_fans_spec_is_all_100_from_20c():
     assert all(p.endswith(":100%") for p in pts)
 
 
-def test_max_fans_on_without_profile_curve_still_pins_100(profiles_env, runner):
+def test_max_fans_on_without_profile_curve_still_pins_100(profiles_env, fake_host):
     write_max_fans(profiles_env, enabled=True)
-    profiles.apply(bare_profile(), runner=runner, z13ctl=Z)
-    assert [a for a in runner.calls if a[1] == "fancurve"] == [[Z, "fancurve", "--set", profiles.MAX_FANS_SPEC]]
+    profiles.apply(bare_profile(), z13ctl=Z)
+    assert [a for a in fake_host.argvs if a[1] == "fancurve"] == [[Z, "fancurve", "--set", profiles.MAX_FANS_SPEC]]
 
 
-def test_max_fans_off_applies_profile_curve(profiles_env, runner):
+def test_max_fans_off_applies_profile_curve(profiles_env, fake_host):
     write_max_fans(profiles_env, enabled=False)
-    results = profiles.apply(full_profile(), runner=runner, z13ctl=Z)
-    assert [a for a in runner.calls if a[1] == "fancurve"] == [[Z, "fancurve", "--set", profiles.curve_spec(CURVE)]]
+    results = profiles.apply(full_profile(), z13ctl=Z)
+    assert [a for a in fake_host.argvs if a[1] == "fancurve"] == [[Z, "fancurve", "--set", profiles.curve_spec(CURVE)]]
     assert ("fans", True, "custom curve") in results
     assert "saved_curve" not in read_max_fans(profiles_env)
 
 
-def test_max_fans_file_missing_means_off(profiles_env, runner):
-    profiles.apply(full_profile(), runner=runner, z13ctl=Z)
-    assert [a for a in runner.calls if a[1] == "fancurve"][0][-1] == profiles.curve_spec(CURVE)
+def test_max_fans_file_missing_means_off(profiles_env, fake_host):
+    profiles.apply(full_profile(), z13ctl=Z)
+    assert [a for a in fake_host.argvs if a[1] == "fancurve"][0][-1] == profiles.curve_spec(CURVE)
     assert not profiles_env.max_fans.exists()       # nothing written when OFF
 
 
@@ -463,24 +447,24 @@ def test_max_fans_file_missing_means_off(profiles_env, runner):
 # undervolt
 # ----------------------------------------------------------------------
 
-def test_undervolt_ok(profiles_env, runner):
-    results = profiles.apply(bare_profile(undervolt=-20), runner=runner, z13ctl=Z)
+def test_undervolt_ok(profiles_env, fake_host):
+    results = profiles.apply(bare_profile(undervolt=-20), z13ctl=Z)
     assert ("undervolt", True, "-20") in results
 
 
-def test_undervolt_zero_is_still_written(profiles_env, runner):
-    profiles.apply(bare_profile(undervolt=0), runner=runner, z13ctl=Z)
-    assert [Z, "undervolt", "--set", "0"] in runner.calls
+def test_undervolt_zero_is_still_written(profiles_env, fake_host):
+    profiles.apply(bare_profile(undervolt=0), z13ctl=Z)
+    assert [Z, "undervolt", "--set", "0"] in fake_host.argvs
 
 
-def test_undervolt_without_ryzen_smu_is_unavailable(profiles_env):
-    runner = FakeRunner().fail(lambda a: "undervolt" in a, rc=1,
+def test_undervolt_without_ryzen_smu_is_unavailable(profiles_env, fake_host):
+    fake_host.fail(lambda a: "undervolt" in a, rc=1,
                                out="error: ryzen_smu kernel module is not loaded")
-    results = profiles.apply(bare_profile(undervolt=-10), runner=runner, z13ctl=Z)
+    results = profiles.apply(bare_profile(undervolt=-10), z13ctl=Z)
     assert ("undervolt", False, "unavailable (ryzen_smu not loaded)") in results
 
 
-def test_undervolt_other_failure_passes_message_through(profiles_env):
-    runner = FakeRunner().fail(lambda a: "undervolt" in a, rc=2, out="value out of range")
-    results = profiles.apply(bare_profile(undervolt=-10), runner=runner, z13ctl=Z)
+def test_undervolt_other_failure_passes_message_through(profiles_env, fake_host):
+    fake_host.fail(lambda a: "undervolt" in a, rc=2, out="value out of range")
+    results = profiles.apply(bare_profile(undervolt=-10), z13ctl=Z)
     assert ("undervolt", False, "value out of range") in results

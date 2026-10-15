@@ -26,9 +26,12 @@ without Decky: `python3 -m unittest discover -s decky/tests` (from the repo root
 
 ## Stack (modern Decky)
 `@decky/api` + `@decky/ui` + `@decky/rollup`, built with pnpm → `dist/index.js`. Backend `main.py`
-uses `import decky` and calls `~/.local/bin/z13ctl` and `~/.local/bin/boondock` directly on the
-host — no `flatpak-spawn`. It runs **as deck**: `plugin.json` has `"_root"`, but Decky Loader only
-runs a backend as root for `"root"` (checked 2026-10-15). The code works either way.
+uses `import decky` and calls `~/.local/bin/z13ctl` and `~/.local/bin/boondock` on the host through
+the shared host seam `src/host.py` (installed root-owned into `py_modules/`, like the fan watchdog).
+It runs **as deck**: `plugin.json` has `"_root"`, but Decky Loader only runs a backend as root for
+`"root"` (checked 2026-10-15). The code works either way: `host.run(..., as_deck=True)` adds the
+`runuser -u deck` hop only under root, and every child gets the deck env (deck's runtime dir and
+session bus, and the host's `LD_LIBRARY_PATH` instead of the loader's bundled one).
 
 ## Build
 ```bash
@@ -64,5 +67,6 @@ mode → per-plugin **Reload**.
   stalled or frozen-tach fans. It acts only in Game Mode (the desktop app owns Desktop Mode) and
   each tick holds the write lock, so it never races a profile apply.
 - HID controls (brightness) route through the deck-user z13ctl daemon socket: the panel's z13ctl
-  calls run as deck (`runuser -u deck -- env HOME=/home/deck XDG_RUNTIME_DIR=/run/user/1000 …`).
+  calls run as deck (`host.run(..., as_deck=True)`; under root that is
+  `runuser -u deck -- env HOME=/home/deck XDG_RUNTIME_DIR=/run/user/1000 …`).
 - Easiest install: `./install.sh --repair` from the repo root (build + copy + clean loader restart).

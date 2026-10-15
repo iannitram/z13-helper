@@ -35,6 +35,7 @@ sys.path.insert(0, os.path.join(REPO, "src"))
 
 HOME = os.path.expanduser("~")
 BIN = os.path.join(HOME, ".local", "bin")
+LIB = os.path.join(HOME, ".local", "lib", "z13-helper")
 UNITS = os.path.join(HOME, ".config", "systemd", "user")
 ETC_UNITS = "/etc/systemd/system"
 APP_ID = "io.github.iannitram.Z13Helper"
@@ -45,7 +46,7 @@ LIGHTBAR_RESET_UNIT = "z13-lightbar-reset.service"
 DECKY_PLUGIN = os.path.join(HOME, "homebrew", "plugins", "z13-helper")
 DECKY_LOGS = os.path.join(HOME, "homebrew", "logs", "z13-helper")
 DECKY_FILES = ["plugin.json", "package.json", "main.py", "dist/index.js",
-               "py_modules/fan_watchdog.py", "py_modules/sensor_reader.py"]
+               "py_modules/fan_watchdog.py", "py_modules/sensor_reader.py", "py_modules/host.py"]
 
 
 def decky_source(f):
@@ -57,6 +58,8 @@ def decky_source(f):
 # (repo path, installed path, mode, needs root)
 MANIFEST = [
     ("src/profiles.py", f"{BIN}/z13-profile", "755", False),
+    # z13-profile's host seam (profiles.py puts this folder on sys.path).
+    ("src/host.py", f"{LIB}/host.py", "644", False),
     ("tooling/profiles/z13-max", f"{BIN}/z13-max", "755", False),
     ("tooling/profiles/z13-balanced", f"{BIN}/z13-balanced", "755", False),
     ("tooling/profiles/z13-cool", f"{BIN}/z13-cool", "755", False),

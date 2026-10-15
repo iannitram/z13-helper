@@ -1,10 +1,7 @@
 """hardware_controller.HardwareController: per-device brightness + wedged-lightbar recovery."""
 
-import subprocess
-
 import pytest
 
-import hardware_controller
 import profiles
 from hardware_controller import HardwareController
 
@@ -32,8 +29,8 @@ class Fake(HardwareController):
 def recover(monkeypatch):
     seen = []
 
-    def fake(runner=None, **kw):
-        seen.append(runner)
+    def fake(**kw):
+        seen.append(kw)
         return fake.result
     fake.result = (True, "lightbar reset")
     monkeypatch.setattr(profiles, "recover_lightbar", fake)
@@ -45,8 +42,8 @@ def recover(monkeypatch):
 def recover_stale(monkeypatch):
     seen = []
 
-    def fake(runner=None, **kw):
-        seen.append(runner)
+    def fake(**kw):
+        seen.append(kw)
         return fake.result
     fake.result = (True, "daemon restarted")
     monkeypatch.setattr(profiles, "recover_lightbar_stale", fake)
@@ -131,12 +128,27 @@ def test_all_failed_raises(recover):
         c.set_brightness("off")
 
 
-def test_run_command_timeout_becomes_runtime_error(monkeypatch):
-    def slow(*a, **kw):
-        assert kw.get("timeout") == 7
-        raise subprocess.TimeoutExpired(a[0], 7)
-    monkeypatch.setattr(hardware_controller.subprocess, "run", slow)
+def test_run_command_returns_output(fake_host):
+    fake_host.fail("--get", rc=0, out="80")
+    assert HardwareController(z13ctl_path="z13ctl").get_battery_limit() == 80
+    assert fake_host.calls[0].argv == ["z13ctl", "batterylimit", "--get"]
+
+
+def test_run_command_timeout_becomes_runtime_error(fake_host):
+    fake_host.fail("status", rc=124, out="timed out after 7 s", timed_out=True)
     c = HardwareController(z13ctl_path="z13ctl")
-    c._flatpak = False
-    with pytest.raises(RuntimeError, match="timed out"):
+    with pytest.raises(RuntimeError, match="timed out after 7 s"):
         c._run_command(["status"], quiet=True, timeout=7)
+    assert fake_host.calls[0].timeout == 7
+
+
+def test_run_command_failure_carries_output(fake_host):
+    fake_host.fail("lightbar", out="write /dev/hidraw5: connection timed out")
+    with pytest.raises(RuntimeError, match="z13ctl command failed: write /dev/hidraw5"):
+        HardwareController(z13ctl_path="z13ctl")._run_command(["--device", "lightbar"], quiet=True)
+
+
+def test_run_command_missing_binary(fake_host):
+    fake_host.fail("z13ctl", rc=127, out="No such file or directory: 'z13ctl'")
+    with pytest.raises(RuntimeError, match="not found"):
+        HardwareController(z13ctl_path="z13ctl")._run_command(["status"])

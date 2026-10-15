@@ -1,11 +1,11 @@
 """Z13-Helper — Decky Loader backend.
 
 Runs as the deck user: Decky Loader only runs a backend as root for the flag "root",
-and plugin.json says "_root" (checked live 2026-10-15). Every helper here works either
-way (geteuid() picks `runuser -u deck` only under root), so the flag can change without
-code changes. Shells to the host z13ctl / boondock CLIs — the same hardware backend the
-desktop PyQt app uses — so Game Mode and Desktop Mode share one contract. No
-flatpak-spawn needed here (this process is already on the host).
+and plugin.json says "_root" (checked live 2026-10-15). Every command goes through the
+shared host seam (host.py), which works either way (it adds `runuser -u deck` only under
+root), so the flag can change without code changes. Shells to the host z13ctl / boondock
+CLIs — the same hardware backend the desktop PyQt app uses — so Game Mode and Desktop
+Mode share one contract.
 """
 
 import os
@@ -13,7 +13,6 @@ import re
 import json
 import time
 import asyncio
-import subprocess
 import sys
 
 import decky  # modern API (NOT decky_plugin)
@@ -25,14 +24,20 @@ _PY_MODULES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "py_modul
 if os.path.isdir(_PY_MODULES) and _PY_MODULES not in sys.path:
     sys.path.insert(0, _PY_MODULES)
 from fan_watchdog import FanTrace, FanWatchdog  # noqa: E402
+import host  # noqa: E402
 from sensor_reader import SensorReader  # noqa: E402
+
+# This process is always a Decky backend. host.detect() spots that from the loader's
+# env, but the deck env it implies (the host's LD_LIBRARY_PATH above all) is too
+# important to leave to a guess: without it every systemctl call fails.
+if host.MODE == "host":
+    host.MODE = "decky"
 
 Z13CTL = os.path.expanduser("~/.local/bin/z13ctl")
 # The app's profile engine (src/profiles.py installed as ~/.local/bin/z13-profile).
-# Run as deck so the store stays deck-owned and hooks (boondock) behave as on the desktop.
-# (Under root that needs runuser; as deck already, runuser refuses to run at all.)
-Z13_PROFILE = (["runuser", "-u", "deck", "--"] if os.geteuid() == 0 else []) + \
-    ["env", "HOME=/home/deck", "/home/deck/.local/bin/z13-profile"]
+# Always run as deck (as_deck=True) so the store stays deck-owned and hooks (boondock)
+# behave as on the desktop.
+Z13_PROFILE = ["/home/deck/.local/bin/z13-profile"]
 BOONDOCK = os.path.expanduser("~/.local/bin/boondock")
 SHARED_CONFIG = os.path.expanduser("~/.config/z13-helper/config.json")
 # Max Fans state shared with the desktop app (mirror of src/max_fans_state.py):
@@ -40,19 +45,8 @@ SHARED_CONFIG = os.path.expanduser("~/.config/z13-helper/config.json")
 # so a toggle in either frontend is seen by the other.
 MAX_FANS_STATE = os.path.expanduser("~/.config/z13-helper/max-fans.json")
 
-# The backend runs as root, but the deck user's z13ctl daemon holds the HID device
-# and serves a socket under /run/user/1000. Point z13ctl at that runtime dir so HID
-# commands (brightness) use the daemon socket instead of contending for the device.
-# sysfs commands (profile / tdp / fancurve / battery) work regardless.
-CLI_ENV = {**os.environ, "XDG_RUNTIME_DIR": "/run/user/1000",
-           "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1000/bus"}
-# The loader is a PyInstaller bundle: it points LD_LIBRARY_PATH at its own
-# /tmp/_MEI*/ libs, whose libcrypto is too old for the host's systemctl
-# ("OPENSSL_3.4.0 not found") — so every systemctl call failed and the Game Mode
-# check always said "no". Give child processes the host's library path back.
-CLI_ENV.pop("LD_LIBRARY_PATH", None)
-if os.environ.get("LD_LIBRARY_PATH_ORIG"):
-    CLI_ENV["LD_LIBRARY_PATH"] = os.environ["LD_LIBRARY_PATH_ORIG"]
+# Children get the deck env from host.run (deck's runtime dir and session bus, so HID
+# commands use the z13ctl daemon socket; the host's LD_LIBRARY_PATH, not the loader's).
 
 # Max Fans = 8 monotonic temp anchors, all at 100%.
 MAX_FAN_TEMPS = (20, 30, 40, 50, 60, 70, 80, 90)   # from 20 C: fans idle below the first point
@@ -114,16 +108,11 @@ LIGHTBAR_DAEMON_RESTART_WAIT_S = 2
 LIGHTBAR_DAEMON_STAMP = "/run/user/1000/z13-lightbar-daemon-restart.stamp"
 
 
-def _run(args, timeout=15):
-    try:
-        p = subprocess.run(args, env=CLI_ENV, timeout=timeout,
-                           capture_output=True, text=True, check=False)
-        out = ((p.stdout or "") + (p.stderr or "")).strip()
-        decky.logger.info("cmd %s -> rc=%s\n%s", " ".join(args), p.returncode, out)
-        return p.returncode, out
-    except Exception as e:  # noqa: BLE001
-        decky.logger.error("cmd %s failed: %s", " ".join(args), e)
-        return 1, str(e)
+def _run(args, timeout=15, *, as_deck=False):
+    """host.run, logged. Returns (rc, out)."""
+    rc, out, _ = host.run(args, timeout=timeout, as_deck=as_deck)
+    decky.logger.info("cmd %s -> rc=%s\n%s", " ".join(args), rc, out)
+    return rc, out
 
 
 def _state_path():
@@ -226,34 +215,13 @@ def _in_gamemode():
     Max Fans enforcement, so this watchdog stands down there rather than both
     frontends re-applying the same curve.
     """
-    cmd = ["systemctl", "--user", "is-active", "--quiet", "gamescope-session.target"]
-    if os.geteuid() == 0:
-        cmd = ["runuser", "-u", "deck", "--"] + cmd
-    try:
-        return subprocess.run(cmd, env=CLI_ENV, timeout=5).returncode == 0
-    except Exception:  # noqa: BLE001
-        return False
+    return host.run(["systemctl", "--user", "is-active", "--quiet", "gamescope-session.target"],
+                    timeout=5, as_deck=True).rc == 0
 
 
 # ----------------------------------------------------------------------
 # Phase 11 helpers (pure where possible; decky/tests/ covers them)
 # ----------------------------------------------------------------------
-
-def _as_deck(argv, extra_env=None):
-    """Run argv as the deck user (runuser only if this backend runs as root), like z13-profile.
-
-    Same user the desktop app's z13ctl calls run as, so HID writes go through the
-    deck user's z13ctl daemon socket and nothing ends up root-owned. `extra_env`
-    adds KEY=VALUE pairs onto the explicit `env` prefix (e.g. DBUS_SESSION_BUS_ADDRESS
-    for a `systemctl --user` call), alongside the standard HOME/XDG_RUNTIME_DIR.
-    """
-    if os.geteuid() != 0:
-        return list(argv)
-    env = ["HOME=/home/deck", "XDG_RUNTIME_DIR=/run/user/1000"]
-    if extra_env:
-        env += [f"{k}={v}" for k, v in extra_env.items()]
-    return ["runuser", "-u", "deck", "--", "env"] + env + list(argv)
-
 
 def clamp_tdp(pl1, pl2, pl3):
     """Clamp to PL_MIN..PL_MAX and enforce sPPT >= SPL, fPPT >= sPPT.
@@ -302,7 +270,7 @@ def _ensure_store():
     """The store, seeded through the engine (as deck) if it doesn't exist yet."""
     store = _read_store()
     if store is None:
-        _run(Z13_PROFILE + ["list", "--json"])
+        _run(Z13_PROFILE + ["list", "--json"], as_deck=True)
         store = _read_store()
     return store
 
@@ -432,19 +400,18 @@ def _stamp_rate_limited(stamp, now, skipped_msg):
     return True, None
 
 
-def restart_lightbar_daemon(runner, *, sleep=time.sleep):
-    """Copy of profiles.restart_lightbar_daemon(). We are root here, so reach
-    the deck user's z13ctl daemon as deck, with its session bus address."""
-    argv = _as_deck(["systemctl", "--user", "restart", "--no-ask-password", Z13CTL_SERVICE],
-                     extra_env={"DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1000/bus"})
-    rc, out = runner(argv, timeout=30)
+def restart_lightbar_daemon(*, sleep=time.sleep):
+    """Copy of profiles.restart_lightbar_daemon(). Reaches the deck user's z13ctl
+    daemon as deck (host.run's as_deck), even if this backend runs as root."""
+    rc, out = _run(["systemctl", "--user", "restart", "--no-ask-password", Z13CTL_SERVICE],
+                   timeout=30, as_deck=True)
     if rc != 0:
         return False, f"daemon restart failed ({out or f'rc={rc}'})"
     sleep(LIGHTBAR_DAEMON_RESTART_WAIT_S)
     return True, "daemon restarted"
 
 
-def recover_lightbar(runner=None, *, sleep=time.sleep, now=time.time, stamp=None):
+def recover_lightbar(*, sleep=time.sleep, now=time.time, stamp=None):
     """Copy of profiles.recover_lightbar(). Returns (ok, message).
 
     Starts the root oneshot that re-authorizes the lightbar's USB device (we are
@@ -455,36 +422,34 @@ def recover_lightbar(runner=None, *, sleep=time.sleep, now=time.time, stamp=None
     not into `ok` -- the USB reset itself did succeed, so the caller still
     retries once, and that retry's own failure will report why.
     """
-    runner = runner or _run
     stamp = stamp or LIGHTBAR_STAMP
     ok, msg = _stamp_rate_limited(stamp, now,
                                    lambda age: f"lightbar reset skipped (last one {age} s ago)")
     if not ok:
         return False, msg
-    rc, out = runner(["systemctl", "start", "--no-ask-password", LIGHTBAR_RESET_UNIT], timeout=30)
+    rc, out = _run(["systemctl", "start", "--no-ask-password", LIGHTBAR_RESET_UNIT], timeout=30)
     if rc != 0:
         return False, f"lightbar reset failed ({out or f'rc={rc}'})"
     sleep(LIGHTBAR_RESET_SETTLE_S)
-    daemon_ok, daemon_msg = restart_lightbar_daemon(runner, sleep=sleep)
+    daemon_ok, daemon_msg = restart_lightbar_daemon(sleep=sleep)
     if not daemon_ok:
         return True, f"lightbar reset, but {daemon_msg}"
     return True, "lightbar reset"
 
 
-def recover_lightbar_stale(runner=None, *, sleep=time.sleep, now=time.time, stamp=None):
+def recover_lightbar_stale(*, sleep=time.sleep, now=time.time, stamp=None):
     """Copy of profiles.recover_lightbar_stale(). Recovers a stale daemon
     handle (ENODEV) without a USB reset: restart the daemon alone. Rate-limited
     like recover_lightbar(), via its own stamp. Never loops."""
-    runner = runner or _run
     stamp = stamp or LIGHTBAR_DAEMON_STAMP
     ok, msg = _stamp_rate_limited(stamp, now,
                                    lambda age: f"daemon restart skipped (last one {age} s ago)")
     if not ok:
         return False, msg
-    return restart_lightbar_daemon(runner, sleep=sleep)
+    return restart_lightbar_daemon(sleep=sleep)
 
 
-def set_brightness_per_device(level, runner=None, recover=None, recover_stale=None):
+def set_brightness_per_device(level, recover=None, recover_stale=None):
     """One z13ctl call per lighting device. Returns {"ok", "failed", "message"}.
 
     ok is True when at least one device took the level; a failed device is
@@ -493,16 +458,15 @@ def set_brightness_per_device(level, runner=None, recover=None, recover_stale=No
     (`recover`) and one retry, a stale daemon handle (ENODEV) gets one daemon
     restart only (`recover_stale`) and one retry.
     """
-    runner = runner or _run
-    recover = recover or (lambda: recover_lightbar(runner))
-    recover_stale = recover_stale or (lambda: recover_lightbar_stale(runner))
+    recover = recover or recover_lightbar
+    recover_stale = recover_stale or recover_lightbar_stale
     if level not in BRIGHTNESS_LEVELS:
         return {"ok": False, "failed": list(LIGHTING_DEVICES), "message": f"bad level {level!r}"}
     failed = []
     notes = []
     for dev in LIGHTING_DEVICES:
-        argv = _as_deck([Z13CTL, "--device", dev, "brightness", level])
-        rc, out = runner(argv, timeout=LIGHTING_TIMEOUT_S)
+        argv = [Z13CTL, "--device", dev, "brightness", level]
+        rc, out = _run(argv, timeout=LIGHTING_TIMEOUT_S, as_deck=True)
         if rc != 0 and dev == "lightbar":
             kind = lightbar_failure_kind(out)
             if kind == "wedged":
@@ -513,7 +477,7 @@ def set_brightness_per_device(level, runner=None, recover=None, recover_stale=No
                 rec_ok = None
             if rec_ok is not None:
                 if rec_ok:
-                    rc, out = runner(argv, timeout=LIGHTING_TIMEOUT_S)
+                    rc, out = _run(argv, timeout=LIGHTING_TIMEOUT_S, as_deck=True)
                     if rc == 0:
                         notes.append("lightbar recovered")
                     else:
@@ -570,7 +534,7 @@ def power_state():
     }
 
 
-def apply_tdp(enabled, pl1, pl2, pl3, runner=None):
+def apply_tdp(enabled, pl1, pl2, pl3):
     """Store the active profile's TDP, then push it. Returns a result dict.
 
     ON  -> `z13ctl tdp --set` as deck: the same targeted write the desktop Fans +
@@ -579,31 +543,29 @@ def apply_tdp(enabled, pl1, pl2, pl3, runner=None):
     OFF -> `z13-profile apply <active> --no-hooks`: the platform-profile rewrite is
            what hands the limits back to the firmware (desktop does the same).
     """
-    runner = runner or _run
     tdp = clamp_tdp(pl1, pl2, pl3)
     name, err = _set_active_field(tdp=tdp if enabled else None)
     if err:
         return {"ok": False, "saved": False, "message": f"Not saved: {err}", "tdp": tdp}
     if enabled:
-        rc, out = runner(_as_deck(tdp_argv(tdp)))
+        rc, out = _run(tdp_argv(tdp), as_deck=True)
         ok = rc == 0
         msg = (f"{name}: {tdp['pl1']}/{tdp['pl2']}/{tdp['pl3']} W" if ok
                else f"{name}: saved, but z13ctl tdp failed ({out[-120:] or f'rc={rc}'})")
     else:
-        rc, out = runner(Z13_PROFILE + ["apply", name, "--no-hooks"], timeout=120)
+        rc, out = _run(Z13_PROFILE + ["apply", name, "--no-hooks"], timeout=120, as_deck=True)
         ok = rc == 0 and "ERR  profile" not in out
         msg = (f"{name}: power limits back to the firmware" if ok
                else f"{name}: saved, but re-apply failed ({out[-120:] or f'rc={rc}'})")
     return {"ok": ok, "saved": True, "message": msg, "tdp": tdp}
 
 
-def apply_battery_limit(value, runner=None):
+def apply_battery_limit(value):
     """Store the active profile's battery_limit, then `z13ctl batterylimit --set` as deck.
     The hardware write still happens if the store can't be written (reported)."""
-    runner = runner or _run
     v = clamp_battery(value)
     name, err = _set_active_field(battery_limit=v)
-    rc, out = runner(_as_deck([Z13CTL, "batterylimit", "--set", str(v)]))
+    rc, out = _run([Z13CTL, "batterylimit", "--set", str(v)], as_deck=True)
     ok = rc == 0
     msg = f"Charge limit {v}%" if ok else f"Charge limit failed ({out[-120:] or f'rc={rc}'})"
     if err:
@@ -626,17 +588,16 @@ def max_fans_off_argv(state, store):
     return [Z13CTL, "fancurve", "--reset"]
 
 
-def set_max_fans_blocking(enabled, runner=None):
+def set_max_fans_blocking(enabled):
     """Max Fans ON/OFF (blocking; run it in a thread). Returns True on success."""
-    runner = runner or _run
     if enabled:
         # Snapshot the current custom curve (unless already maxed) so OFF restores it exactly.
         cur = _current_curve_pwm()
         if len(cur) == 8 and not all(pwm >= 255 for _, pwm in cur):
             _update_max_fans(saved_curve=cur)
-        rc, _ = runner([Z13CTL, "fancurve", "--set", MAX_FANS_SPEC])
+        rc, _ = _run([Z13CTL, "fancurve", "--set", MAX_FANS_SPEC])
     else:
-        rc, _ = runner(max_fans_off_argv(_load_max_fans(), _read_store()))
+        rc, _ = _run(max_fans_off_argv(_load_max_fans(), _read_store()))
     ok = rc == 0
     if ok:
         _update_max_fans(enabled=enabled)
@@ -650,11 +611,8 @@ class DeckyFans:
     before a bare curve write (the watchdog reports the error).
     """
 
-    def __init__(self, runner=None):
-        self._run = runner or _run
-
     def _z13ctl(self, *args):
-        rc, out = self._run([Z13CTL, *args])
+        rc, out = _run([Z13CTL, *args])
         if rc != 0:
             raise RuntimeError(f"z13ctl {' '.join(args)} failed (rc={rc}): {out}")
 
@@ -670,13 +628,9 @@ class DeckyFans:
 
 def _desktop_session_active():
     """True iff the deck user's Plasma (Desktop Mode) session is up."""
-    cmd = ["systemctl", "--user", "is-active", "--quiet", "plasma-workspace.target"]
-    if os.geteuid() == 0:
-        cmd = ["runuser", "-u", "deck", "--"] + cmd
-    try:   # quiet on purpose (unlike _run): this runs every DESKTOP_CHECK_S
-        return subprocess.run(cmd, env=CLI_ENV, timeout=5).returncode == 0
-    except Exception:  # noqa: BLE001
-        return False
+    # host.run, not _run: quiet on purpose, this runs every DESKTOP_CHECK_S
+    return host.run(["systemctl", "--user", "is-active", "--quiet", "plasma-workspace.target"],
+                    timeout=5, as_deck=True).rc == 0
 
 
 def _desktop_app_answers(path=DESKTOP_APP_SOCKET):
@@ -705,8 +659,7 @@ class DesktopAppCheck:
                  user_quit=lambda: os.path.exists(DESKTOP_APP_USER_QUIT), restart=None):
         self.in_desktop, self.app_up, self.user_quit = in_desktop, app_up, user_quit
         self.restart = restart or (lambda: _run(
-            _as_deck(["systemctl", "--user", "restart", DESKTOP_APP_UNIT]),
-            timeout=30)[0] == 0)
+            ["systemctl", "--user", "restart", DESKTOP_APP_UNIT], timeout=30, as_deck=True)[0] == 0)
         self.misses = 0
         self.restarted = False
 
@@ -829,7 +782,8 @@ class Plugin:
     # ---- App profiles (profiles.json, shared with the desktop app) ----
     async def get_profiles(self) -> dict:
         """{"names": [...], "active": name}. Empty names if the engine is missing."""
-        rc, out = await asyncio.to_thread(_run, Z13_PROFILE + ["list", "--json"])
+        rc, out = await asyncio.to_thread(
+            lambda: _run(Z13_PROFILE + ["list", "--json"], as_deck=True))
         if rc != 0:
             return {"names": [], "active": ""}
         try:
@@ -843,7 +797,8 @@ class Plugin:
         # A full apply takes seconds (longer with a wedged lightbar): keep it off the
         # loader's event loop, and serialised with the other writes.
         async with _lock():
-            rc, out = await asyncio.to_thread(_run, Z13_PROFILE + ["apply", name], 180)
+            rc, out = await asyncio.to_thread(
+                lambda: _run(Z13_PROFILE + ["apply", name], 180, as_deck=True))
         decky.logger.info("profile apply %s -> rc=%s", name, rc)
         return rc == 0 and "ERR  profile" not in out
 

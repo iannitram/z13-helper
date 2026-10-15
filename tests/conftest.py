@@ -4,7 +4,8 @@ Nothing here touches hardware, the network, sudo, or the real ~/.config:
 - src/ and tooling/ go on sys.path so the modules import by their bare names,
   exactly as main.py and the host scripts import them.
 - An autouse guard makes subprocess.run / Popen and urllib's urlopen raise, so a
-  test that forgets to inject a fake fails loudly instead of running z13ctl.
+  test that forgets the `fake_host` fixture fails loudly instead of running z13ctl
+  (host.run lets the guard's error through).
 - install_record.INSTALL_JSON (the logging choice) points into tmp_path.
 - `profiles_env` redirects every path profiles.py and max_fans_state.py write
   into tmp_path.
@@ -107,35 +108,8 @@ def profiles_env(tmp_path, monkeypatch):
     return paths
 
 
-class FakeRunner:
-    """Stands in for profiles.host_runner: records argv, returns (rc, out).
-
-    `fail(pred, rc, out)` makes every call whose argv satisfies pred return
-    (rc, out); everything else succeeds with (0, "").
-    """
-
-    def __init__(self):
-        self.calls = []
-        self._rules = []
-
-    def fail(self, pred, rc=1, out="boom"):
-        self._rules.append((pred, rc, out))
-        return self
-
-    def __call__(self, argv, timeout=120):
-        self.calls.append(list(argv))
-        for pred, rc, out in self._rules:
-            if pred(argv):
-                return rc, out
-        return 0, ""
-
-    @property
-    def steps(self):
-        return [step_of(a) for a in self.calls]
-
-
 def step_of(argv):
-    """Map a runner argv to the step name profiles.apply reports for it."""
+    """Map a host.run argv to the step name profiles.apply reports for it."""
     if argv[0] == "bash":
         return f"hook: {argv[-1]}"
     if argv[0] == "systemctl":
@@ -147,8 +121,10 @@ def step_of(argv):
 
 
 @pytest.fixture
-def runner():
-    return FakeRunner()
+def fake_host(monkeypatch):
+    """host.run replaced by a FakeHost (tests/fake_host.py): records argv, scripted results."""
+    from fake_host import FakeHost
+    return FakeHost().install(monkeypatch.setattr)
 
 
 # ----------------------------------------------------------------------

@@ -15,31 +15,17 @@ import json
 import os
 import platform
 import re
-import subprocess
 import time
+
+import host
 
 CACHE_PATH = os.path.expanduser("~/.config/z13-helper/updates.json")
 CHECK_INTERVAL_S = 24 * 3600
 API = "https://api.github.com/repos"
 
 
-def _in_flatpak():
-    return os.path.exists("/.flatpak-info") or "FLATPAK_ID" in os.environ
-
-
-def host_run(argv, timeout=30):
-    cmd = list(argv)
-    if _in_flatpak():
-        cmd = ["flatpak-spawn", "--host"] + cmd
-    try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-        return p.returncode, (p.stdout or ""), (p.stderr or "")
-    except (subprocess.TimeoutExpired, OSError) as e:
-        return 1, "", str(e)
-
-
 def host_read(path):
-    rc, out, _ = host_run(["cat", os.path.expanduser(path)], timeout=10)
+    rc, out, _ = host.run(["cat", os.path.expanduser(path)], timeout=10)
     return out.strip() if rc == 0 else None
 
 
@@ -48,7 +34,7 @@ def host_read(path):
 # ----------------------------------------------------------------------
 
 def _z13ctl_version():
-    rc, out, _ = host_run([os.path.expanduser("~/.local/bin/z13ctl"), "--version"], timeout=10)
+    rc, out, _ = host.run([os.path.expanduser("~/.local/bin/z13ctl"), "--version"], timeout=10)
     m = re.search(r"(\d+\.\d+\.\d+)", out) if rc == 0 else None
     return m.group(1) if m else None
 
@@ -113,9 +99,9 @@ def _get(url, etag=None):
     if etag:
         argv += ["-H", f"If-None-Match: {etag}"]
     argv.append(url)
-    rc, out, err = host_run(argv, timeout=40)
+    rc, out, _ = host.run(argv, timeout=40)
     if rc != 0 or not out:
-        return 0, etag, err
+        return 0, etag, out
     # curl -i may emit several header blocks (redirects); take the last one.
     head, _, body = out.rpartition("\r\n\r\n")
     if not head:
@@ -175,8 +161,7 @@ def _fetch_kernel(cached):
 
 
 def _fetch_steamos(cached):
-    rc, out, err = host_run(["steamos-update", "check"], timeout=90)
-    text = (out + err).strip()
+    rc, text, _ = host.run(["steamos-update", "check"], timeout=90)
     available = "no update available" not in text.lower() and rc == 0
     return {"latest": "update available" if available else (_steamos_version() or ""),
             "published": "", "url": None, "notes": text[:200], "etag": None, "error": None}
