@@ -145,6 +145,14 @@ In the Quick Access Menu:
 Its backend also runs the **fan watchdog** in Game Mode. In Desktop Mode it restarts the desktop
 app if the app has gone, but never after you quit it on purpose.
 
+**What happened in Game Mode?** Run `z13-gamemode-report` afterwards (from Desktop Mode or over
+SSH). It reads the last Game Mode session back from local logs: when it ran, which games were
+played, what the Decky backend did, when the fan watchdog stepped in, errors from gamescope/Steam
+and Z13-Helper, and any screenshots taken. `--last N` covers more sessions. While Game Mode is
+running, `z13-gamemode-report --screenshot` asks gamescope for a PNG of the screen. It only reads
+local files and journals and sends nothing anywhere; with logging off it skips the fan trace and
+`--screenshot` needs a path you give it.
+
 ### The side button
 
 The small Armoury Crate button next to the power button:
