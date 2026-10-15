@@ -64,6 +64,10 @@ ENFORCE_INTERVAL_S = 2
 FAN_TRACE_DIR = "/home/deck/.local/state/z13-helper"
 FAN_TRACE = os.path.join(FAN_TRACE_DIR, "fan-trace-gamemode.log")
 DECK_IDS = (1000, 1000)
+# The user's logging choice (mirror of src/install_record.py logging_enabled()):
+# install.sh asks, the desktop app's Help -> Error log changes it. "logging": false
+# = no fan trace file; missing = on. Read once, when the watchdog starts.
+INSTALL_JSON = os.path.expanduser("~/.config/z13-helper/install.json")
 
 # Desktop app check: in Desktop Mode the resident desktop app should be running (it
 # owns the side button there). Its single-instance socket (src/single_instance.py)
@@ -730,8 +734,22 @@ class DesktopAppCheck:
         return "restarted" if ok else "restart-failed"
 
 
-def make_fan_trace(path=FAN_TRACE, owner=DECK_IDS):
-    """The Game Mode watchdog's trace file, or None if it can't be opened."""
+def logging_enabled():
+    try:
+        with open(INSTALL_JSON) as f:
+            rec = json.load(f)
+    except (OSError, ValueError):
+        return True
+    return not (isinstance(rec, dict) and rec.get("logging") is False)
+
+
+def make_fan_trace(path=None, owner=DECK_IDS):
+    """The Game Mode watchdog's trace file, or None if logging is off or it
+    can't be opened."""
+    if not logging_enabled():
+        decky.logger.info("Logging is off (install.json); no fan trace file")
+        return None
+    path = path or FAN_TRACE
     try:
         d = os.path.dirname(path)
         if not os.path.isdir(d):

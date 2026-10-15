@@ -6,6 +6,19 @@ scripts, `install.sh`, and the Decky plugin (`z13-helper`, was `z13-decky`). Dat
 landed in the repo; "on-device check pending" means it is written and tested off
 the device but not yet verified on the Z13. Plan and status: `docs/ROADMAP.md`.
 
+## Unreleased
+
+### Added
+- **Logging is opt-in** (ROADMAP §10 0c). A full `./install.sh` asks once "Do you want to enable
+  error logging to help with development of the app?" (`--yes` answers yes, `--repair` keeps the
+  recorded answer, `--dry-run` shows the question) and records `"logging": true|false` in
+  `~/.config/z13-helper/install.json`. Help → Error log gets a **Save logs to disk** checkbox that
+  writes the same key and applies at once. With logging off the app writes no `app.log`, crash
+  files, `fatal.log` or desktop fan trace, and the Decky plugin no Game Mode fan trace (read on its
+  next start); crash reports stay in memory for the Error log window, warnings and hard-crash
+  tracebacks still reach stderr/the journal. A missing key means on, so existing installs keep
+  logging. On-device check pending.
+
 ## 0.5.0 — 2026-10-15
 
 ### Changed

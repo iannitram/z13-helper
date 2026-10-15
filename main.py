@@ -10,6 +10,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
 import app_log
+import install_record
 import single_instance
 
 
@@ -43,8 +44,9 @@ def main():
 
     # Only the resident instance logs: from here on, every log line, uncaught
     # exception (Qt slots and worker threads included) and hard crash is kept
-    # under ~/.local/state/z13-helper/ (see app_log.py, Help -> Error log).
-    app_log.setup()
+    # under ~/.local/state/z13-helper/ (see app_log.py, Help -> Error log) --
+    # if the user opted in (install.json "logging"; missing = on).
+    app_log.setup(to_disk=install_record.logging_enabled())
     single_instance.clear_user_quit()
 
     from PyQt6.QtCore import QTimer

@@ -40,7 +40,7 @@ _HOME = tempfile.mkdtemp(prefix="z13-decky-home-")
 REAL = {}   # the real values, for the tests that check the paths themselves
 for _name in ("SHARED_CONFIG", "MAX_FANS_STATE", "PROFILES_STORE", "FAN_TRACE",
               "LIGHTBAR_STAMP", "LIGHTBAR_DAEMON_STAMP", "DESKTOP_APP_SOCKET",
-              "DESKTOP_APP_USER_QUIT"):
+              "DESKTOP_APP_USER_QUIT", "INSTALL_JSON"):
     if hasattr(m, _name):
         REAL[_name] = getattr(m, _name)
         setattr(m, _name, os.path.join(_HOME, _name.lower()))
@@ -620,6 +620,34 @@ class FanWatchdogLoopTest(unittest.TestCase):
         self.assertIn("fan trace started (gamemode", text)
         self.assertIn("*** ACT stall", text)
         self.assertTrue(REAL["FAN_TRACE"].endswith("z13-helper/fan-trace-gamemode.log"))
+
+    def _logging_choice(self, rec):
+        if rec is None:
+            if os.path.exists(m.INSTALL_JSON):
+                os.remove(m.INSTALL_JSON)
+        else:
+            with open(m.INSTALL_JSON, "w") as f:
+                json.dump(rec, f)
+        self.addCleanup(lambda: os.path.exists(m.INSTALL_JSON) and os.remove(m.INSTALL_JSON))
+
+    def test_logging_choice_on_off_missing(self):
+        for rec, want in ((None, True), ({"mode": "repair"}, True), ({"logging": True}, True),
+                          ({"logging": False}, False)):
+            with self.subTest(rec=rec):
+                self._logging_choice(rec)
+                self.assertIs(m.logging_enabled(), want)
+                d = tempfile.mkdtemp(prefix="z13-trace-")
+                path = os.path.join(d, "fan-trace-gamemode.log")
+                trace = m.make_fan_trace(path, owner=(os.getuid(), os.getgid()))
+                self.assertEqual(trace is not None, want)
+                self.assertEqual(os.path.exists(path), want)
+        self.assertTrue(REAL["INSTALL_JSON"].endswith("/.config/z13-helper/install.json"))
+
+    def test_unreadable_logging_choice_means_on(self):
+        self._logging_choice(None)
+        with open(m.INSTALL_JSON, "w") as f:
+            f.write("{not json")
+        self.assertTrue(m.logging_enabled())
 
     def test_unwritable_trace_is_none_not_an_error(self):
         self.assertIsNone(m.make_fan_trace("/proc/nope/fan-trace.log"))

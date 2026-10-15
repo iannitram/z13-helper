@@ -69,29 +69,27 @@ captured from Desktop Mode.
 
 The full plan, with reasons and status, is [`docs/ROADMAP.md`](docs/ROADMAP.md). Next up:
 
-1. **Logging opt-in:** now that the repo is public, `install.sh` will ask before turning on error
-   and fan-trace logging. The logs never leave the machine either way.
-2. **Post-SteamOS-update care** (§9b): move the Z13-specific steps from the maintainer's
+1. **Post-SteamOS-update care** (§9b): move the Z13-specific steps from the maintainer's
    after-an-update checklist into `install.sh --repair` and the health report:
    - the amdgpu display-stability kernel arguments
    - the MT7925 Bluetooth workarounds
    - "SteamOS updated, run Repair" detection
    - checking that SteamOS's carry-forward list is intact
    - "has upstream fixed it yet?" checks
-3. **Settle the frozen-tach question** from the fan trace, and tune or narrow the rule.
-4. **Game Mode polish** (§9):
+2. **Settle the frozen-tach question** from the fan trace, and tune or narrow the rule.
+3. **Game Mode polish** (§9):
    - make Steam's own TDP, charge-limit and profile controls work on the Z13, through a small
      steamos-manager service backed by z13ctl
    - a 48–180 Hz VRR display profile for gamescope
-5. **Lean on z13ctl 1.4** (§8):
+4. **Lean on z13ctl 1.4** (§8):
    - mirror profiles into z13ctl's named profiles, with AC/battery autoswitch
    - drop the parts of the watchdog the daemon now covers
    - use its event socket instead of polling
-6. **Display and lighting** (§5):
+5. **Display and lighting** (§5):
    - refresh rate and panel overdrive
    - lighting modes and colours
    - separate keyboard and rear-light zones
-7. **Backlog** (§10): a diagnostics panel, battery health, richer telemetry, tablet mode on folio
+6. **Backlog** (§10): a diagnostics panel, battery health, richer telemetry, tablet mode on folio
    detach, auto-rotation, sleep hygiene, CPU boost/EPP per profile, the GPU performance level, a
    boot-sound toggle, and a VRAM/GTT info page.
 
@@ -129,6 +127,12 @@ The window is laid out after G-Helper's: one main window plus a **Fans + Power**
   - saved crash reports (uncaught exceptions and hard crashes are caught, and the app keeps
     running)
   - the **fan trace** from both watchdogs
+  - a **Save logs to disk** checkbox. Logging is opt-in: `install.sh` asks once ("Do you want to
+    enable error logging to help with development of the app?") and records the answer in
+    `~/.config/z13-helper/install.json`. With it off, nothing is written to
+    `~/.local/state/z13-helper/`; the window still shows this run's log and errors, and warnings
+    still reach the journal. The Decky plugin follows the choice on its next start. Installs from
+    before the question keep logging. The logs never leave the machine either way.
 
 ### Decky plugin (Game Mode)
 

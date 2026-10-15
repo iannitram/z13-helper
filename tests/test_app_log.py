@@ -17,7 +17,9 @@ def logenv(tmp_path, monkeypatch):
     """app_log pointed at tmp_path; root logger, hooks and faulthandler restored after."""
     monkeypatch.setattr(app_log, "LOG_DIR", str(tmp_path / "state"))
     monkeypatch.setattr(app_log, "_state", {"app_version": "?", "ring": None, "fatal_file": None,
-                                            "crash_listeners": [], "previous_fatal": None})
+                                            "crash_listeners": [], "previous_fatal": None,
+                                            "to_disk": True, "file_handler": None,
+                                            "memory_reports": []})
     root = logging.getLogger()
     saved = (list(root.handlers), root.level, sys.excepthook, threading.excepthook)
     yield tmp_path / "state"
@@ -192,3 +194,38 @@ def test_install_check_flags_recent_crash_reports(logenv):
     r = ic.Report()
     ic.check_crash_reports(r, now=time.time() + 8 * 24 * 3600)
     assert r.rows[-1][0] == ic.GREEN and "1 older" in r.rows[-1][2]
+
+
+# ----------------------------------------------------------------------
+# logging opted out (ROADMAP 0c): nothing on disk, the Error log still works
+# ----------------------------------------------------------------------
+
+def test_logging_off_writes_nothing(logenv):
+    rh = app_log.setup("9.9.9", stderr=False, to_disk=False)
+    logging.getLogger("z13.test").error("kept in memory")
+    got = []
+    app_log.on_crash(lambda path, summary: got.append((path, summary)))
+    key = _raise_and_report()
+    app_log.shutdown()
+    assert not logenv.exists()                       # no app.log, crashes/, fatal.log
+    assert any("kept in memory" in t for t in rh.lines())
+    assert key.startswith(app_log.MEMORY_PREFIX) and got == [(key, "ValueError: boom in a slot")]
+    reports = app_log.list_crash_reports()
+    assert [(k, s) for k, _m, s in reports] == [(key, "ValueError: boom in a slot")]
+    assert "boom in a slot" in app_log.read_text(key)
+    assert app_log.clear_crash_reports() == 1 and app_log.list_crash_reports() == []
+
+
+def test_turning_logging_off_and_on_live(logenv):
+    app_log.setup(stderr=False)
+    logging.getLogger("x").warning("before")
+    app_log.set_to_disk(False)
+    assert not (logenv / "fatal.log").exists()
+    logging.getLogger("x").warning("while off")
+    assert _raise_and_report().startswith(app_log.MEMORY_PREFIX)
+    app_log.set_to_disk(True)
+    logging.getLogger("x").warning("after")
+    log = (logenv / "app.log").read_text()
+    assert "before" in log and "after" in log and "while off" not in log
+    assert (logenv / "fatal.log").exists()
+    assert os.path.dirname(_raise_and_report()) == str(logenv / "crashes")

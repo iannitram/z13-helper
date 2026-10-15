@@ -15,6 +15,12 @@ Flatpak has write access to exactly that folder):
     fatal.log                  faulthandler's target for the current run; empty
                                unless the process dies on a fatal signal
 
+All of that is opt-in (ROADMAP 0c): install.sh asks, Help -> Error log has
+a checkbox, and the choice lives in install.json (install_record.py). With
+logging off (setup(to_disk=False) or set_to_disk(False)) nothing is written
+here: crash reports stay in memory for the Error log window, faulthandler
+writes to stderr, and stderr/the journal still get warnings.
+
 What is caught: sys.excepthook (main thread; with it set, PyQt6 also routes
 exceptions raised in slots here instead of aborting), threading.excepthook
 (worker threads), faulthandler (fatal signals), and Qt's own warnings via
@@ -49,7 +55,9 @@ REPORT_TAIL_LINES = 200
 FORMAT = "%(asctime)s %(levelname)-7s [%(threadName)s] %(name)s: %(message)s"
 
 _state = {"app_version": "?", "ring": None, "fatal_file": None, "crash_listeners": [],
-          "previous_fatal": None}
+          "previous_fatal": None, "to_disk": True, "file_handler": None, "memory_reports": []}
+
+MEMORY_PREFIX = "(memory) "     # list_crash_reports() key of a report kept in memory only
 
 
 def log_path():
@@ -129,11 +137,17 @@ def on_crash(fn):
 # setup
 # ----------------------------------------------------------------------
 
-def setup(app_version="?", level=logging.INFO, stderr=True):
+def to_disk():
+    """True while logs and crash reports are written to LOG_DIR."""
+    return _state["to_disk"]
+
+
+def setup(app_version="?", level=logging.INFO, stderr=True, to_disk=True):
     """Install the handlers and hooks. Safe to call once per process; returns
     the RingHandler. Never raises: a read-only disk still gets the in-memory
-    log and the stderr copy."""
+    log and the stderr copy. to_disk=False (logging opted out) writes nothing."""
     _state["app_version"] = app_version
+    _state["to_disk"] = bool(to_disk)
     root = logging.getLogger()
     root.setLevel(level)
     fmt = logging.Formatter(FORMAT)
@@ -150,27 +164,13 @@ def setup(app_version="?", level=logging.INFO, stderr=True):
         sh.setFormatter(fmt)
         root.addHandler(sh)
 
-    disk_ok = True
-    try:
-        os.makedirs(crash_dir(), exist_ok=True)
-        fh = logging.handlers.RotatingFileHandler(log_path(), maxBytes=MAX_LOG_BYTES,
-                                                  backupCount=LOG_BACKUPS, encoding="utf-8")
-        fh.setFormatter(fmt)
-        root.addHandler(fh)
-    except OSError as e:
-        disk_ok = False
-        logging.getLogger(__name__).warning("log file unavailable (%s); logging to memory only", e)
-
-    previous = _recover_previous_fatal() if disk_ok else None
+    previous = None
+    if to_disk and _open_files():
+        previous = _recover_previous_fatal()
+        _open_fatal()
+    elif not to_disk:
+        _stderr_fatal()
     _state["previous_fatal"] = previous
-    if disk_ok:
-        try:
-            # Opened for the life of the process: faulthandler writes to the fd
-            # from a signal handler, so it can't open anything itself.
-            _state["fatal_file"] = open(fatal_path(), "w", encoding="utf-8")
-            faulthandler.enable(file=_state["fatal_file"], all_threads=True)
-        except OSError:
-            pass
 
     sys.excepthook = _excepthook
     threading.excepthook = _thread_excepthook
@@ -179,9 +179,66 @@ def setup(app_version="?", level=logging.INFO, stderr=True):
     log.info("Z13-Helper%s starting (pid %d, Python %s%s)",
              "" if app_version == "?" else f" {app_version}", os.getpid(),
              platform.python_version(), ", Flatpak" if os.environ.get("FLATPAK_ID") else "")
+    if not to_disk:
+        log.info("Logging to disk is off (Help -> Error log); keeping this run's log in memory")
     if previous:
         log.error("The previous run crashed hard (fatal signal); report saved: %s", previous)
     return rh
+
+
+def set_to_disk(enabled):
+    """Turn writing to LOG_DIR on or off for the rest of this run (the Error
+    log checkbox). Files already on disk are left alone."""
+    enabled = bool(enabled)
+    if enabled == _state["to_disk"]:
+        return
+    _state["to_disk"] = enabled
+    if enabled:
+        if _open_files():
+            _open_fatal()
+        logging.getLogger("z13").info("Logging to disk turned on: %s", log_path())
+    else:
+        logging.getLogger("z13").info("Logging to disk turned off; the log stays in memory")
+        fh = _state["file_handler"]
+        if fh is not None:
+            logging.getLogger().removeHandler(fh)
+            fh.close()
+            _state["file_handler"] = None
+        shutdown()
+        _stderr_fatal()
+
+
+def _open_files():
+    """Add the rotating app.log handler; False if the disk isn't writable."""
+    try:
+        os.makedirs(crash_dir(), exist_ok=True)
+        fh = logging.handlers.RotatingFileHandler(log_path(), maxBytes=MAX_LOG_BYTES,
+                                                  backupCount=LOG_BACKUPS, encoding="utf-8")
+    except OSError as e:
+        logging.getLogger(__name__).warning("log file unavailable (%s); logging to memory only", e)
+        return False
+    fh.setFormatter(logging.Formatter(FORMAT))
+    logging.getLogger().addHandler(fh)
+    _state["file_handler"] = fh
+    return True
+
+
+def _open_fatal():
+    try:
+        # Opened for the life of the process: faulthandler writes to the fd
+        # from a signal handler, so it can't open anything itself.
+        _state["fatal_file"] = open(fatal_path(), "w", encoding="utf-8")
+        faulthandler.enable(file=_state["fatal_file"], all_threads=True)
+    except OSError:
+        pass
+
+
+def _stderr_fatal():
+    """Logging off: a hard crash's traceback still reaches the journal."""
+    try:
+        faulthandler.enable(file=sys.__stderr__, all_threads=True)
+    except (AttributeError, ValueError, OSError):   # no usable stderr
+        pass
 
 
 def shutdown():
@@ -257,8 +314,11 @@ def report_exception(exc_type, exc, tb, where="?"):
 
 
 def write_crash_report(exc_type, exc, tb, where="?"):
+    """Write the report to crashes/ and return its path; with logging off, keep
+    it in memory under a MEMORY_PREFIX key instead (None if it couldn't be kept)."""
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    path = os.path.join(crash_dir(), f"crash-{stamp}-{os.getpid()}-{threading.get_ident() % 10000}.txt")
+    name = f"crash-{stamp}-{os.getpid()}-{threading.get_ident() % 10000}.txt"
+    path = os.path.join(crash_dir(), name)
     tail = (ring().lines()[-REPORT_TAIL_LINES:] if ring() else [])
     text = (f"Z13-Helper crash report\n"
             f"Time:   {time.strftime('%Y-%m-%d %H:%M:%S %z')}\n"
@@ -267,6 +327,12 @@ def write_crash_report(exc_type, exc, tb, where="?"):
             f"--- traceback ---\n"
             f"{''.join(traceback.format_exception(exc_type, exc, tb))}\n"
             f"--- last {len(tail)} log lines ---\n" + "\n".join(tail) + "\n")
+    if not _state["to_disk"]:
+        key = MEMORY_PREFIX + name
+        mem = _state["memory_reports"]
+        mem.insert(0, (key, time.time(), text))
+        del mem[MAX_CRASH_REPORTS:]
+        return key
     if not _write_atomic(path, text):
         return None
     _prune_crashes()
@@ -315,11 +381,13 @@ def _prune_crashes():
 # ----------------------------------------------------------------------
 
 def list_crash_reports():
-    """[(path, mtime, one-line summary)], newest first."""
-    out = []
+    """[(path, mtime, one-line summary)], newest first. Reports kept in memory
+    (logging off) are listed too, keyed MEMORY_PREFIX + name."""
+    out = [(k, m, _summary_of(k, t.splitlines())) for k, m, t in _state["memory_reports"]]
     try:
         names = os.listdir(crash_dir())
     except OSError:
+        out.sort(key=lambda r: r[1], reverse=True)
         return out
     for n in names:
         if not n.endswith(".txt") or not n.startswith(("crash-", "fatal-")):
@@ -340,6 +408,10 @@ def _summary(path):
             lines = f.read().splitlines()
     except OSError:
         return "?"
+    return _summary_of(path, lines)
+
+
+def _summary_of(path, lines):
     if os.path.basename(path).startswith("fatal-"):
         for ln in lines:
             if ln.startswith("Fatal Python error"):
@@ -359,7 +431,10 @@ def _summary(path):
 
 
 def read_text(path, max_bytes=512 * 1024):
-    """A file's text (the tail, if it's large)."""
+    """A file's text (the tail, if it's large), or a report kept in memory."""
+    for key, _m, text in _state["memory_reports"]:
+        if key == path:
+            return text
     try:
         with open(path, "rb") as f:
             f.seek(0, os.SEEK_END)
@@ -373,7 +448,8 @@ def read_text(path, max_bytes=512 * 1024):
 
 
 def clear_crash_reports():
-    n = 0
+    n = len(_state["memory_reports"])
+    _state["memory_reports"].clear()
     for p, _m, _s in list_crash_reports():
         try:
             os.remove(p)

@@ -5,11 +5,18 @@ real (non-dry) run: date, mode (install/repair), verify green/red, versions,
 the checkout it ran from (`repo_path`) and its log. The Updates dialog shows
 the last run and offers "Repair install" = `<repo_path>/install.sh --repair`
 on the host. Stdlib only, no Qt, so it is testable anywhere.
+
+It also holds the logging choice (`"logging": true|false`): a full install
+asks "enable error logging?", Help -> Error log has a checkbox for it, and
+the Decky plugin reads it on start (decky/main.py mirrors logging_enabled()).
+Off = no app.log, fan traces or crash files on disk. A missing key means on,
+so installs from before the question keep logging.
 """
 
 import json
 import os
 import re
+import tempfile
 import time
 
 INSTALL_JSON = os.path.expanduser("~/.config/z13-helper/install.json")
@@ -24,6 +31,31 @@ def load(path=None):
         return rec if isinstance(rec, dict) else None
     except (OSError, ValueError):
         return None
+
+
+def logging_enabled(path=None):
+    """The user's logging choice; True unless install.json says "logging": false."""
+    return (load(path) or {}).get("logging") is not False
+
+
+def set_logging(enabled, path=None):
+    """Record the logging choice, keeping every other key. Raises OSError."""
+    path = path or INSTALL_JSON
+    rec = load(path) or {}
+    rec["logging"] = bool(enabled)
+    d = os.path.dirname(path)
+    os.makedirs(d, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".install.json.", dir=d)
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(rec, f, indent=2)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def repo_path(rec):

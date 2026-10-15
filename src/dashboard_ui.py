@@ -29,6 +29,7 @@ from hardware_controller import HardwareController, _in_flatpak
 from sensor_reader import SensorReader
 from config_manager import ConfigManager
 import app_log
+import install_record
 import max_fans_state
 import profiles
 import update_watch
@@ -109,15 +110,11 @@ class DashboardUI(QMainWindow):
         # Not while an apply is queued or running: a profile write in progress drops
         # the curve for a moment, and the watchdog would race the worker with its
         # own profile + curve writes.
-        try:
-            trace = FanTrace.to_file(app_log.fan_trace_path("desktop"), sensors, "desktop")
-        except OSError as e:
-            logging.getLogger("z13.fans").warning("No fan trace: %s", e)
-            trace = None
+        self._sensors = sensors
         self._fan_watchdog = FanWatchdog(sensors, controller,
                                          max_fans_on=max_fans_state.is_enabled,
                                          may_act=lambda: not self.control._pending,
-                                         trace=trace)
+                                         trace=self._make_fan_trace())
         self._fans_window = None
         self._updates_dialog = None
         self._update_thread = None
@@ -671,13 +668,41 @@ class DashboardUI(QMainWindow):
     def _open_error_log(self, show_crashes=False):
         from log_dialog import LogDialog
         if self._log_dialog is None:
-            self._log_dialog = LogDialog(self)
+            self._log_dialog = LogDialog(self, on_logging=self.set_logging)
         self._log_dialog.refresh(show_crashes=show_crashes)
         self._log_dialog.show()
         self._log_dialog.raise_()
         self._log_dialog.activateWindow()
         self._errors_unseen = 0
         self.error_badge.hide()
+
+    def _make_fan_trace(self):
+        """The desktop watchdog's trace file, or None when logging is off."""
+        if not app_log.to_disk():
+            return None
+        try:
+            return FanTrace.to_file(app_log.fan_trace_path("desktop"), self._sensors, "desktop")
+        except OSError as e:
+            logging.getLogger("z13.fans").warning("No fan trace: %s", e)
+            return None
+
+    def set_logging(self, enabled):
+        """The Error log's checkbox: record the choice in install.json (the Decky
+        plugin reads it on its next start) and apply it to this run. Returns an
+        error message, or None."""
+        try:
+            install_record.set_logging(enabled)
+        except OSError as e:
+            logging.getLogger("z13").warning("Could not save the logging choice: %s", e)
+            return f"Could not save the choice: {e}"
+        app_log.set_to_disk(enabled)
+        old, self._fan_watchdog.trace = self._fan_watchdog.trace, None
+        if old is not None:     # close it first: a new trace reuses the same logger
+            for h in list(old.log.handlers):
+                old.log.removeHandler(h)
+                h.close()
+        self._fan_watchdog.trace = self._make_fan_trace()
+        return None
 
     def _bump_error_badge(self, n=1):
         if self._log_dialog is not None and self._log_dialog.isVisible():

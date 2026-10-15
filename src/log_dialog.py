@@ -8,7 +8,7 @@ import time
 from PyQt6.QtCore import Qt, QUrl, pyqtSignal
 from PyQt6.QtGui import QDesktopServices, QFont, QGuiApplication
 from PyQt6.QtWidgets import (
-    QComboBox, QDialog, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMessageBox,
+    QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMessageBox,
     QPlainTextEdit, QPushButton, QSplitter, QTabWidget, QVBoxLayout, QWidget,
 )
 
@@ -29,8 +29,11 @@ class LogDialog(QDialog):
     # A record from any thread, handed to the GUI thread (queued connection).
     _record = pyqtSignal(int, str)
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, on_logging=None):
+        """on_logging(enabled) -> error message or None: saves and applies the
+        logging choice (DashboardUI.set_logging); without it the box is hidden."""
         super().__init__(parent)
+        self._on_logging = on_logging
         self.setWindowTitle("Error log — Z13-Helper")
         self.resize(820, 560)
         v = QVBoxLayout(self)
@@ -39,6 +42,17 @@ class LogDialog(QDialog):
         self.info.setObjectName("dim")
         self.info.setWordWrap(True)
         v.addWidget(self.info)
+
+        self.logging_box = QCheckBox(
+            "Save logs to disk (app log, crash reports, fan traces) to help with development")
+        self.logging_box.setToolTip(
+            f"Writes to {app_log.LOG_DIR}. Off: nothing is written there; this window still "
+            "shows this run's log and errors. Stored in ~/.config/z13-helper/install.json; "
+            "the Game Mode plugin picks it up on its next start.")
+        self.logging_box.setChecked(app_log.to_disk())
+        self.logging_box.toggled.connect(self._toggle_logging)
+        self.logging_box.setVisible(on_logging is not None)
+        v.addWidget(self.logging_box)
 
         self.tabs = QTabWidget()
         v.addWidget(self.tabs, 1)
@@ -149,9 +163,19 @@ class LogDialog(QDialog):
         self._scroll_to_end()
         counts = r.counts if r else {}
         errs = counts.get("ERROR", 0) + counts.get("CRITICAL", 0)
+        where = (f"Full log on disk: {app_log.log_path()}" if app_log.to_disk()
+                 else "Logging to disk is off: this run's log is kept in memory only.")
         self.info.setText(
-            f"This run: {errs} error(s), {counts.get('WARNING', 0)} warning(s). "
-            f"Full log on disk: {app_log.log_path()}")
+            f"This run: {errs} error(s), {counts.get('WARNING', 0)} warning(s). {where}")
+
+    def _toggle_logging(self, enabled):
+        err = self._on_logging(enabled) if self._on_logging else None
+        if err:
+            self.logging_box.blockSignals(True)
+            self.logging_box.setChecked(not enabled)
+            self.logging_box.blockSignals(False)
+            QMessageBox.warning(self, "Logging", err)
+        self._fill_log()
 
     def _append(self, levelno, text):
         if levelno < self._min_level():
@@ -178,8 +202,11 @@ class LogDialog(QDialog):
         self.tabs.setTabText(1, f"Crash reports ({len(reports)})")
         self.btn_clear.setEnabled(bool(reports))
         if not reports:
-            self.crash_view.setPlainText("No crash reports. Uncaught errors and hard crashes "
-                                         "are saved here automatically.")
+            self.crash_view.setPlainText(
+                "No crash reports. Uncaught errors and hard crashes are saved here automatically."
+                if app_log.to_disk() else
+                "No crash reports. With logging off, uncaught errors are kept here until the "
+                "app quits; hard crashes go to the journal only.")
 
     def _show_crash(self, item, _prev=None):
         if item is None:

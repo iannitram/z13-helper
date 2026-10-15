@@ -5,6 +5,7 @@ Nothing here touches hardware, the network, sudo, or the real ~/.config:
   exactly as main.py and the host scripts import them.
 - An autouse guard makes subprocess.run / Popen and urllib's urlopen raise, so a
   test that forgets to inject a fake fails loudly instead of running z13ctl.
+- install_record.INSTALL_JSON (the logging choice) points into tmp_path.
 - `profiles_env` redirects every path profiles.py and max_fans_state.py write
   into tmp_path.
 """
@@ -53,6 +54,14 @@ def real_subprocess(monkeypatch):
     monkeypatch.setattr(subprocess, "run", _REAL_RUN)
     monkeypatch.setattr(subprocess, "Popen", _REAL_POPEN)
     return _REAL_RUN
+
+
+@pytest.fixture(autouse=True)
+def no_real_install_json(tmp_path, monkeypatch):
+    """install_record's default path (the logging choice, the last install) goes
+    to tmp_path, never the real ~/.config/z13-helper/install.json."""
+    import install_record
+    monkeypatch.setattr(install_record, "INSTALL_JSON", str(tmp_path / "install.json"))
 
 
 @pytest.fixture(autouse=True)
