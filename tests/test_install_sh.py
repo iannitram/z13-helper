@@ -43,8 +43,54 @@ def snapshot(root, skip=()):
     return out
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="install.sh refuses to run as root")
-@pytest.mark.skipif(shutil.which("bash") is None or shutil.which("tee") is None, reason="needs bash")
+needs_bash = (
+    pytest.mark.skipif(os.geteuid() == 0, reason="install.sh refuses to run as root"),
+    pytest.mark.skipif(shutil.which("bash") is None or shutil.which("tee") is None, reason="needs bash"),
+)
+LOGGING_Q = "Do you want to enable error logging to help with development of the app?"
+
+
+def dry_run(tmp_path, run, *args, install_json=None):
+    """install.sh --dry-run ARGS against a fake HOME with PATH stubs -> output."""
+    home = tmp_path / "home"
+    (home / ".local" / "bin").mkdir(parents=True)
+    if install_json is not None:
+        (home / ".config" / "z13-helper").mkdir(parents=True)
+        (home / ".config" / "z13-helper" / "install.json").write_text(install_json)
+    stubs = tmp_path / "stubs"
+    stubs.mkdir()
+    for name, body in STUBS.items():
+        (stubs / name).write_text(body)
+        (stubs / name).chmod(0o755)
+    env = {"HOME": str(home), "PATH": f"{stubs}:/usr/bin:/bin", "STUB_LOG": str(tmp_path / "stub.log"),
+           "LANG": "C.UTF-8", "https_proxy": "http://127.0.0.1:9", "HTTPS_PROXY": "http://127.0.0.1:9",
+           "no_proxy": ""}
+    p = run(["bash", str(SCRIPT), "--dry-run", *args], env=env, stdin=open(os.devnull),
+            capture_output=True, text=True, timeout=240)
+    assert p.returncode in (0, 1), p.stdout + p.stderr
+    return p.stdout + p.stderr
+
+
+@needs_bash[0]
+@needs_bash[1]
+@pytest.mark.parametrize("args, recorded, shown", [
+    ((), None, f"(dry run) would ask: {LOGGING_Q} [Y/n]"),          # full install, never asked
+    ((), '{"logging": false}', "error logging: off (recorded"),    # already answered: not asked
+    ((), '{"mode": "repair"}', f"would ask: {LOGGING_Q}"),         # older record, no key yet
+    (("--repair",), None, None),                                   # repair keeps the choice
+])
+def test_dry_run_logging_question(tmp_path, real_subprocess, args, recorded, shown):
+    out = dry_run(tmp_path, real_subprocess, *args, install_json=recorded)
+    if shown is None:
+        assert "Error logging" not in out and LOGGING_Q not in out
+    else:
+        assert shown in out
+        if "recorded" in shown:
+            assert LOGGING_Q not in out
+
+
+@needs_bash[0]
+@needs_bash[1]
 def test_dry_run_repair_writes_nothing(tmp_path, real_subprocess):
     home = tmp_path / "home"
     (home / ".local" / "bin").mkdir(parents=True)

@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 # Z13-Helper — one-shot installer / repair (ROADMAP §9a).
 #
-#   ./install.sh            full install: asks "install dependencies?" (latest z13ctl,
-#                           latest Decky Loader), then everything below
+#   ./install.sh            full install: asks "enable error logging?" (once; the app's
+#                           Help -> Error log changes it later) and "install
+#                           dependencies?" (latest z13ctl, latest Decky Loader),
+#                           then everything below
 #   ./install.sh --repair   after a SteamOS update: no prompts, puts back only what
-#                           differs, keeps the installed z13ctl version
+#                           differs, keeps the installed z13ctl version and the
+#                           recorded logging choice
 #   ./install.sh --dry-run  show what would change, write nothing (combine with either)
-#   ./install.sh --yes      full install without prompts
+#   ./install.sh --yes      full install without prompts (logging: yes)
 #   ./install.sh --rebuild  rebuild the Flatpak even if it matches the repo
 #
 # Order (each step independent; a failure is reported, the rest still runs):
@@ -40,7 +43,7 @@ for a in "$@"; do
         --dry-run) DRY=1 ;;
         --yes|-y) YES=1 ;;
         --rebuild) REBUILD=1 ;;
-        -h|--help) sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown option: $a (try --help)" >&2; exit 2 ;;
     esac
 done
@@ -86,6 +89,8 @@ export Z13_INSTALL_DRY_RUN=$DRY
 
 FAILED=() CHANGED=()
 APP_REBUILT=0 PLUGIN_CHANGED=0 NET=1 DESKTOP=0
+LOGGING=""      # true/false to record in install.json; empty = keep what's there
+INSTALL_JSON="$HOME/.config/z13-helper/install.json"
 
 say()  { printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
 info() { printf '  %s\n' "$*"; }
@@ -207,6 +212,36 @@ preflight() {
     else
         fail "sudo is not available; z13ctl setup, the Decky steps and /etc are skipped"
         return 1
+    fi
+}
+
+# ----------------------------------------------------------------------
+# logging opt-in (ROADMAP 0c): asked once, on a full install; recorded by record()
+# as install.json "logging" (missing = on). The app and the Decky plugin read it.
+# ----------------------------------------------------------------------
+LOGGING_Q="Do you want to enable error logging to help with development of the app?"
+logging_choice() {
+    [[ $MODE == install ]] || return 0
+    say "Error logging"
+    local recorded
+    recorded=$($PY -c 'import json, sys
+try:
+    v = json.load(open(sys.argv[1])).get("logging")
+except Exception:
+    v = None
+print({True: "on", False: "off"}.get(v, ""))' "$INSTALL_JSON" 2>/dev/null)
+    if [[ -n $recorded ]]; then
+        info "error logging: $recorded (recorded; change it in the app: Help -> Error log)"
+        return 0
+    fi
+    if ((DRY)); then
+        info "(dry run) would ask: $LOGGING_Q [Y/n]"
+    elif ask "$LOGGING_Q"; then
+        LOGGING=true
+        info "error logging: on (saved under ~/.local/state/z13-helper; Help -> Error log turns it off)"
+    else
+        LOGGING=false
+        info "error logging: off (Help -> Error log turns it on)"
     fi
 }
 
@@ -461,9 +496,9 @@ verify() {
 
 record() {
     ((DRY)) && return 0
-    $PY - "$MODE" "$1" "$REPO" "$LOG" <<'EOF' || warn "could not write ~/.config/z13-helper/install.json"
+    $PY - "$MODE" "$1" "$REPO" "$LOG" "$LOGGING" <<'EOF' || warn "could not write ~/.config/z13-helper/install.json"
 import json, os, re, subprocess, sys, time
-mode, verify_rc, repo, log = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
+mode, verify_rc, repo, log, logging = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4], sys.argv[5]
 def out(*a):
     try:
         return subprocess.run(a, capture_output=True, text=True, timeout=20).stdout.strip()
@@ -496,6 +531,8 @@ rec.update({                      # keys this run doesn't know about are kept
     "repo_path": repo,            # the app's "Repair install" button runs <repo_path>/install.sh
     "log": log,
 })
+if logging:                       # asked this run; otherwise the recorded choice stays
+    rec["logging"] = logging == "true"
 os.makedirs(os.path.dirname(path), exist_ok=True)
 with open(path + ".tmp", "w") as f:
     json.dump(rec, f, indent=2)
@@ -506,6 +543,7 @@ EOF
 # ----------------------------------------------------------------------
 main() {
     rename_migration
+    logging_choice
     if preflight; then
         dependencies
         decky_plugin

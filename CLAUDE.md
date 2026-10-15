@@ -99,6 +99,9 @@ Mode (not after a deliberate Quit). Note the Decky backend runs as **deck**, not
 - **Logs and crashes:** the app logs to `~/.local/state/z13-helper/app.log`; uncaught exceptions
   and hard crashes land in `.../crashes/` (`src/app_log.py`; in-app: Help → Error log, Ctrl+L).
   Start there when Ian reports misbehaviour, together with `journalctl --user -u z13ctl`.
+  Logging is **opt-in**: `"logging": false` in `~/.config/z13-helper/install.json` (asked by
+  `install.sh`, toggled in Help → Error log; missing = on) means no files there at all, only the
+  in-memory Error log and the journal (`src/install_record.py`, mirrored in `decky/main.py`).
 - **Rebuild/install the Flatpak:** `bash flatpak/build.sh` (uses `org.flatpak.Builder` +
   `org.kde.Platform//6.10`; pulls PyQt6 from PyPI, needs network). Then restart the app.
 - **Run for debugging without a rebuild:** the sandbox has PyQt6 under `/app`, so you can run the

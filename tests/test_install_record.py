@@ -64,3 +64,42 @@ def test_record_keys_written_by_install_sh_are_read(tmp_path):
                              "verify": "green", "repo_path": "/x", "custom": 1}))
     rec = ir.load(str(p))
     assert ir.repo_path(rec) == "/x" and rec["custom"] == 1
+
+
+# ----------------------------------------------------------------------
+# the logging choice (ROADMAP 0c)
+# ----------------------------------------------------------------------
+
+def test_logging_choice_on_off_missing(tmp_path):
+    p = tmp_path / "install.json"
+    assert ir.logging_enabled(str(p)) is True                     # no record: on
+    p.write_text(json.dumps({"mode": "repair"}))
+    assert ir.logging_enabled(str(p)) is True                     # record without the key: on
+    p.write_text(json.dumps({"logging": True}))
+    assert ir.logging_enabled(str(p)) is True
+    p.write_text(json.dumps({"logging": False}))
+    assert ir.logging_enabled(str(p)) is False
+    p.write_text("{broken")
+    assert ir.logging_enabled(str(p)) is True
+
+
+def test_set_logging_keeps_other_keys(tmp_path):
+    p = tmp_path / "cfg" / "install.json"
+    ir.set_logging(False, str(p))                                 # creates the folder + file
+    assert json.loads(p.read_text()) == {"logging": False}
+    p.write_text(json.dumps({"mode": "install", "repo_path": "/x", "logging": False}))
+    ir.set_logging(True, str(p))
+    assert json.loads(p.read_text()) == {"mode": "install", "repo_path": "/x", "logging": True}
+    assert [f.name for f in p.parent.iterdir()] == ["install.json"]   # no temp files left
+
+
+def test_default_path_is_redirected_by_conftest(tmp_path):
+    assert ir.INSTALL_JSON.startswith(str(tmp_path))
+    ir.set_logging(False)
+    assert ir.logging_enabled() is False
+
+
+def test_install_sh_records_the_logging_key():
+    from pathlib import Path
+    sh = (Path(__file__).resolve().parent.parent / "install.sh").read_text()
+    assert 'rec["logging"] = logging == "true"' in sh
