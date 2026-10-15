@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.iannitram.Z13Helper</id>
+  <name>Z13-Helper</name>
+  <summary>Hardware control GUI for the ASUS ROG Flow Z13 (2025)</summary>
+
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+
+  <description>
+    <p>
+      Z13-Helper is a system-tray GUI for the 2025 ASUS ROG Flow Z13
+      running SteamOS or other Linux distributions. It exposes the hardware
+      controls that are otherwise only reachable through the z13ctl CLI.
+    </p>
+    <p>Features:</p>
+    <ul>
+      <li>Profiles (Silent / Balanced / Turbo / Boondock + your own): platform profile, power limits, fan curve, undervolt, lighting, battery limit and enter/exit hooks in one pick</li>
+      <li>Max Fans (both fans at 100%), per profile, with a fan watchdog</li>
+      <li>Battery charge limit (40–100%)</li>
+      <li>Keyboard and rear-lightbar brightness, per device, with automatic recovery of a wedged lightbar</li>
+      <li>Live APU temp, GPU temp, and dual-fan RPM telemetry</li>
+      <li>SPL / sPPT / fPPT power limits and a draggable 8-point fan curve (Fans + Power window)</li>
+      <li>CPU undervolt / Curve Optimizer offset (when ryzen_smu is loaded)</li>
+      <li>Armoury Crate side button opens the window (host evdev reader)</li>
+      <li>Updates panel: upstream watch, z13ctl / Decky Loader / SteamOS installers, Repair install</li>
+      <li>Desktop Mode app; Game Mode is covered by the companion Decky plugin</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">io.github.iannitram.Z13Helper.desktop</launchable>
+
+  <categories>
+    <category>System</category>
+    <category>Settings</category>
+    <category>HardwareSettings</category>
+  </categories>
+
+  <keywords>
+    <keyword>z13</keyword>
+    <keyword>asus</keyword>
+    <keyword>rog</keyword>
+    <keyword>flow</keyword>
+    <keyword>tdp</keyword>
+    <keyword>battery</keyword>
+    <keyword>profile</keyword>
+  </keywords>
+
+  <content_rating type="oars-1.1" />
+
+  <releases>
+    <release version="0.5.0" date="2026-10-15">
+      <description>
+        <p>Renamed to Z13-Helper. The app is running after every switch to Desktop Mode. One fan watchdog shared with the Decky plugin, plus a fan trace for troubleshooting. Screen brightness slider.</p>
+      </description>
+    </release>
+    <release version="0.4.1" date="2026-10-12">
+      <description>
+        <p>Crash and error log: app log, crash reports for uncaught errors and hard crashes, and a Help → Error log window with an error badge. The wedged-lightbar recovery now also restarts the z13ctl daemon.</p>
+      </description>
+    </release>
+    <release version="0.4.0" date="2026-10-12">
+      <description>
+        <p>G-Helper-style redesign, profiles engine, installer.</p>
+        <ul>
+          <li>Main window and Fans + Power window laid out after G-Helper; draggable fan curve, SPL/sPPT/fPPT sliders</li>
+          <li>Profiles engine (also the host z13-profile CLI): Boondock is now a profile; per-profile Max Fans (Turbo ships with it on)</li>
+          <li>Fan watchdog: recovers dropped curves, 0-RPM stalls and a frozen tach with a platform-profile rewrite plus the curve</li>
+          <li>Updates panel with installers for z13ctl, Decky Loader and SteamOS, and a Repair install button</li>
+          <li>One-shot install.sh / --repair with a verify report</li>
+          <li>Decky plugin parity: profiles, TDP, charge limit, per-device brightness, telemetry</li>
+          <li>Wedged rear lightbar recovered automatically (USB reset through a root oneshot + polkit rule)</li>
+          <li>Single instance; side button read directly from evdev on the host; z13ctl 1.4.2 with its daemon</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.1.0" date="2026-05-03">
+      <description>
+        <p>Initial Flatpak release — Dashboard tab (profile, battery, brightness, telemetry), Advanced tab (TDP, fan curve, undervolt), system tray, side-button toggle.</p>
+      </description>
+    </release>
+  </releases>
+
+  <url type="homepage">https://github.com/iannitram/z13-helper</url>
+</component>

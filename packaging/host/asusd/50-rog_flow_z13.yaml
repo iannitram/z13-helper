@@ -1,0 +1,52 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/ShadowBlip/InputPlumber/main/rootfs/usr/share/inputplumber/schema/composite_device_v1.json
+# Schema version number
+version: 1
+
+# The type of configuration schema
+kind: CompositeDevice
+
+# Name of the composite device mapping
+name: ASUS ROG Flow Z13 (2025) — DISABLED override (prevents CompositeDevice creation)
+
+# This profile REPLACES /usr/share/inputplumber/devices/50-rog_flow_z13.yaml by
+# filename match. By giving it DMI matchers that no system on Earth will match,
+# InputPlumber finds no profile to apply to the Z13 hardware, and never creates
+# a CompositeDevice for it. With no CompositeDevice, steamos-manager has no DBus
+# object to call SetTargetDevices on, so the phantom "Valve Steam Deck Controller"
+# (deck-uhid) target it would have added is never instantiated.
+#
+# Why this is necessary (vs the previous override with valid matchers and just
+# touchpad/keyboard targets): even with target_devices = [touchpad, keyboard]
+# in the YAML, steamos-manager would call `SetTargetDevices(["deck-uhid"])` over
+# DBus at runtime, overriding the YAML. The only way to stop the phantom at
+# its source is to prevent the CompositeDevice from existing.
+#
+# Real Xbox/PS5 controllers continue to work through native HID drivers + Steam
+# Input wrapping (no InputPlumber layer needed on a Z13, which has no built-in
+# handheld controls to aggregate). Volume keys and the Armoury Crate button on
+# the keyboard cover continue to work through direct evdev (Asus WMI hotkeys).
+#
+# Bug doc: inputplumber-z13-phantom-xbox-elite-controller-2026-05-06
+# To revert (re-enable upstream Z13 profile): sudo rm /etc/inputplumber/devices.d/50-rog_flow_z13.yaml
+#                                              sudo systemctl restart inputplumber
+
+single_source: false
+
+# Intentionally non-matching DMI conditions. No real hardware reports these.
+matches:
+  - dmi_data:
+      board_name: __Z13HELPER_INPUTPLUMBER_DISABLED__
+      sys_vendor: __Z13HELPER_INPUTPLUMBER_DISABLED__
+
+# Schema requires a non-empty source_devices block. We point at a device name
+# that no kernel evdev device will ever have, so this is dead config.
+source_devices:
+  - group: keyboard
+    evdev:
+      name: __Z13HELPER_NEVER_MATCH_DEVICE_NAME__
+      handler: event*
+
+target_devices: []
+
+options:
+  auto_manage: false

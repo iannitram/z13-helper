@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Z13-Helper icon — stylized Z in ROG green on a dark rounded tile -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"  stop-color="#1c1f23"/>
+      <stop offset="100%" stop-color="#0c0e10"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%"  stop-color="#9bd400"/>
+      <stop offset="100%" stop-color="#5a9a00"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="64" height="64" rx="12" ry="12" fill="url(#bg)"/>
+  <!-- Stylized Z: top bar, diagonal, bottom bar -->
+  <path d="M14 16 H50 L50 22 L26 42 H50 V48 H14 L14 42 L38 22 H14 Z"
+        fill="url(#accent)"/>
+  <!-- subtle "13" -->
+  <text x="49" y="60" text-anchor="end"
+        font-family="DejaVu Sans, Arial, sans-serif"
+        font-size="9" font-weight="700" fill="#9bd400" opacity="0.85">13</text>
+</svg>

@@ -1,0 +1,11 @@
+{
+  "name": "Z13-Helper",
+  "author": "Ian Martin",
+  "flags": ["debug", "_root"],
+  "api_version": 1,
+  "publish": {
+    "tags": ["power", "fan", "tdp", "asus", "rog-flow-z13"],
+    "description": "Control the ASUS ROG Flow Z13 (profiles, TDP, fan curve incl. Max Fans, battery limit, keyboard backlight, boondock) from the Quick Access Menu. Thin frontend over the z13ctl CLI.",
+    "image": "https://opengraph.githubassets.com/1/SteamDeckHomebrew/PluginLoader"
+  }
+}

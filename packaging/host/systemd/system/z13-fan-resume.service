@@ -1,0 +1,11 @@
+[Unit]
+Description=Re-apply protective fan curve after resume (Z13 GZ302EA — prevents fans-off heat-soak on wake)
+Documentation=https://github.com/iannitram/z13-helper/blob/main/docs/ROADMAP.md
+After=suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target
+
+[Service]
+Type=oneshot
+ExecStart=/etc/systemd/system/z13-fan-resume.sh
+
+[Install]
+WantedBy=suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target

@@ -1,0 +1,17 @@
+[Unit]
+Description=Z13: re-apply saved profile (battery, fans, brightness) on user-session start
+# Runs in BOTH desktop mode AND game mode because user-systemd default.target is
+# reached in both. Replaces the now-redundant z13-battery-default.service whose
+# job is subsumed here (every profile script also re-applies the 80% battery limit).
+After=default.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/z13-restore-profile
+RemainAfterExit=yes
+# If the service fails (e.g. z13ctl can't reach the device for some reason),
+# don't loop — just leave a journal entry. User can run z13-balanced manually.
+Restart=no
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Z13-Helper
+GenericName=Hardware Controller
+Comment=Profile, battery, brightness, TDP and side-button control for the ASUS ROG Flow Z13
+Exec=z13-helper-flatpak --show
+Icon=io.github.iannitram.Z13Helper
+Terminal=false
+Categories=System;Settings;HardwareSettings;
+Keywords=z13;asus;rog;flow;tdp;battery;profile;
+StartupNotify=true
+StartupWMClass=io.github.iannitram.Z13Helper

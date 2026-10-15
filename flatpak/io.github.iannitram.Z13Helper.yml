@@ -1,0 +1,98 @@
+# Flatpak manifest for Z13-Helper
+#
+# Build:
+#   flatpak install --user flathub org.flatpak.Builder org.kde.Sdk//6.10
+#   cd ~/dev/z13-helper
+#   flatpak run org.flatpak.Builder --user --install --force-clean \
+#       build-flatpak flatpak/io.github.iannitram.Z13Helper.yml
+#
+# Run:
+#   flatpak run io.github.iannitram.Z13Helper            # tray-only
+#   flatpak run io.github.iannitram.Z13Helper --show     # window visible
+#
+# This is a *personal/local* manifest, not Flathub-quality. The app ID follows
+# Flathub's io.github.<user>.<App> convention for github.com/iannitram/z13-helper
+# (renamed from io.github.z13.Controller on 2026-10-15; install.sh migrates).
+
+app-id: io.github.iannitram.Z13Helper
+runtime: org.kde.Platform
+runtime-version: '6.10'
+sdk: org.kde.Sdk
+command: z13-helper-flatpak
+
+finish-args:
+  # GUI
+  - --share=ipc
+  - --socket=fallback-x11
+  - --socket=wayland
+  - --device=dri
+  # Notifications + tray
+  - --talk-name=org.freedesktop.Notifications
+  - --talk-name=org.kde.StatusNotifierWatcher
+  # Screen brightness via PowerDevil (src/screen_brightness.py)
+  - --talk-name=org.kde.ScreenBrightness
+  # InputPlumber side-button D-Bus (system bus, filtered)
+  - --system-talk-name=org.shadowblip.InputPlumber
+  # Read sensors directly from sysfs
+  - --filesystem=/sys:ro
+  # Read/write our config
+  - --filesystem=xdg-config/z13-helper:create
+  # App log + crash reports (src/app_log.py), next to install.sh's logs
+  - --filesystem=~/.local/state/z13-helper:create
+  # flatpak-spawn --host: lets us invoke the host's z13ctl
+  - --talk-name=org.freedesktop.Flatpak
+  # Allow accessing the host's z13ctl path
+  - --filesystem=~/.local/bin:ro
+
+modules:
+  # PyQt6 wheel — pulled at build time from PyPI. We trust the runtime's
+  # python3.12 (org.kde.Platform//6.10 ships Python 3.12 alongside Qt 6.x).
+  # The PyQt6 wheel bundles its own Qt; this duplicates ~50 MB but is the
+  # simplest reproducible install. If we cared about Flathub submission we
+  # would build from source against the runtime's Qt.
+  - name: python-pyqt6
+    buildsystem: simple
+    # Flatpak builds run without network by default. We need it here so pip
+    # can resolve PyQt6 from PyPI. For Flathub-quality builds you would replace
+    # this with a `sources: [{type: file, url: ..., sha256: ...}]` block per
+    # wheel and drop --share=network.
+    build-options:
+      build-args:
+        - --share=network
+    build-commands:
+      - pip3 install --verbose --prefix=${FLATPAK_DEST} --no-build-isolation
+        --no-deps PyQt6==6.11.0 PyQt6_Qt6==6.11.0 PyQt6_sip==13.10.2
+    sources: []
+
+  # The app itself. Sources are pulled from sibling dirs only (src/, assets/,
+  # flatpak/, main.py) — never the parent — so the venv/, build artefacts,
+  # and Plan/ directories don't bloat the build.
+  - name: z13-helper
+    buildsystem: simple
+    build-commands:
+      # Drop python sources under /app/share/z13-helper
+      - install -d ${FLATPAK_DEST}/share/z13-helper
+      - cp -r src ${FLATPAK_DEST}/share/z13-helper/
+      - install -Dm644 main.py ${FLATPAK_DEST}/share/z13-helper/main.py
+      - cp -r assets ${FLATPAK_DEST}/share/z13-helper/
+      # Launcher inside /app/bin
+      - install -Dm755 flatpak/launch.sh ${FLATPAK_DEST}/bin/z13-helper-flatpak
+      # Desktop entry + icon + AppStream metadata
+      - install -Dm644 flatpak/io.github.iannitram.Z13Helper.desktop
+        ${FLATPAK_DEST}/share/applications/io.github.iannitram.Z13Helper.desktop
+      - install -Dm644 assets/icon.svg
+        ${FLATPAK_DEST}/share/icons/hicolor/scalable/apps/io.github.iannitram.Z13Helper.svg
+      - install -Dm644 flatpak/io.github.iannitram.Z13Helper.metainfo.xml
+        ${FLATPAK_DEST}/share/metainfo/io.github.iannitram.Z13Helper.metainfo.xml
+    sources:
+      - type: dir
+        path: ../src
+        dest: src
+      - type: dir
+        path: ../assets
+        dest: assets
+      - type: dir
+        path: ../flatpak
+        dest: flatpak
+      - type: file
+        path: ../main.py

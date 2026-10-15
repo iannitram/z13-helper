@@ -1,0 +1,22 @@
+[Unit]
+Description=Z13 side-button watcher (Game Mode: QAM / Steam menu navigation)
+Documentation=file:///home/deck/dev/z13-helper/docs/BUTTON-AND-INPUTPLUMBER.md
+# Anchor to the graphical session so it spans BOTH the desktop and gamescope sessions
+# (it self-gates per-press on which one is active). Soft (Wants) so a target hiccup
+# can't wedge the unit dead.
+After=graphical-session.target
+Wants=graphical-session.target
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+# Co-located with z13_cdp.py in ~/.local/bin; the script adds its own dir to sys.path.
+ExecStart=%h/.local/bin/z13-button-watcher
+Restart=on-failure
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=graphical-session.target

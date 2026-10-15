@@ -1,0 +1,9 @@
+venv/
+__pycache__/
+*.pyc
+.flatpak-builder/
+build-flatpak/
+scratch/
+
+# Maintainer-only notes (Claude Code loads it next to CLAUDE.md)
+CLAUDE.local.md

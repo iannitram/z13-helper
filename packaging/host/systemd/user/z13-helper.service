@@ -1,0 +1,51 @@
+[Unit]
+Description=Z13-Helper GUI (tray + side-button + hardware control)
+Documentation=file:///home/deck/dev/z13-helper/README.md
+# Bind to the DESKTOP (Plasma) session, NOT graphical-session.target/default.target —
+# both are ALSO active under gamescope/Game Mode, where this PyQt tray app can't init a
+# system-tray icon and SIGABRTs (status 134). When this was WantedBy=default.target and
+# the --user manager booted in Game Mode (SteamOS default), it crash-looped, hit the
+# start-limit ("start request repeated too quickly"), and stayed dead even after
+# switching to Desktop (the persistent --user manager never retried).
+# plasma-workspace.target activates only when Plasma comes up (desktop entry) and is
+# absent under gamescope, so this scopes cleanly to Desktop Mode. PartOf makes it stop
+# when Plasma stops, so no stale instance lingers into the next session.
+After=plasma-workspace.target z13-battery-default.service
+Wants=z13-battery-default.service
+PartOf=plasma-workspace.target
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+# Lifecycle caveat: `flatpak run` moves the real app into its own transient
+# app-flatpak-io.github.iannitram.Z13Helper-<n>.scope, so this unit's cgroup only holds a
+# bwrap stub (Tasks: 0) and systemd's own stop (SIGTERM to the cgroup) never reaches
+# the app. Left alone, every restart stacked another instance -- each with its own
+# host side-button reader and Max Fans watchdog. So the unit manages the app
+# explicitly, and the app itself is single-instance (src/single_instance.py).
+#
+# Start: claim ownership by killing any instance not started by this unit (desktop
+# launcher, a leak from before this fix) plus any orphaned host-side reader. The
+# reader runs on the HOST via flatpak-spawn, so flatpak kill can't reach it. The
+# [r] keeps the pattern from matching any shell that wraps this command line.
+ExecStartPre=-/usr/bin/flatpak kill io.github.iannitram.Z13Helper
+ExecStartPre=-/usr/bin/pkill -f "emit z13-side-button-reade[r]"
+# Give the Plasma panel / system tray a moment to come up before the app grabs a tray icon.
+ExecStartPre=/bin/sleep 10
+# No --show: start hidden in the tray. The side button (or tray click) opens it.
+# --resident: if another instance already holds the single-instance lock (Plasma's
+# session restore launches one at login, racing this unit), take over from it instead
+# of exiting -- an exit here would make systemd run ExecStop/ExecStopPost and kill it.
+ExecStart=/usr/bin/flatpak run --branch=master --arch=x86_64 --command=z13-helper-flatpak io.github.iannitram.Z13Helper --resident
+# Stop: ask the running instance to quit cleanly (runs its teardown, which reaps the
+# host reader) and wait for it to exit; then hard-kill whatever is left.
+ExecStop=-/usr/bin/flatpak run --branch=master --arch=x86_64 --command=z13-helper-flatpak io.github.iannitram.Z13Helper --quit
+ExecStopPost=-/usr/bin/flatpak kill io.github.iannitram.Z13Helper
+ExecStopPost=-/usr/bin/pkill -f "emit z13-side-button-reade[r]"
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=plasma-workspace.target

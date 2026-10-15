@@ -1,0 +1,665 @@
+#!/usr/bin/env python3
+"""Profiles: named bundles of everything the Z13 can be set to at once.
+
+A profile is the unit the user picks from the dropdown on the main window
+(the G-Helper "mode" idea): a base platform profile plus optional overrides
+for TDP, fan curve, undervolt, keyboard/lightbar brightness and battery
+limit, and an optional enter/exit hook (a host command). Boondock is a
+profile whose hooks run the boondock script for its non-hardware effects
+(screen dim, stopping background services).
+
+Store: ~/.config/z13-helper/profiles.json
+
+    {"version": 1, "active": "Balanced",
+     "profiles": [{"name": "Balanced", "builtin": true, "base": "balanced",
+                   "tdp": null | {"pl1": W, "pl2": W, "pl3": W, "force": bool},
+                   "fan_curve": null | [[temp_c, pct] x 8],
+                   "undervolt": null | int (0..-40),
+                   "brightness": null | "off"|"low"|"medium"|"high",
+                   "battery_limit": null | 40..100,
+                   "hooks": {"enter": "", "exit": ""}}, ...]}
+
+null means "leave that subsystem to the firmware / don't touch it".
+
+This file is stdlib-only and self-contained on purpose: the desktop app
+imports it inside the Flatpak, a copy runs on the host as the `z13-profile`
+CLI (what z13-restore-profile calls at login), and the Decky backend shells
+to that CLI in Game Mode. One engine, three callers.
+
+CLI:
+    z13-profile list [--json]      names (and which is active)
+    z13-profile active             the active profile's name
+    z13-profile show <name>        the profile as JSON
+    z13-profile apply <name>       apply it (prints one line per step)
+    z13-profile restore            re-apply the active profile (login/resume)
+"""
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import time
+
+STORE_PATH = os.path.expanduser("~/.config/z13-helper/profiles.json")
+MAX_FANS_PATH = os.path.expanduser("~/.config/z13-helper/max-fans.json")
+# The z13-{max,balanced,cool} scripts and z13-restore-profile keep their own
+# notion of "current profile" in this file; we keep it in sync so the old
+# restore path still lands on the right profile if it ever runs.
+LEGACY_CURRENT_PATH = os.path.expanduser("~/.config/z13-profiles/current-profile")
+Z13CTL = os.path.expanduser("~/.local/bin/z13ctl")
+
+BASES = ("quiet", "balanced", "performance")
+BRIGHTNESS_LEVELS = ("off", "low", "medium", "high")
+LIGHTING_DEVICES = ("keyboard", "lightbar")
+
+# Max Fans = every point at 100%. Must match the desktop app and the Decky plugin.
+MAX_FAN_TEMPS = (20, 30, 40, 50, 60, 70, 80, 90)   # from 20 C: fans idle below the first point
+MAX_FANS_SPEC = ",".join(f"{t}:100%" for t in MAX_FAN_TEMPS)
+
+# Curves carried over from the z13-max / z13-balanced host scripts (the
+# "hardware-longevity" curves: factory auto tops out at 40% @ 76 °C).
+TURBO_CURVE = [[40, 50], [50, 75], [60, 90], [70, 100],
+                     [75, 100], [80, 100], [85, 100], [90, 100]]
+BALANCED_CURVE = [[40, 20], [50, 35], [60, 55], [70, 75],
+                  [75, 90], [80, 100], [85, 100], [90, 100]]
+
+# Built-in names follow G-Helper (Silent / Balanced / Turbo); z13ctl's bases
+# are quiet / balanced / performance.
+BUILTIN_FOR_BASE = {"quiet": "Silent", "balanced": "Balanced", "performance": "Turbo"}
+
+LEGACY_NAMES = {            # z13-* script name  ->  profile name
+    "maximum-throughput": "Turbo",
+    "balanced-daily-driver": "Balanced",
+    "longevity-cool-stable": "Silent",
+}
+LEGACY_NAMES_REV = {v: k for k, v in LEGACY_NAMES.items()}
+
+BOONDOCK_BIN = os.path.expanduser("~/.local/bin/boondock")
+
+# Wedged rear lightbar (USB 0b05:18c6): every z13ctl write to it blocks ~5 s and
+# fails with "... write /dev/hidraw5: connection timed out". A root oneshot
+# (packaging/host/systemd/system/z13-lightbar-reset.{sh,service}) re-authorizes
+# the USB device; a polkit rule lets deck start it (and only start it).
+#
+# The reset makes the lightbar re-enumerate under NEW hidraw nodes, but the
+# z13ctl user daemon (socket-activated, holds the HID device) caches the old
+# path and keeps writing to the now-dead node ("write /dev/hidrawN: no such
+# device") -- seen on the device 2026-10-11. So a reset alone isn't enough:
+# the daemon has to be restarted too, which re-applies its saved state itself
+# on the way back up. The same stale-handle symptom (ENODEV) can also show up
+# without any USB reset (the daemon's cached node going away on its own);
+# that case needs only the daemon restart, never the reset unit.
+LIGHTBAR_RESET_UNIT = "z13-lightbar-reset.service"
+LIGHTBAR_RESET_MIN_GAP_S = 120     # at most one reset per 2 minutes
+LIGHTBAR_RESET_SETTLE_S = 3        # the device re-enumerates after the reset
+Z13CTL_SERVICE = "z13ctl.service"  # the user daemon that holds the HID device
+LIGHTBAR_DAEMON_RESTART_WAIT_S = 2  # wait for the daemon socket before retrying
+
+
+def _profile(name, base, *, builtin=False, tdp=None, fan_curve=None,
+             undervolt=None, brightness=None, battery_limit=None,
+             max_fans=False, enter="", exit_=""):
+    return {
+        "name": name, "builtin": builtin, "base": base,
+        "tdp": tdp, "fan_curve": fan_curve, "undervolt": undervolt,
+        "brightness": brightness, "battery_limit": battery_limit,
+        # Switching TO this profile turns Max Fans ON; switching away turns it
+        # OFF again. A restore of the same profile leaves the user's toggle alone.
+        "max_fans": max_fans,
+        "hooks": {"enter": enter, "exit": exit_},
+    }
+
+
+def default_profiles():
+    """The built-in set: mirrors the three z13-* host scripts plus Boondock."""
+    return [
+        _profile("Silent", "quiet", builtin=True, brightness="low", battery_limit=80),
+        _profile("Balanced", "balanced", builtin=True, fan_curve=BALANCED_CURVE,
+                 brightness="medium", battery_limit=80),
+        _profile("Turbo", "performance", builtin=True, fan_curve=TURBO_CURVE,
+                 brightness="high", battery_limit=80, max_fans=True),   # Ian, 2026-10-11
+        # Hardware side of boondock is explicit here; the script does the rest
+        # (screen dim, background services) and restores them on exit.
+        _profile("Boondock", "quiet", builtin=True,
+                 tdp={"pl1": 20, "pl2": 30, "pl3": 40, "force": False},
+                 enter=f"{BOONDOCK_BIN} on", exit_=f"{BOONDOCK_BIN} off"),
+    ]
+
+
+# ----------------------------------------------------------------------
+# Store
+# ----------------------------------------------------------------------
+
+def _read_json(path):
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def _write_json(path, data):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = f"{path}.{os.getpid()}.tmp"
+    with open(tmp, "w") as f:
+        json.dump(data, f, indent=2)
+    # Keep the files deck-owned when the Decky backend (root) writes them.
+    if os.geteuid() == 0:
+        try:
+            st = os.stat(os.path.dirname(path))
+            os.chown(tmp, st.st_uid, st.st_gid)
+        except OSError:
+            pass
+    os.replace(tmp, path)
+
+
+def _legacy_active():
+    try:
+        with open(LEGACY_CURRENT_PATH) as f:
+            return LEGACY_NAMES.get(f.read().strip())
+    except OSError:
+        return None
+
+
+def load_store(create=True):
+    """The store dict; creates the default one on first use."""
+    store = _read_json(STORE_PATH)
+    if store and isinstance(store.get("profiles"), list):
+        # Keys added after a store was seeded: built-ins take the shipped value.
+        shipped = {p["name"]: p for p in default_profiles()}
+        for p in store["profiles"]:
+            if "max_fans" not in p:
+                p["max_fans"] = bool(p.get("builtin") and shipped.get(p["name"], {}).get("max_fans"))
+        return store
+    store = {"version": 1, "active": _legacy_active() or "Balanced",
+             "profiles": default_profiles()}
+    if create:
+        if os.path.exists(STORE_PATH):
+            # Unreadable or malformed: keep it for recovery instead of silently
+            # replacing the user's custom profiles with the defaults.
+            os.replace(STORE_PATH, f"{STORE_PATH}.corrupt-{time.strftime('%Y%m%d-%H%M%S')}")
+        _write_json(STORE_PATH, store)
+    return store
+
+
+def save_store(store):
+    _write_json(STORE_PATH, store)
+
+
+def list_profiles():
+    return load_store()["profiles"]
+
+
+def get_profile(name, store=None):
+    store = store or load_store()
+    for p in store["profiles"]:
+        if p["name"] == name:
+            return p
+    return None
+
+
+def active_name():
+    return load_store().get("active")
+
+
+def set_active(name):
+    store = load_store()
+    store["active"] = name
+    save_store(store)
+    _mirror_legacy(name)
+
+
+def _mirror_legacy(name):
+    """Mirror the active name for the legacy restore script / z13-* scripts."""
+    legacy = LEGACY_NAMES_REV.get(name)
+    if legacy:
+        try:
+            os.makedirs(os.path.dirname(LEGACY_CURRENT_PATH), exist_ok=True)
+            with open(LEGACY_CURRENT_PATH, "w") as f:
+                f.write(legacy + "\n")
+        except OSError:
+            pass
+
+
+def upsert_profile(profile):
+    """Add or replace a profile by name; returns the store."""
+    validate(profile)
+    store = load_store()
+    for i, p in enumerate(store["profiles"]):
+        if p["name"] == profile["name"]:
+            profile["builtin"] = p.get("builtin", False)
+            store["profiles"][i] = profile
+            break
+    else:
+        profile.setdefault("builtin", False)
+        store["profiles"].append(profile)
+    save_store(store)
+    return store
+
+
+def delete_profile(name):
+    store = load_store()
+    p = get_profile(name, store)
+    if p is None:
+        raise KeyError(name)
+    if p.get("builtin"):
+        raise ValueError(f"{name} is built in and can't be deleted")
+    store["profiles"] = [q for q in store["profiles"] if q["name"] != name]
+    was_active = store.get("active") == name
+    if was_active:
+        store["active"] = "Balanced"
+    save_store(store)
+    if was_active:
+        _mirror_legacy("Balanced")
+    return store
+
+
+def validate(p):
+    if not isinstance(p, dict):
+        raise ValueError("profile must be an object")
+    name = p.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("profile needs a name")
+    if p.get("base") not in BASES:
+        raise ValueError(f"base must be one of {BASES}")
+    tdp = p.get("tdp")
+    if tdp is not None:
+        if not isinstance(tdp, dict):
+            raise ValueError("tdp must be null or {pl1, pl2, pl3, force}")
+        for k in ("pl1", "pl2", "pl3"):
+            v = tdp.get(k)
+            if not isinstance(v, int) or not 5 <= v <= 93:
+                raise ValueError(f"tdp.{k} must be 5..93 W")
+        if tdp["pl1"] > 75 and not tdp.get("force"):
+            raise ValueError("PL1 above 75 W needs force=true")
+    validate_curve(p.get("fan_curve"))
+    uv = p.get("undervolt")
+    if uv is not None and (not isinstance(uv, int) or not -40 <= uv <= 0):
+        raise ValueError("undervolt must be 0..-40")
+    if p.get("brightness") not in (None, *BRIGHTNESS_LEVELS):
+        raise ValueError("bad brightness level")
+    bl = p.get("battery_limit")
+    if bl is not None and (not isinstance(bl, int) or not 40 <= bl <= 100):
+        raise ValueError("battery_limit must be 40..100")
+
+
+def validate_curve(curve):
+    """Same rules z13ctl enforces: 8 points, temps increasing, pct non-decreasing."""
+    if curve is None:
+        return
+    if not isinstance(curve, (list, tuple)) or len(curve) != 8:
+        raise ValueError("fan curve needs exactly 8 points")
+    prev_t, prev_p = -1, -1
+    for pt in curve:
+        try:
+            t, pct = int(pt[0]), int(pt[1])
+            if len(pt) != 2:
+                raise ValueError
+        except (TypeError, ValueError, IndexError):
+            raise ValueError(f"fan curve point {pt!r} is not [temp, pct]") from None
+        if not (20 <= int(t) <= 110) or not (0 <= int(pct) <= 100):
+            raise ValueError("fan curve point out of range")
+        if int(t) < prev_t:
+            raise ValueError("fan curve temps must be non-decreasing")
+        if int(pct) < prev_p:
+            raise ValueError("fan curve speeds must be non-decreasing")
+        prev_t, prev_p = int(t), int(pct)
+
+
+# ----------------------------------------------------------------------
+# Apply engine
+# ----------------------------------------------------------------------
+
+def _in_flatpak():
+    return os.path.exists("/.flatpak-info") or "FLATPAK_ID" in os.environ
+
+
+def host_runner(argv, timeout=120):
+    """Run a host command; tunnels out of the Flatpak sandbox when needed."""
+    cmd = list(argv)
+    if _in_flatpak():
+        cmd = ["flatpak-spawn", "--host"] + cmd
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        out = ((p.stdout or "") + (p.stderr or "")).strip()
+        return p.returncode, out
+    except subprocess.TimeoutExpired:
+        return 124, "timed out"
+    except OSError as e:
+        return 127, str(e)
+
+
+def _runtime_dir():
+    """Where the lightbar-reset stamp lives: $XDG_RUNTIME_DIR, or /tmp.
+
+    Inside the Flatpak the sandbox's own runtime dir is private, so use the
+    per-app directory Flatpak shares with the host (as single_instance does).
+    """
+    base = os.environ.get("XDG_RUNTIME_DIR")
+    if not base or not os.path.isdir(base):
+        return "/tmp"
+    app = os.environ.get("FLATPAK_ID")
+    if app and os.path.isdir(os.path.join(base, "app", app)):
+        return os.path.join(base, "app", app)
+    return base
+
+
+def lightbar_stamp_path():
+    return os.path.join(_runtime_dir(), "z13-lightbar-reset.stamp")
+
+
+def lightbar_daemon_stamp_path():
+    return os.path.join(_runtime_dir(), "z13-lightbar-daemon-restart.stamp")
+
+
+def lightbar_failure_kind(out):
+    """Classify a failed lightbar write, or None if it isn't one we can recover.
+
+    'wedged': the USB endpoint itself is stuck ("connection timed out" from
+    z13ctl, or our own subprocess timeout) -- needs a USB reset.
+    'stale': the daemon is writing to a hidraw node that no longer exists
+    ("no such device" / ENODEV), e.g. after a reset re-enumerated the device
+    under new nodes -- needs only a daemon restart.
+    """
+    low = (out or "").lower()
+    if "timed out" in low or "timeout" in low:
+        return "wedged"
+    if "no such device" in low or "enodev" in low:
+        return "stale"
+    return None
+
+
+def lightbar_timed_out(out):
+    """True when a failed lightbar write looks like the wedged endpoint."""
+    return lightbar_failure_kind(out) == "wedged"
+
+
+def _stamp_rate_limited(stamp, now, skipped_msg):
+    try:
+        age = now() - os.stat(stamp).st_mtime
+        if 0 <= age < LIGHTBAR_RESET_MIN_GAP_S:
+            return False, skipped_msg(int(age))
+    except OSError:
+        pass
+    try:
+        tmp = f"{stamp}.{os.getpid()}.tmp"
+        with open(tmp, "w") as f:
+            f.write(f"{now():.0f}\n")
+        os.replace(tmp, stamp)
+    except OSError:
+        pass   # best effort: the unit/daemon itself serialises concurrent starts
+    return True, None
+
+
+def restart_lightbar_daemon(runner, *, sleep=time.sleep):
+    """Restart the z13ctl user daemon so it drops any cached hidraw path.
+
+    On restart the daemon re-applies its own saved state (lighting, battery
+    limit, custom fan curve), so nothing else needs to be re-pushed here.
+    Returns (ok, message).
+    """
+    rc, out = runner(["systemctl", "--user", "restart", "--no-ask-password", Z13CTL_SERVICE], timeout=30)
+    if rc != 0:
+        return False, f"daemon restart failed ({out or f'rc={rc}'})"
+    sleep(LIGHTBAR_DAEMON_RESTART_WAIT_S)
+    return True, "daemon restarted"
+
+
+def recover_lightbar(runner=None, *, sleep=time.sleep, now=time.time):
+    """Reset the wedged lightbar via the root oneshot, then restart the z13ctl
+    daemon (it caches the hidraw path, which the reset invalidates). Returns
+    (ok, message).
+
+    Rate-limited to one attempt per LIGHTBAR_RESET_MIN_GAP_S through a stamp
+    file (written before the attempt, so a concurrent caller backs off), then
+    waits LIGHTBAR_RESET_SETTLE_S for the device to come back. Never loops:
+    callers retry their one write once at most. The keyboard is a different
+    USB device and is never touched. A daemon-restart failure is folded into
+    the message (not into `ok`, since the USB reset itself did succeed) so a
+    caller's retry -- which will then fail against the still-stale daemon --
+    reports why.
+
+    decky/main.py carries a copy of this (the Decky backend can't import src/).
+    """
+    runner = runner or host_runner
+    ok, msg = _stamp_rate_limited(lightbar_stamp_path(), now,
+                                   lambda age: f"lightbar reset skipped (last one {age} s ago)")
+    if not ok:
+        return False, msg
+    # --no-ask-password: without the polkit rule, fail instead of popping a
+    # password dialog from a background apply.
+    rc, out = runner(["systemctl", "start", "--no-ask-password", LIGHTBAR_RESET_UNIT], timeout=30)
+    if rc != 0:
+        return False, f"lightbar reset failed ({out or f'rc={rc}'})"
+    sleep(LIGHTBAR_RESET_SETTLE_S)
+    daemon_ok, daemon_msg = restart_lightbar_daemon(runner, sleep=sleep)
+    if not daemon_ok:
+        return True, f"lightbar reset, but {daemon_msg}"
+    return True, "lightbar reset"
+
+
+def recover_lightbar_stale(runner=None, *, sleep=time.sleep, now=time.time):
+    """Recover from a stale daemon handle (ENODEV) without a USB reset: the
+    daemon is simply holding a dead hidraw path, so restarting it is enough.
+    Rate-limited like recover_lightbar(), but via its own stamp so the two
+    recoveries don't starve each other within the same 120 s window. Never
+    loops; never touches the reset unit.
+
+    decky/main.py carries a copy of this.
+    """
+    runner = runner or host_runner
+    ok, msg = _stamp_rate_limited(lightbar_daemon_stamp_path(), now,
+                                   lambda age: f"daemon restart skipped (last one {age} s ago)")
+    if not ok:
+        return False, msg
+    return restart_lightbar_daemon(runner, sleep=sleep)
+
+
+def _max_fans_state():
+    return _read_json(MAX_FANS_PATH) or {}
+
+
+def _save_max_fans(**changes):
+    state = _max_fans_state()
+    state.update(changes)
+    _write_json(MAX_FANS_PATH, state)
+
+
+def curve_spec(curve):
+    return ",".join(f"{int(t)}:{int(p)}%" for t, p in curve)
+
+
+def apply(profile, *, previous=None, runner=host_runner, z13ctl=Z13CTL,
+          skip_hooks=False):
+    """Put the machine into the state `profile` describes.
+
+    Order matters: the platform-profile write makes asus-wmi drop any custom
+    fan curve and the firmware re-applies its own power limits, so it goes
+    first; TDP next; then the fan curve pins the limits in place; then the
+    rest. Each step is independent so one failure doesn't block the others.
+
+    Returns a list of (step, ok, message). `previous` is the profile we are
+    leaving (its exit hook runs first).
+    """
+    results = []
+
+    def step(name, argv, ok_msg=None, timeout=120):
+        rc, out = runner(argv, timeout=timeout)
+        ok = rc == 0
+        results.append((name, ok, ok_msg if (ok and ok_msg) else (out or f"rc={rc}")))
+        return ok
+
+    # 1. Leave the previous profile (e.g. `boondock off` restores the screen).
+    if not skip_hooks and previous and previous.get("name") != profile["name"]:
+        exit_cmd = (previous.get("hooks") or {}).get("exit") or ""
+        if exit_cmd.strip():
+            step("exit hook", ["bash", "-lc", exit_cmd], f"ran: {exit_cmd}")
+
+    # 2. Base platform profile.
+    step("profile", [z13ctl, "profile", "--set", profile["base"]], profile["base"])
+
+    # 3. TDP (None = whatever the firmware profile dictates, restored by the
+    #    profile write above).
+    tdp = profile.get("tdp")
+    if tdp:
+        argv = [z13ctl, "tdp", "--set", str(tdp["pl1"]),
+                "--pl2", str(tdp["pl2"]), "--pl3", str(tdp["pl3"])]
+        if tdp.get("force"):
+            argv.append("--force")
+        step("tdp", argv, f"{tdp['pl1']}/{tdp['pl2']}/{tdp['pl3']} W")
+
+    # 4. Fan curve. Max Fans wins while it is ON: keep 100% pinned, but remember
+    #    the profile's curve as the one to restore when it's switched OFF.
+    #    A max_fans profile turns it ON when switched to and OFF when left
+    #    (only on a real switch: restore/resume keeps whatever the user chose).
+    curve = profile.get("fan_curve")
+    released = False
+    if previous is None or previous.get("name") != profile["name"]:
+        if profile.get("max_fans") and not _max_fans_state().get("enabled"):
+            _save_max_fans(enabled=True)
+        elif (previous or {}).get("max_fans") and not profile.get("max_fans") \
+                and _max_fans_state().get("enabled"):
+            _save_max_fans(enabled=False)
+            released = True
+    if _max_fans_state().get("enabled"):
+        # What Max Fans OFF should go back to: this profile's curve, or none
+        # (= firmware auto) -- never the previous profile's leftover curve.
+        _save_max_fans(saved_curve=[[int(t), round(int(p) * 255 / 100)] for t, p in curve]
+                       if curve else None)
+        step("fans", [z13ctl, "fancurve", "--set", MAX_FANS_SPEC], "Max Fans stays ON (100%)")
+    elif curve:
+        step("fans", [z13ctl, "fancurve", "--set", curve_spec(curve)], "custom curve")
+    elif released:
+        # Leaving a Max Fans profile for one without a curve: hand the fans back
+        # explicitly rather than trusting the profile write to drop the 100% curve.
+        step("fans", [z13ctl, "fancurve", "--reset"], "Max Fans OFF, firmware auto")
+    else:
+        results.append(("fans", True, "firmware auto"))
+
+    # 5. Undervolt (needs ryzen_smu; absent on stock SteamOS -> reported, not fatal).
+    uv = profile.get("undervolt")
+    if uv is not None:
+        rc, out = runner([z13ctl, "undervolt", "--set", str(uv)])
+        if rc == 0:
+            results.append(("undervolt", True, f"{uv}"))
+        else:
+            results.append(("undervolt", False, "unavailable (ryzen_smu not loaded)"
+                            if "ryzen_smu" in out else out))
+
+    # 6. Lighting, per device so one stalled hidraw endpoint can't block the other.
+    #    The keyboard goes first, so it is set before any lightbar recovery.
+    br = profile.get("brightness")
+    if br:
+        for dev in LIGHTING_DEVICES:
+            argv = [z13ctl, "--device", dev, "brightness", br]
+            rc, out = runner(argv, timeout=30)
+            if rc != 0 and dev == "lightbar":
+                kind = lightbar_failure_kind(out)
+                if kind == "wedged":
+                    rec_ok, rec_msg = recover_lightbar(runner)
+                elif kind == "stale":
+                    rec_ok, rec_msg = recover_lightbar_stale(runner)
+                else:
+                    rec_ok = None
+                if rec_ok is not None:
+                    if rec_ok:
+                        rc, out = runner(argv, timeout=30)
+                        if rc == 0:
+                            results.append((f"brightness ({dev})", True, f"{br} (lightbar recovered)"))
+                            continue
+                        out = f"{out or f'rc={rc}'} (still failing after a {rec_msg})"
+                    else:
+                        out = f"{out}; {rec_msg}"
+            results.append((f"brightness ({dev})", rc == 0, br if rc == 0 else (out or f"rc={rc}")))
+
+    # 7. Battery charge limit.
+    bl = profile.get("battery_limit")
+    if bl is not None:
+        step("battery limit", [z13ctl, "batterylimit", "--set", str(bl)], f"{bl}%")
+
+    # 8. Enter hook.
+    if not skip_hooks:
+        enter_cmd = (profile.get("hooks") or {}).get("enter") or ""
+        if enter_cmd.strip():
+            step("enter hook", ["bash", "-lc", enter_cmd], f"ran: {enter_cmd}")
+
+    return results
+
+
+def apply_by_name(name, **kw):
+    store = load_store()
+    profile = get_profile(name, store)
+    if profile is None:
+        raise KeyError(f"no profile named {name!r}")
+    previous = get_profile(store.get("active"), store)
+    results = apply(profile, previous=previous, **kw)
+    if any(ok for s, ok, _ in results if s == "profile"):
+        set_active(name)
+    return results
+
+
+# ----------------------------------------------------------------------
+# CLI
+# ----------------------------------------------------------------------
+
+def _print_results(results):
+    worst = 0
+    for step, ok, msg in results:
+        # Two spaces after the step name always: install_check.py splits on them.
+        print(f"  {'ok ' if ok else 'ERR'}  {step:<22}  {msg}")
+        worst = max(worst, 0 if ok else 1)
+    return worst
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="z13-profile", description=__doc__.split("\n\n")[0])
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    s = sub.add_parser("list"); s.add_argument("--json", action="store_true")
+    sub.add_parser("active")
+    s = sub.add_parser("show"); s.add_argument("name")
+    s = sub.add_parser("apply"); s.add_argument("name")
+    s.add_argument("--no-hooks", action="store_true", help="skip enter/exit hooks")
+    s = sub.add_parser("restore", help="re-apply the active profile (login / resume)")
+    s.add_argument("--no-hooks", action="store_true")
+    args = ap.parse_args(argv)
+
+    if args.cmd == "list":
+        store = load_store()
+        if args.json:
+            print(json.dumps(store))
+        else:
+            for p in store["profiles"]:
+                mark = "*" if p["name"] == store.get("active") else " "
+                print(f"{mark} {p['name']}  (base: {p['base']})")
+        return 0
+    if args.cmd == "active":
+        print(active_name() or "")
+        return 0
+    if args.cmd == "show":
+        p = get_profile(args.name)
+        if p is None:
+            print(f"no profile named {args.name!r}", file=sys.stderr)
+            return 1
+        print(json.dumps(p, indent=2))
+        return 0
+    if args.cmd in ("apply", "restore"):
+        name = active_name() if args.cmd == "restore" else args.name
+        if not name:
+            print("no active profile", file=sys.stderr)
+            return 1
+        try:
+            print(f"Applying profile: {name}")
+            # On restore the hooks are intentionally skipped: a login shouldn't
+            # re-run `boondock on` (its snapshot is from the previous session).
+            results = apply_by_name(name, skip_hooks=args.no_hooks or args.cmd == "restore")
+        except KeyError as e:
+            print(e, file=sys.stderr)
+            return 1
+        return _print_results(results)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

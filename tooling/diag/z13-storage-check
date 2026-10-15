@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+set -u
+
+echo "=== Z13 STORAGE CHECK ==="
+date -Is
+echo
+
+echo "=== Filesystem free space ==="
+df -hT "$HOME" / /var 2>/dev/null || df -hT
+echo
+
+echo "=== Block devices ==="
+lsblk -o NAME,SIZE,TYPE,FSTYPE,LABEL,MOUNTPOINTS
+echo
+
+echo "=== Common large directories ==="
+for d in \
+  "$HOME/z13" \
+  "$HOME/z13/llm/models" \
+  "$HOME/.local/share/flatpak" \
+  "$HOME/.local/share/containers" \
+  "$HOME/.steam" \
+  "$HOME/Downloads"; do
+  if [ -e "$d" ]; then
+    du -sh "$d" 2>/dev/null
+  fi
+done
+
+echo
+echo "=== Warning thresholds ==="
+home_avail_kb="$(df -Pk "$HOME" | awk 'NR==2 {print $4}')"
+root_avail_kb="$(df -Pk / | awk 'NR==2 {print $4}')"
+
+if [ "${home_avail_kb:-0}" -lt 52428800 ]; then
+  echo "WARNING: Home has less than 50GB free. Avoid downloading large models."
+else
+  echo "OK: Home has at least 50GB free."
+fi
+
+if [ "${root_avail_kb:-0}" -lt 10485760 ]; then
+  echo "WARNING: Root has less than 10GB free. Avoid system-level installs."
+else
+  echo "OK: Root has at least 10GB free."
+fi

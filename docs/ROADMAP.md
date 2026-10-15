@@ -1,0 +1,466 @@
+# Z13-Helper — Roadmap
+
+**Rewritten 2026-10-09.** This is the single plan for the project. It replaces the per-phase files
+in `docs/plan/` (kept as history, see [Doc map](#doc-map)). Read `CLAUDE.md` first for orientation;
+the maintainer's notes (outside the repo) stay the reference for *how the machine works*; this file is
+*what we are building next and why*.
+
+Status marks: ✅ shipped · 🔧 in progress · ⏳ planned · 🚧 gated (needs a decision or a precondition) · 💤 backlog
+
+---
+
+## 1. Where we are (audit, 2026-10-09)
+
+### Shipped and working
+| Area | State |
+|---|---|
+| Desktop app (PyQt6 Flatpak `io.github.iannitram.Z13Helper`) | ✅ profiles, TDP, 8-point curve (spinboxes), battery limit, brightness, telemetry, tray, single-instance, resident service |
+| Side button | ✅ Desktop: host evdev reader → window toggle. Game Mode: `z13-button-watcher` → QAM / Steam menu |
+| Max Fans | ✅ shared `max-fans.json`, watchdog in app + Decky, re-pinned at login/resume |
+| Decky plugin `z13-helper` | ✅ profile dropdown, Max Fans, TDP sliders, charge limit, per-device brightness, telemetry (§7; on-device check pending) |
+| Host profiles | ✅ profiles engine (`z13-profile`, §4); `z13-restore-profile.service` at login runs `z13-profile restore` |
+| Installer | ✅ `install.sh` / `--repair` + `install_check.py verify` (§9a); Repair button in the Updates panel (on-device check pending) |
+| Lightbar wedge | ✅ auto-recovery via `z13-lightbar-reset.service` + polkit rule (§3; on-device check pending) |
+| App version | **0.4.0** (2026-10-12; `CHANGELOG.md`) |
+| Boondock | ✅ hardware part works (quiet + 20/30/40 W + screen 35 %); service/VM steps are dead code |
+
+### Fixed today (2026-10-09)
+- **Keyboard brightness didn't change.** z13ctl sends each packet to the keyboard *then* the
+  lightbar and aborts on the first write error; the lightbar's USB endpoint (`0b05:18c6`, hidraw5)
+  had stalled (`ETIMEDOUT`), so the keyboard never got its packet. Fix: app and `z13-*` scripts now
+  set brightness **per device**; the keyboard works even when the lightbar is wedged. Recovery for a
+  wedged lightbar: `echo 0 > /sys/bus/usb/devices/3-5/authorized; echo 1 > …/authorized`.
+- **Max Fans ON, fans at 0 RPM.** After a Desktop↔Game Mode switch the kernel still reported the
+  100 % curve as *enabled*, but the firmware had stopped honouring it. Re-writing or resetting the
+  curve did nothing; **re-writing the platform profile (same value) then the curve** brought the fans
+  back. The watchdog (`src/fan_watchdog.py`, shared by the app and Decky since 2026-10-15) now also uses **RPM truth**: if the
+  curve asks for ≥ 50 % and both fans read 0 RPM for two ticks, it rewrites profile + curve.
+- **Dashboard clipped** (System Status / Boondock text cut off) → the tab scrolls.
+- **Second stall (20:35):** no profile write involved — the z13ctl daemon re-applied the curve twice
+  (bare writes, after a firmware-side fan release) and the fans sat at 0 RPM until our watchdog's
+  profile-rewrite recovery. Both watchdog branches (curve dropped / fans stalled) now recover with
+  **profile rewrite + curve**; a bare curve write is never used for recovery. Verified: an external
+  same-value `platform_profile` write is absorbed by the 1.4.2 daemon with no RPM dip.
+- **The tach can lie (21:00, Ian's observation):** the *left* fan physically stopped while `fan1_input`
+  read 8 700 on every sample and the other fan's reading kept jittering; toggling Max Fans (a curve
+  change → firmware re-ramp) brought it back. So "RPM > 0" is not proof. Third watchdog rule: **one
+  fan's reading bit-identical for 90 s** while the curve asks ≥ 50 % → stale tach → profile rewrite +
+  curve. Also learned: every curve *change* makes the firmware stop the fans for ~5–10 s and re-ramp
+  (that's the normal dip after a toggle), and below the curve's first point the fans idle (hence Max
+  Fans now starts at 20 °C).
+- **Decky watchdog never worked in Game Mode:** the loader is a PyInstaller bundle whose
+  `LD_LIBRARY_PATH` broke every `systemctl` call (`OPENSSL_3.4.0 not found`), so `_in_gamemode()` was
+  always false. The backend now restores the host library path for child processes.
+
+### Audit findings (docs)
+| Doc | Verdict |
+|---|---|
+| `docs/plan/Phase_1…6.md` | Historical. Phases 1–3, 5 (spike), 6 are done; Phase 4 (testing) was never run as written; Phase 5 "full parity" never happened. **Superseded by this file.** |
+| `docs/README-landing.md` | Stale vault landing page (code at `C:/dev`, keycode 579, InputPlumber D-Bus as the button path). **Deleted**; its history table lives in this section. |
+| `README.md` | Refreshed 2026-10-09 for the redesign (features, layout, restore path). |
+| `docs/BUTTON-AND-INPUTPLUMBER.md`, `docs/hardware-enablement.md` | Accurate; keep. |
+| Maintainer's notes (outside the repo) | Authoritative for machine behaviour; need a "profiles engine" and "fan stall" section once Phase 8/7 land. |
+
+### Upstream drift (why the plan changed)
+*(Written 2026-10-09 before the upgrade; 1.4.2 is installed since then, see §8.)* We pinned **z13ctl 1.1.6** (2026-04). Upstream is at **1.4.2** (2026-10-09) and has since added the
+things we were about to build ourselves: **named custom profiles** (fan curve + TDP + Curve Optimizer),
+**AC/battery autoswitch**, **`subscribe` events** instead of polling, re-apply on resume, and a run of
+**suspend/resume hard-lock fixes** (1.3.2 → 1.4.1). It also fixed two bugs we live with: custom curves
+silently dropped by the kernel (1.2.2) and a custom TDP ≤ 75 W being silently undone (1.4.0 — this
+likely means Boondock's 20 W cap only holds while a custom curve is active). See §8 and §11.
+
+---
+
+## 2. Principles (don't break these)
+1. **`z13ctl` is the only thing that writes hardware.** The app, the Decky plugin, the host scripts and
+   the hooks all go through it. No direct sysfs writes from the UI.
+2. **InputPlumber stays masked.** It is load-bearing for game controllers (`docs/BUTTON-AND-INPUTPLUMBER.md`).
+3. **One state, two frontends.** Desktop app and Decky share files under `~/.config/z13-helper/`
+   (`config.json`, `max-fans.json`, and now `profiles.json`). They re-read; they never cache.
+4. **Order of writes:** platform profile → TDP → fan curve → undervolt → lighting → battery.
+   A platform-profile write drops the custom curve and lets the firmware re-apply its own power limits,
+   so it always goes first. (`src/profiles.py`)
+5. **Never poll the asus-armoury `ppt_*` files.** Reading them reaches the EC and can hard-lock a machine
+   whose EC is slow after resume (z13ctl 1.4.1 notes). On this 6.18 kernel they return ENODEV anyway.
+6. **Max Fans wins.** While ON, nothing else writes a different curve; profiles store their curve as the
+   one to restore when it's switched OFF.
+7. **Host changes are deliberate.** Anything under `/etc`, the z13ctl binary, or systemd units gets a
+   backup, a journal line, and a wiki note.
+
+---
+
+## 3. Phase 7 — Stability ✅ (Boondock cleanup still ⏳)
+Shipped today: per-device brightness, fan-stall watchdog, dashboard scroll (above).
+
+Remaining:
+- ✅ **Resume hook vs. profiles** (2026-10-09). `/etc/systemd/system/z13-fan-resume.sh` now waits 3 s for
+  the EC, then runs `z13-profile restore` as deck (active profile: platform profile, TDP, curve, Max Fans
+  pinned if ON) and falls back to the old curve logic. Backup: `z13-fan-resume.sh.bak-20261009`.
+  Repo copy: `packaging/host/systemd/system/z13-fan-resume.sh`.
+- ⏳ **Boondock script cleanup.** Drop the Docker/VM steps and the system `llama-swap` unit; point
+  `BG_SERVICES` at the user unit (`systemctl --user`). The wiki already documents this.
+- ✅ written, on-device check pending (2026-10-12) **Lightbar wedge auto-recovery.** Root oneshot
+  `z13-lightbar-reset.service` → `/etc/systemd/system/z13-lightbar-reset.sh` finds the USB device by
+  ID `0b05:18c6` (never by port) and writes `authorized` 0 → 1; polkit rule
+  `/etc/polkit-1/rules.d/50-z13-lightbar-reset.rules` lets deck **start** that one unit, nothing else.
+  `profiles.recover_lightbar()` (used by `profiles.apply`, the desktop brightness buttons and — as a
+  copy — the Decky backend): only when a lightbar write fails with a *timeout*, keyboard already
+  written, at most one reset per 120 s (stamp in `$XDG_RUNTIME_DIR`), wait 3 s, retry that one write
+  once. Installed by `install.sh` (asks first; in MANIFEST + keep-list); `verify` only runs
+  `systemctl cat` on it. Manual: `systemctl start z13-lightbar-reset.service`;
+  log: `journalctl -t z13-lightbar-reset`.
+- ✅ **Lightbar auto-recovery, as-built (found on-device 2026-10-11).** The reset above worked but the
+  retry still hit `write /dev/hidrawN: no such device`: the lightbar re-enumerates under *new* hidraw
+  nodes, and the socket-activated `z13ctl.service` user daemon caches the old path. Fix: after the
+  reset unit + its settle wait, `recover_lightbar()` now also runs `systemctl --user restart
+  z13ctl.service` (the daemon re-applies its own saved state on the way back up) before the one retry;
+  a lightbar write that fails with ENODEV *without* a prior reset (a stale handle on its own) gets the
+  daemon restart alone, via `recover_lightbar_stale()` — `lightbar_failure_kind()` tells the two apart.
+  Same logic in `HardwareController.set_brightness` and the Decky backend (as deck, with
+  `DBUS_SESSION_BUS_ADDRESS` set explicitly since the backend runs as root).
+
+---
+
+## 4. Phase 8 — Profiles engine ✅ (2026-10-09; z13ctl mirror still 🚧)
+**Replaces the Boondock button with a Profile dropdown** (Ian, 2026-10-09). A profile bundles what
+G-Helper calls a "mode": base platform profile + TDP + fan curve + undervolt + brightness + battery
+limit + an enter/exit hook. Boondock becomes a profile whose hooks run the script for the
+non-hardware effects.
+
+- **Module:** `src/profiles.py` ✅ written — stdlib-only, importable in the Flatpak, runnable on the host
+  as the `z13-profile` CLI, shell-able from the Decky backend. Store: `~/.config/z13-helper/profiles.json`.
+- **Built-ins** (G-Helper names; mirror the host scripts so nothing regresses): Silent (= `z13-cool`), Balanced
+  (= `z13-balanced`, longevity curve), Turbo (= `z13-max`, aggressive curve), Boondock (quiet,
+  20/30/40 W, hooks `boondock on|off`). Built-ins can be edited (curve/TDP/…) but not deleted.
+- **Apply engine** = principle 4; each step independent; results surface per step in the status bar.
+  Max Fans ON → the profile's curve is saved as `saved_curve`, 100 % stays pinned.
+- **Migration:** first run seeds the store and takes the active name from
+  `~/.config/z13-profiles/current-profile`; `set_active` keeps that legacy file in sync so the old
+  restore path still works until it is replaced.
+- ✅ **Host wiring:** `src/profiles.py` installed as `~/.local/bin/z13-profile`
+  (`install -m755 src/profiles.py ~/.local/bin/z13-profile` after every change);
+  `z13-restore-profile` → `z13-profile restore` (hooks skipped at login on purpose).
+  ✅ `z13-fan-resume.sh` → `runuser -u deck -- … z13-profile restore` (2026-10-09, see Phase 7).
+  Keep `z13-max/balanced/cool` as thin wrappers (`z13-profile apply Performance` …).
+- ✅ **Desktop UI:** dropdown in the Performance panel + "＋ / Rename / Remove" in the Fans + Power
+  window (Phase 9); the Fans + Power window always edits *the selected profile*.
+- ✅ **Decky:** dropdown lists `profiles.json`; `set_profile` runs `runuser -u deck -- z13-profile apply <name>`.
+- 🚧 **After the z13ctl upgrade (§8):** mirror each profile into a z13ctl named profile
+  (`profile --create`, `tdp/fancurve/undervolt --set --profile <name>`) so the daemon re-applies it on
+  resume and `autoswitch --ac/--battery` can pick between two of ours.
+
+- ✅ **Per-profile Max Fans** (Ian, 2026-10-11): profile field `max_fans`; Turbo ships with it ON.
+  Switching *to* such a profile turns Max Fans ON, switching *away* turns it OFF (and resets to
+  firmware auto if the new profile has no curve); `restore` (login/resume) leaves the user's toggle
+  alone. Checkbox "Max Fans" in the Fans + Power window. Older stores get the shipped value on load.
+
+**Done when:** every built-in applies from the dropdown and from `z13-profile apply`; a login restores
+the active profile; Max Fans survives a profile change; Decky shows and applies the same list.
+
+---
+
+## 5. Phase 9 — G-Helper layout port ✅ (2026-10-09; Screen panel, lighting modes and tile icons still ⏳)
+Lift G-Helper's layout (seerge/g-helper, `app/Settings*.cs`, `app/Fans*.cs`) as closely as the Z13 +
+Linux allow. Research spec (2026-10-09) is summarised here; the port keeps its names.
+
+### Main window (single stacked column, ~420 px wide, docks bottom-right on show)
+Each panel: 20 px title row (16 px icon · bold title · grey right-aligned live sensor) over one row
+of equal-width tiles.
+
+| # | Panel | Controls | Z13 notes |
+|---|---|---|---|
+| 1 | **Performance Mode: &lt;profile&gt;[+][ &lt;W&gt;W]** · right: `CPU 44°C  Fan 2100RPM` | tiles **Silent / Balanced / Turbo / Fans + Power** (94×60, icon bottom-centre) + **profile dropdown** | Silent/Balanced/Turbo = the three built-ins; any other profile highlights **Fans + Power** in the base's colour (G-Helper's custom-mode rule). "+" = custom curve applied, "20W" = custom SPL. |
+| 2 | GPU Mode | — | **hidden** (`NoGpu()` is true for GZ302 in G-Helper too) |
+| 3 | Laptop Screen | Auto / 60 Hz / 120 Hz + OD | ⏳ later: refresh rate via KScreen/`kscreen-doctor`, overdrive via `z13ctl paneloverdrive`. Panel is 48–180 Hz; see Phase 13. |
+| 4 | **Rear Light** | mode combo · colour | Z13-only in G-Helper (`HasRearLight() == IsZ13()`); maps to `z13ctl apply --device lightbar` |
+| 5 | **Laptop Keyboard** | brightness **Off / Low / Medium / High** · lighting mode combo · colour · Extra (gear) | per-device writes (today's fix) |
+| 6 | **Battery Charge Limit: 80 %** · right: `Charge: 86 %` | slider + **100 %** pill | existing semantics (apply on release) |
+| 7 | Run on Startup · right: `Charge: 70.8%` | checkbox → `systemctl --user enable z13-helper` | |
+| 8 | Version: x.y.z (red when an update exists) | | feeds Phase 10 |
+| 9 | Footer | **Updates / Quit** (Donate dropped) | |
+
+Theme (both from G-Helper): dark form `#1C1C1C`, primary tile `#2E2E2E`, secondary `#242424`, text
+`#F0F0F0`, borders `#373737`; accents Silent `#06B48A`, Balanced `#3AAEEF`, Turbo `#FF2020`, Custom
+`#FF8000`. Active tile = 2 px accent border + faint top tint, radius 5. Font: system UI font, bold titles.
+
+### Fans + Power window (opens left of the main window, same height)
+- **Left column (CPU page):** *Platform profile* combo (G-Helper's "Windows Power Mode" slot; quiet /
+  balanced / performance); *CPU Boost* combo ⏳ (amd-pstate EPP — `power/balance_power/balance_performance/performance`);
+  **Power Limits**: **SPL (CPU sustained) / sPPT (CPU long boost) / fPPT (CPU short boost)** sliders
+  5…93 W (93 = `IsZ1325` cap), constraint sPPT ≥ SPL, values written on release; checkbox
+  **Apply Power Limits** (= profile has a TDP). *Advanced page* (CPU UV −40…0, iGPU UV) only when
+  `ryzen_smu` exists → hidden on stock SteamOS, same as G-Helper.
+- **Right region:** title **BIOS Fan Curves** with **mode combo + ＋ / Rename / Remove** (Remove only for
+  non-built-ins); **Clamp to Grid** checkbox; one chart **"CPU Fan Profile, RPM/°C"** (the Z13's two fans
+  share one curve — z13ctl writes both; a second chart would lie). Chart: X 20…110 °C, Y 0…100 % with
+  Y-axis click toggling RPM labels; **8 draggable points**, monotonic push in both axes, BIOS safety
+  floor `y ≥ (x−70)·1.2`, Shift-drag moves all, arrow keys nudge, floating `65°C, 3600 RPM` label;
+  series blue (Balanced) / green / red by base, grey when the curve isn't applied. Bottom: **Factory
+  Defaults** · **Apply Custom Fan Curve** checkbox (= profile has a curve). Live temp/RPM stay in the
+  main window title rows and tray tooltip (G-Helper doesn't draw them on the chart).
+- Widget: `src/fan_curve_widget.py` (QPainter, no extra deps).
+
+### Tray
+Header "Performance Mode", one checkable item per profile, separator, Quit. Tooltip `CPU 44°C Fan 2100RPM`.
+
+**Done when:** every control in the old Dashboard/Advanced tabs exists in the new layout; a screenshot
+matches the G-Helper proportions; the Flatpak is rebuilt and the resident service restarted.
+
+---
+
+## 6. Phase 10 — Updates watch ✅ (2026-10-09; the "update section")
+In-app: `src/update_watch.py` checks the repos in §11 once a day (and on "Check now"), compares the
+latest release/commit with what's installed where we can read it (`z13ctl --version`,
+`~/homebrew/services/.loader.version`, `uname -r`, `/etc/os-release`, `steamos-update check`), and:
+- turns the **Version** row red + puts a count on the **Updates** footer button;
+- shows a tray notification once per new version;
+- opens an **Updates** dialog: *component · installed · latest · date · what's in it (first lines) · link*,
+  with **Mark seen**.
+
+Mechanics: GitHub REST (`/releases/latest`, or `/commits?per_page=1` for untagged projects), ETag
+cache in `~/.config/z13-helper/updates.json`, unauthenticated (60 req/h is plenty), network via
+`flatpak-spawn --host curl` (the sandbox has no network at runtime — keep it that way).
+**Install / Update** (added 2026-10-09, Ian's ask): rows with an installer can be installed from the
+dialog — it shows the plan, asks, streams the log (`src/installers.py`, runs on the host):
+- **z13ctl**: release tarball, sha256 checked against `checksums.txt`, backup `z13ctl.bak-<old>`,
+  `sudo z13ctl setup`, daemon user units with a `--no-button` drop-in, `enable --now`.
+- **Decky Loader**: the official installer script, then the stale-loader (:1337) health check.
+- **SteamOS**: `sudo steamos-update`; reboot to finish.
+Everything else stays reference-only on purpose (asusctl/InputPlumber/hhd would fight z13ctl or the
+controller fix; the kernel comes with SteamOS; G-Helper is Windows).
+
+---
+
+## 7. Phase 11 — Decky parity ✅ written 2026-10-11, on-device check pending (keep it working while everything above changes)
+Contracts the plugin depends on (don't change silently): `max-fans.json` schema, `profiles.json`
+schema + `z13-profile` CLI, z13ctl output formats parsed by `main.py`.
+- ✅ **Profile dropdown** from `profiles.json` (replaces the raw platform-profile list; falls back to it
+  if the store is missing).
+- ✅ fan-stall watchdog (today).
+- ✅ written, on-device check pending (2026-10-11, branch `claude/decky-parity`): **TDP sliders**
+  SPL/sPPT/fPPT 5…93 W (sPPT ≥ SPL, fPPT ≥ sPPT, written on release) + "Apply power limits" →
+  active profile's `tdp` in `profiles.json`, then `z13ctl tdp --set` as deck (off →
+  `z13-profile apply <active> --no-hooks`, same as the desktop window); **charge-limit slider**
+  40…100 step 5 → `batterylimit --set` + profile `battery_limit`; **brightness Off/Low/Med/High**
+  per device (lightbar failure shown, keyboard still set); **telemetry row** APU/GPU °C + both fan
+  RPMs (hwmon by name, 2 s poll only while the QAM is open). Never reads `ppt_*` (no `tdp --get`).
+  Backend helper tests: `python3 -m unittest discover -s decky/tests`.
+- Build/install loop (unchanged): `pnpm run build` → `sudo cp plugin.json package.json main.py dist/ ~/homebrew/plugins/z13-helper/`
+  → `sudo systemctl restart plugin_loader`. **Gotcha found today:** restarting the unit can leave the old
+  loader alive holding :1337 ("address already in use"); check `sudo ss -ltnp | grep 1337` and kill the
+  stale one before restarting.
+- **Done when:** QAM panel shows the same profile list as the desktop app and applying one in Game Mode
+  is visible in the desktop app afterwards (shared store).
+
+---
+
+## 8. Phase 12 — Adopt z13ctl 1.4.2 ✅ installed 2026-10-09 (Ian's go); follow-ups 🔧
+**Why:** named profiles + autoswitch + resume re-apply + `subscribe` events + the curve-drop and TDP-undone
+fixes + the EC hard-lock fixes. It would let us delete `z13-fan-resume.sh`, most of the Max Fans
+watchdog, and the polling.
+**Why not yet:** 1.4.0, 1.4.1 and 1.4.2 all shipped **today**; 1.4.1 fixes a hard-lock hazard 1.4.0
+introduced. Let it settle a week. The daemon (`systemctl --user z13ctl`) is **not running here** today;
+1.3+ expects it.
+**Go/no-go checklist:** (1) no new hard-lock issues on the tracker for 7 days; (2) vendored 1.1.6 tarball
+in `tooling/z13ctl-install/` verified as rollback; (3) `sudo z13ctl setup` re-run (new permission grants);
+(4) daemon enabled `--no-button` (our watcher owns the button); (5) `tdp --get` confirms the old
+asus-nb-wmi path on 6.18 (armoury `ppt_*` are ENODEV here, so the 28 W floor doesn't apply); (6) one
+suspend/resume cycle on a custom curve with the fans checked after; (7) profiles mirrored (§4).
+**Rollback:** `cp ~/.local/bin/z13ctl.bak-1.1.6 ~/.local/bin/z13ctl && systemctl --user disable --now z13ctl.socket z13ctl.service`
+(the vendored 1.1.6 tarball in `tooling/z13ctl-install/` is the second copy).
+**Follow-ups:** mirror app profiles into z13ctl named profiles + autoswitch (§4); retire the Max Fans
+watchdog's curve-drop branch once the daemon is proven to re-apply curves itself; use `subscribe`
+events (not in 1.4.2's CLI — check the socket API) instead of polling.
+
+---
+
+## 9. Phase 13 — Game Mode polish ⏳
+- **Steam's own TDP / charge-limit / profile controls.** steamos-manager reports `DeviceModel "unknown"`
+  here, so the QAM Performance tab lacks them. A small system-bus service implementing
+  `com.steampowered.SteamOSManager1.{TdpLimit1,BatteryChargeLimit1,PerformanceProfile1}` registered
+  via `/etc/steamos-manager/remotes.d/*.toml` (the ROG Ally ships one) would bring them back. Must call
+  z13ctl, not sysfs (principle 1).
+- **48–180 Hz VRR profile for gamescope** (`~/.config/gamescope/scripts/`, modelled on
+  `asus.rogally.lcd.lua`). Unverified whether the Tianma TL134ADXP03 accepts front-porch modegen.
+- **Open since Phase 6:** QAM focus test with a game running (only Ian can do it).
+
+---
+
+## 9a. Phase 12b — One-shot installer / repair script ✅ (shipped 2026-10-11; Updates-panel button written 2026-10-12, on-device check pending)
+
+**As built (2026-10-11):** `install.sh` (repo root) + `tooling/install_check.py` (host-file manifest,
+keep-list entries, `flatpak-diff`, and `verify` = §12 as code) + `src/installers.py repair z13ctl|decky`.
+- `./install.sh` asks "Install dependencies?" → `installers.py install z13ctl` then `repair z13ctl`
+  (an "already up to date" install would otherwise skip setup) → `install decky` (always, per Ian).
+  Declining = repair the installed ones. `/etc` changes are listed and asked once.
+- `./install.sh --repair`: no prompts; **keeps the installed z13ctl version** (the 1.4.x pin is
+  deliberate; installs latest only if the binary is missing), `sudo z13ctl setup --perms-only` (full
+  `setup` if the rules or perms unit are gone), daemon units + `--no-button` override restored if missing;
+  Decky Loader reinstalled only if missing / inactive / behind latest.
+- Plugin: pnpm found on PATH or under `~/.nvm` (falls back to the existing `decky/dist`); installed only
+  when a file differs, then stop → `systemctl kill` → (kill a stale :1337 holder by PID) → start, and
+  waits for "z13-helper up" in a log newer than the restart.
+- Flatpak: rebuilt only when the installed tree (`flatpak info --show-location`) differs from the repo
+  (`--rebuild` forces); app restarted only in a Desktop session.
+- `z13ctl setup` owns `99-z13ctl.rules` and `z13ctl-perms.service`; the installer never copies the
+  `packaging/host` references over them (those were refreshed from the 1.4.2 output the same day).
+- Not installed on purpose: the xdg autostart entry (races the resident unit), asusd config,
+  `z13_fanlog.sh`. Report-only: `users` group, InputPlumber mask (red if unmasked; never touched).
+- Verified live 2026-10-11: dry runs against the real and an empty `$HOME`; `--repair` rebuilt the
+  Flatpak and came back **52 ok / 1 warn (wedged lightbar) / 0 fail**; a second run changed nothing;
+  the loader restart path exercised on its own ("up" in 1 s, one listener on :1337).
+- ✅ written, on-device check pending (2026-10-12): **"Repair install"** button in the Updates panel.
+  `install.sh` records `repo_path` (and `log`) in `install.json` (existing keys kept); the dialog shows
+  "Last install/repair: <date> (<mode>, green/red)", the plan, asks, then streams
+  `flatpak-spawn --host bash <repo>/install.sh --repair` with the final green/red line. Disabled (with
+  a tooltip) until a run has recorded `repo_path`. Needs passwordless sudo. If the repair restarts the
+  app, the window closes but the repair carries on (`tee -p`); the report stays in the printed log.
+
+### Original design (2026-10-09)
+**Ask:** after a SteamOS update, run one command instead of a Claude session to put everything back.
+It must *fetch* the latest dependencies, not bundle them (they go stale), and ask first:
+"Do you want to install the dependencies?"
+
+**Design:** `install.sh` at the repo root (bash + the existing Python pieces), idempotent, safe to
+re-run any time:
+1. **Preflight** — SteamOS version, kernel, `users` group membership, `sudo -n` works, network.
+2. **Dependencies (prompted)** — z13ctl latest via `src/installers.py install z13ctl` (sha256, backup,
+   `sudo z13ctl setup` = udev rules + `z13ctl-perms.service`, daemon units `--no-button`);
+   **Decky Loader latest** via `installers.py install decky` (official installer script, stale-loader
+   health check) — always, not only when missing (Ian, 2026-10-09); Flatpak runtime
+   `org.kde.Platform//6.10`; `pnpm`/node for the plugin build (optional: ship `decky/dist` prebuilt so a
+   plain install needs no node).
+3. **App** — `bash flatpak/build.sh` (or install a prebuilt bundle from a GitHub release of this repo
+   once we publish one), `systemctl --user enable --now z13-helper.service`.
+4. **Host bits** — from `src/` and `tooling/`: `z13-profile`, `z13-button-watcher` + `z13_cdp.py`,
+   `z13-max/balanced/cool`, `z13-restore-profile`, `boondock` → `~/.local/bin`; user units from
+   `packaging/host/systemd/user/` → `~/.config/systemd/user/` (+ `daemon-reload`, enable);
+   `/etc/systemd/system/z13-fan-resume.{sh,service}` + keep-list entry in
+   `/etc/atomic-update.conf.d/z13-bucket1.conf` (so the next update doesn't drop it); **then the Decky
+   plugin component**: `pnpm run build` (or the prebuilt `dist/`) → `~/homebrew/plugins/z13-helper`
+   (`plugin.json`, `package.json`, `main.py`, `dist/`) with the clean loader restart, and a check that
+   the backend logs "up". Order matters: Decky Loader first, plugin second, because the loader install
+   restarts `plugin_loader` and would otherwise reload the old plugin.
+5. **Verify** — the §12 checklist as code: one app instance, one button reader, daemon active, fans
+   follow the curve, brightness per device returns 0, Decky backend "up", `z13-profile restore` works.
+   Print a green/red report; non-zero exit on any red.
+6. **Repair mode** — `install.sh --repair`: same as above but skips prompts and only re-applies what
+   differs (`cmp` the installed copies against the repo, re-run `z13ctl setup --perms-only`).
+   This is the "after an OS update" button. Wire it into the Updates panel too ("Repair install").
+
+**Why not bundle:** z13ctl, Decky and the runtime move monthly; the installer records what it
+installed (`~/.config/z13-helper/install.json`: versions + date) so the Updates panel and the
+wiki can say what's on the machine.
+
+**Done when:** on a fresh Desktop session after `steamos-update`, `./install.sh --repair` brings the
+side button, fans, profiles and the QAM plugin back without any other step.
+
+---
+
+## 9b. Phase 12c — Post-SteamOS-update care inside Z13-Helper ⏳ (added 2026-10-15, Ian)
+
+Today the after-an-update routine lives in the maintainer's notes (Bucket 1 =
+always re-apply/verify, Bucket 2 = re-apply + re-test whether upstream fixed it), worked by hand. The
+Z13-*hardware* items in it belong in Z13-Helper, so anyone running SteamOS on a Z13 gets them and
+`./install.sh --repair` becomes the whole post-update step. **Rule: only what's about this laptop's
+hardware on SteamOS.** Items about one person's own setup (other apps, networking, dev toolchains,
+package-manager restores, sudoers) stay in that person's notes.
+
+**Bring in (priority order):**
+1. **amdgpu display-stability kernel args** (`dcdebugmask=0x20e10 gpu_recovery=1 cwsr_enable=0
+   sg_display=0 abmlevel=0`; wiki "HARD RULE": always re-apply, never skip). Today
+   `~/.local/bin/restore-amdgpu-grub.sh` → `update-grub` → reboot. Move the script into `tooling/`
+   + the install manifest; `install_check` compares `/proc/cmdline` and `/etc/default/grub-steamos`
+   against the wanted set and says which of "needs re-apply" / "applied, reboot pending" / "live" is
+   true. Re-apply only with sudo **and** a prompt (it edits Valve's file); never auto-reboot — the app
+   shows "reboot to finish". Use `update-grub`, never `grub-mkconfig` (wiki gotcha #1).
+2. **MT7925 Bluetooth mitigations** (the Z13's Wi-Fi/BT card): udev no-autosuspend rule,
+   `bt-mt7925-cycle.service`, `mt7925-bt-resume.service` + `.sh`, wireplumber SBC-only drop-in.
+   Into `packaging/host/` + the manifest + the atomic-update keep-list, like the fan resume hook.
+3. **"After an update" detection:** record `BUILD_ID` in `install.json`; when it changes, the app's
+   tray/Updates panel says "SteamOS updated — run Repair" (the Repair button already exists), and
+   Decky shows the same line in Game Mode.
+4. **Keep-list health:** generalise the registry one-liner (every path in
+   `/etc/atomic-update.conf.d/*.conf` exists) into `install_check`, reporting ours as red and
+   others' as info.
+5. **Bucket 2 "has upstream fixed it?" probes**, shown as info rows, never acted on:
+   MES firmware ≥ `0x7f` (then `cwsr_enable=0` can go), mt7925 BT firmware newer than `20250305`,
+   kernel ≥ 6.19 (DCN 3.5 cursor/vblank fix → start peeling `dcdebugmask` bits). Each links the
+   wiki's retirement steps.
+
+**Not here:** anything that needs a reboot to *test*, or retires a workaround by itself. The app
+reports; Ian decides. When an item moves in, its wiki row changes to "handled by Z13-Helper
+(`install.sh --repair`)" so the two lists don't drift.
+
+---
+
+## 10. Phase 14 — Feature backlog 💤 (from the 2026-10-09 research, priority order)
+0. ✅ **Crash and error log** (2026-10-12, v0.4.1): `src/app_log.py` + Help → Error log; app log, crash reports and hard-crash recovery under `~/.local/state/z13-helper/`. The diagnostics panel below can grow out of the same window.
+0b. ✅ **Fan trace** (2026-10-15): `fan_watchdog.FanTrace` logs both watchdogs (desktop app, Decky) to `fan-trace-{desktop,gamemode}.log` in the same folder — a sample every 30 s, every tick while a tach looks frozen, the last 2 min + next 1 min around any recovery; Help → Error log → Fan trace. Opened to settle whether today's frozen-tach recoveries at 8700/8800 RPM with Max Fans on are real or false positives.
+0c. **Before any public release:** logging becomes opt-in — the installer asks "Do you want to enable error logging to help with development of the app?" and the app gets a matching setting. Until then (single-user machine) everything logs.
+1. **Diagnostics panel:** kernel version (and whether ≥ 7.0 → backlight/armoury fixed), `asus::kbd_backlight`
+   present?, armoury `ppt_*` ENODEV?, lightbar responding?, asusd installed? (warn), z13ctl daemon state.
+2. **Separate keyboard / rear-light lighting** (two hidraw devices; lightctl's packet `5D BD 01 kb bar lid rear FF`).
+3. **Kernel-aware backlight:** on 7.0+ use `/sys/class/leds/asus::kbd_backlight` and follow `brightness_hw_changed` (Fn+F11).
+4. **Battery health:** `energy_full / energy_full_design` (85 % today), `charge_mode` (read-only).
+5. **Richer telemetry:** `amdgpu` `power1_input`, `k10temp` Tctl, NVMe temp, charger V/A (`ucsi_source_psy_*`), `BAT0/power_now`.
+6. **Tablet mode on folio attach/detach:** udev on `0b05:1a30` → `SW_TABLET_MODE` via uinput (z13-tablet-switch); re-apply lighting; optional profile switch.
+7. **Auto-rotation:** `iio-sensor-proxy` (installed, inactive) on `accel_3d`.
+8. **Sleep hygiene:** wake-source report, folio wake toggle, webcam reset after resume.
+9. **EPP / boost per profile** (`energy_performance_preference`; steamos-manager exposes `CpuBoost1`).
+10. **GPU performance level** (`power_dpm_force_performance_level`; needs root helper).
+11. **Panel overdrive + boot sound toggles** — z13ctl already has both commands; cheap.
+12. **VRAM / GTT info page** for local LLMs (`ttm.pages_limit` advice only; no GRUB edits from the app).
+13. **Fn+F5 cycles profiles** (6.18 keycode unverified).
+14. **Undervolt via ryzenadj** without `ryzen_smu` — experimental, concurrent SMU writers hang; last.
+
+---
+
+## 11. Upstream watch (what the Updates panel checks, and what to look for)
+Installed/pinned versions as of **2026-10-12**. "Watch for" is what would change our plan.
+
+| Component | Repo / source | Installed here | Latest | Watch for |
+|---|---|---|---|---|
+| **z13ctl** (backend) | `dahui/z13ctl` releases | **1.4.2** (daemon `--no-button`; 1.1.6 kept as rollback) | **1.4.2** (2026-10-09) | hard-lock reports after 1.4.x; asus-armoury path on Valve kernels; `subscribe` API changes (§8) |
+| Decky Loader | `SteamDeckHomebrew/decky-loader` | 3.2.10 | 3.2.10 | `@decky/api`/`@decky/ui` breaking changes; `_root` flag policy |
+| asusctl | `OpenGamingCollective/asusctl` | not installed (reference) | 6.5.0 | GZ302 Aura/LampArray support; boot-hang race with hid-asus (#718) — reason we don't run asusd |
+| InputPlumber | `ShadowBlip/InputPlumber` | masked | 0.81.0 | a fix for the phantom Xbox Elite controller would let us unmask |
+| G-Helper (UI reference) | `seerge/g-helper` | n/a | latest release | layout changes we might mirror |
+| Linux kernel (Z13 fixes) | kernel.org `releases.json` | **6.18.50-valve2** | stable | **7.0**: hid-asus 64-byte handshake (fixes the `-75` backlight init), unified `asus::kbd_backlight`, GZ302 power-limit table; **7.3**: asus-armoury fan-curve gating |
+| SteamOS | `steamos-update check` | 3.8.28 (20260922.1) | — | kernel bump to 7.x; steamos-manager device profiles |
+| z13ctl-plus | `LostVector/z13ctl-plus` (commits) | — | — | EPP/boost ideas (§10.9) |
+| z13-tablet-switch | `m4rw3r/z13-tablet-switch` (commits) | — | — | folio attach/detach handling (§10.6) |
+| lightctl | `Xcli0126/lightctl` (commits) | — | — | rear-light packet changes (§10.2) |
+| Handheld Daemon | `hhd-dev/hhd` releases | — | — | Z13 support on stock SteamOS kernels |
+
+Manual check (what the app does, by hand):
+```bash
+for r in dahui/z13ctl OpenGamingCollective/asusctl SteamDeckHomebrew/decky-loader ShadowBlip/InputPlumber seerge/g-helper; do printf '%-36s ' "$r"; curl -s https://api.github.com/repos/$r/releases/latest | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d.get("tag_name"),d.get("published_at","")[:10])'; done; z13ctl --version
+```
+
+---
+
+## 12. Verification protocol (every phase)
+0. Shortcut for most of the list: `./install.sh --repair` (or `python3 tooling/install_check.py verify`).
+0a. Logic tests (no hardware needed; also run in CI): `python3 -m pytest` from the repo root (see `tests/README.md`).
+1. `python3 -m py_compile src/*.py decky/main.py` and `pnpm run build` in `decky/`.
+2. Rebuild + restart: `bash flatpak/build.sh && systemctl --user restart z13-helper.service`.
+3. Exactly one instance: `pgrep -af '[/]app/share/z13-helper/main[.]py' | wc -l` → `1`.
+4. Fan truth after any profile/curve change: `cat /sys/class/hwmon/hwmon*/fan1_input` is non-zero when the
+   curve says ≥ 50 %; custom-curve node `pwm1_enable` = 1.
+5. Brightness: `z13ctl --device keyboard brightness low` and `… lightbar …` both return 0.
+6. Decky: backend log in `~/homebrew/logs/z13-helper/` shows "up"; `sudo ss -ltnp | grep 1337` shows one loader.
+7. Screenshot the new window(s) and compare with the G-Helper spec (§5).
+8. Update the maintainer's notes and `README.md` when user-visible behaviour changed.
+
+---
+
+## Doc map
+| File | Role |
+|---|---|
+| `CLAUDE.md` | cold-start orientation |
+| **`docs/ROADMAP.md`** | **this plan — the only forward-looking doc** |
+| `docs/plan/Phase_1…6.md` | historical record of how we got here (frozen; banner added) |
+| `docs/BUTTON-AND-INPUTPLUMBER.md` | side-button root cause + fix |
+| `docs/hardware-enablement.md` | the original enablement manual (z13ctl install rationale) |
+| `README.md` | app write-up for users (refresh after Phase 9) |

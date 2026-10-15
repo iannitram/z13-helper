@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+export PATH="$HOME/.local/bin:$PATH"
+
+echo "Recorded Companion Profile:"
+if [ -f "$HOME/.config/z13-profiles/current-profile" ]; then
+  cat "$HOME/.config/z13-profiles/current-profile"
+else
+  echo "No recorded profile file found."
+fi
+
+echo
+echo "z13ctl Hardware Status:"
+z13ctl status

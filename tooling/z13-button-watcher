@@ -1,0 +1,184 @@
+#!/usr/bin/env python3
+"""Z13 side-button watcher — controller-free Game-Mode navigation.
+
+The ASUS ROG Flow Z13 "Armoury Crate" side button (Asus WMI hotkeys, KEY_PROG3 = 202)
+is a *momentary* key: each press emits an instant DOWN+UP pulse and reports nothing about
+how long it is held (verified live 2026-07-15 — no key-up-after-hold, no autorepeat). So
+hold-duration gestures are impossible; we distinguish presses by *count* instead:
+
+    single tap  -> Quick Access Menu (right). If a side menu is already open, dismiss it
+                   (so the button can also CLOSE menus with no controller attached).
+    double tap  -> Steam menu (left): app switching / library / power.
+
+Actions fire on each press with no debounce delay, so the single-tap QAM is instant; a
+double-tap therefore flashes the QAM (first tap) and immediately flips to the Steam menu
+(second tap). Menus are opened with a pure-JS CEF call (see z13_cdp) — no input emulation,
+so it can never recreate the deck-uhid phantom controller that forced InputPlumber's mask.
+
+Scope: menus only in **Game Mode** (gamescope session). In Desktop Mode the PyQt app owns
+the button (window toggle) through its own reader; this watcher reads the device
+non-exclusively (no EVIOCGRAB), so it coexists with that reader. Its one Desktop Mode job is
+a fallback: when the app isn't running at all (so nothing else hears the button), a press
+starts z13-helper.service and opens the window.
+
+Runs as the `deck` user under systemd --user (see packaging/host/systemd/user/
+z13-button-watcher.service); `deck` has read access to the WMI hotkeys device via
+99-z13ctl.rules (the 'users' group).
+"""
+
+import glob
+import logging
+import os
+import socket
+import struct
+import subprocess
+import sys
+import threading
+import time
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import z13_cdp  # noqa: E402  (co-located; installed alongside in ~/.local/bin)
+
+# linux/input.h input_event on x86-64: (long sec, long usec, u16 type, u16 code, s32 value)
+_EVENT_FORMAT = "llHHi"
+_EVENT_SIZE = struct.calcsize(_EVENT_FORMAT)
+EV_KEY = 0x01
+KEY_PROG3 = 202  # the side button on the 'Asus WMI hotkeys' device
+
+DOUBLE_TAP_S = 0.35   # second press within this window == double tap
+CDP_TIMEOUT = 2.5     # keep short so a stalled Steam UI can't wedge the reader
+
+APP_UNIT = "z13-helper.service"
+# The app's single-instance socket (src/single_instance.py; Flatpak shares
+# $XDG_RUNTIME_DIR/app/<app id> with the host). Connectable == the app is running.
+APP_SOCKET = os.path.join(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"),
+                          "app", "io.github.iannitram.Z13Helper", "z13-helper.sock")
+APP_START_WAIT_S = 40   # the unit sleeps 10 s for the tray, then the app takes a few more
+
+logger = logging.getLogger("z13-button-watcher")
+_starting = threading.Event()
+
+
+def app_command(cmd):
+    """Send one command to the running app; False if it isn't running."""
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.settimeout(1.0)
+    try:
+        s.connect(APP_SOCKET)
+        s.sendall(cmd.encode() + b"\n")
+        return True
+    except OSError:
+        return False
+    finally:
+        s.close()
+
+
+def start_desktop_app():
+    """Desktop Mode, app not running: start its unit, then show the window once it's up."""
+    if _starting.is_set():
+        return
+    _starting.set()
+    logger.info("app not running: starting %s", APP_UNIT)
+
+    def run():
+        try:
+            subprocess.run(["systemctl", "--user", "start", "--no-block", APP_UNIT], timeout=10)
+            deadline = time.monotonic() + APP_START_WAIT_S
+            while time.monotonic() < deadline:
+                time.sleep(0.5)
+                if app_command("show"):
+                    logger.info("app up; window shown")
+                    return
+            logger.warning("app didn't come up within %ds", APP_START_WAIT_S)
+        except (OSError, subprocess.SubprocessError) as exc:
+            logger.warning("starting the app failed: %s", exc)
+        finally:
+            _starting.clear()
+
+    threading.Thread(target=run, daemon=True).start()
+
+
+def find_device():
+    """Path of the 'Asus WMI hotkeys' evdev node, or None."""
+    for name_path in glob.glob("/sys/class/input/event*/device/name"):
+        try:
+            with open(name_path) as f:
+                if "wmi hotkeys" in f.read().lower():
+                    event = os.path.basename(os.path.dirname(os.path.dirname(name_path)))
+                    path = f"/dev/input/{event}"
+                    if os.access(path, os.R_OK):
+                        return path
+        except OSError:
+            continue
+    return None
+
+
+def in_gamemode():
+    """True iff we're in the Steam gamescope (Game Mode) session.
+
+    Per-press check, deliberately not an env var: XDG_CURRENT_DESKTOP is captured once at
+    service start and goes stale across a session switch (and is even inherited as
+    'gamescope' into the desktop session here).
+    """
+    try:
+        return subprocess.run(
+            ["systemctl", "--user", "is-active", "--quiet", "gamescope-session.target"],
+            timeout=5,
+        ).returncode == 0
+    except (OSError, subprocess.SubprocessError) as exc:
+        # A hung/missing systemctl must not kill the read loop (it ran outside the try).
+        logger.warning("game-mode check failed: %s", exc)
+        return False
+
+
+def handle_press(is_double):
+    """Route a press. Desktop Mode: the app handles it; start the app if it isn't running."""
+    if not in_gamemode():
+        if not os.path.exists(APP_SOCKET) or not app_command("ping"):
+            start_desktop_app()
+        return
+    try:
+        result = z13_cdp.open_main_menu(CDP_TIMEOUT) if is_double else z13_cdp.tap(CDP_TIMEOUT)
+        logger.info("%s tap -> %s", "double" if is_double else "single", result)
+    except Exception as exc:  # noqa: BLE001 — never let a transient CEF hiccup kill the loop
+        logger.warning("menu action failed: %s", exc)
+
+
+def main():
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    device = find_device()
+    while device is None:
+        logger.warning("side-button device not found; retrying in 5s")
+        time.sleep(5)
+        device = find_device()
+    logger.info("watching %s for KEY_PROG3 (%d)", device, KEY_PROG3)
+
+    last_press = 0.0
+    while True:
+        try:
+            with open(device, "rb") as fd:
+                while True:
+                    data = fd.read(_EVENT_SIZE)
+                    if len(data) < _EVENT_SIZE:
+                        break  # device went away — fall through to reopen
+                    _, _, ev_type, code, value = struct.unpack(_EVENT_FORMAT, data)
+                    if ev_type == EV_KEY and code == KEY_PROG3 and value == 1:
+                        now = time.monotonic()
+                        is_double = (now - last_press) < DOUBLE_TAP_S
+                        last_press = now
+                        handle_press(is_double)
+        except OSError as exc:
+            logger.warning("device read error (%s); reopening in 3s", exc)
+            time.sleep(3)
+            device = find_device() or device
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        pass

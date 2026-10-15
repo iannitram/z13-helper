@@ -1,0 +1,84 @@
+import { callable } from "@decky/api";
+
+// Backend methods (main.py). Names must match the Python method names exactly.
+
+// ---- Max Fans / profiles (unchanged contract) ----
+export const getMaxFans = callable<[], boolean>("get_max_fans");
+export const setMaxFans = callable<[enabled: boolean], boolean>("set_max_fans");
+export const getProfile = callable<[], string>("get_profile");
+export const setProfile = callable<[profile: string], boolean>("set_profile");
+// App profiles (Silent / Balanced / Turbo / Boondock / custom…) from the shared
+// profiles.json; falls back to the raw platform profiles if the engine is missing.
+export const getProfiles = callable<[], { names: string[]; active: string }>("get_profiles");
+export const setAppProfile = callable<[name: string], boolean>("set_app_profile");
+
+// ---- Phase 11: power limits / battery / lighting / telemetry ----
+export type BrightnessLevel = "off" | "low" | "medium" | "high";
+
+export interface PowerState {
+  active: string;          // active profile name ("" if profiles.json is unavailable)
+  tdp_enabled: boolean;    // the active profile has a TDP override
+  pl1: number;
+  pl2: number;
+  pl3: number;
+  pl_min: number;
+  pl_max: number;
+  pl1_safe_max: number;    // above this z13ctl needs --force
+  battery_limit: number;
+  brightness: BrightnessLevel | "";
+}
+
+export interface ApplyResult {
+  ok: boolean;             // hardware write succeeded
+  saved?: boolean;         // profiles.json updated
+  message: string;
+}
+
+export interface TdpResult extends ApplyResult {
+  tdp: { pl1: number; pl2: number; pl3: number; force: boolean };
+}
+
+export interface BrightnessResult extends ApplyResult {
+  failed: string[];        // devices that didn't take the level ("keyboard" | "lightbar")
+}
+
+export interface Telemetry {
+  apu: number | null;      // degC
+  gpu: number | null;      // degC
+  fan1: number | null;     // RPM
+  fan2: number | null;     // RPM
+}
+
+export const getPowerState = callable<[], PowerState>("get_power_state");
+export const setTdp = callable<
+  [enabled: boolean, pl1: number, pl2: number, pl3: number],
+  TdpResult
+>("set_tdp");
+export const setBatteryLimit = callable<[value: number], ApplyResult & { value: number }>(
+  "set_battery_limit",
+);
+export const setBrightness = callable<[level: BrightnessLevel], BrightnessResult>("set_brightness");
+export const getTelemetry = callable<[], Telemetry>("get_telemetry");
+
+/** Same rule as main.py clamp_tdp / the desktop Fans + Power window:
+ *  sPPT >= SPL, fPPT >= sPPT, all within [min, max]. */
+export function clampTdp(
+  v: { pl1: number; pl2: number; pl3: number },
+  min: number,
+  max: number,
+): { pl1: number; pl2: number; pl3: number } {
+  const one = (x: number) => Math.max(min, Math.min(max, Math.round(x)));
+  const pl1 = one(v.pl1);
+  const pl2 = Math.max(one(v.pl2), pl1);
+  const pl3 = Math.max(one(v.pl3), pl2);
+  return { pl1, pl2, pl3 };
+}
+
+/** Run a backend call, turning a thrown error into a failed result. */
+export async function safely<T extends ApplyResult>(p: Promise<T>): Promise<T | ApplyResult> {
+  try {
+    return await p;
+  } catch (e) {
+    return { ok: false, saved: false, message: `Backend error: ${String(e)}` };
+  }
+}

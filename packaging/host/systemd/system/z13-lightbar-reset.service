@@ -1,0 +1,14 @@
+[Unit]
+Description=Z13: reset the wedged rear-lightbar USB device (0b05:18c6)
+Documentation=file:///home/deck/dev/z13-helper/docs/ROADMAP.md
+# No install section on purpose: never enabled, only started on demand
+# (`systemctl start z13-lightbar-reset.service`) by the app / z13-profile / Decky
+# after a lightbar write timed out. deck may start it via
+# /etc/polkit-1/rules.d/50-z13-lightbar-reset.rules.
+
+[Service]
+Type=oneshot
+ExecStart=/etc/systemd/system/z13-lightbar-reset.sh
+NoNewPrivileges=yes
+PrivateNetwork=yes
+ProtectHome=yes

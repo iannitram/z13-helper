@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+export PATH="$HOME/.local/bin:$PATH"
+
+z13ctl profile --set balanced
+z13ctl batterylimit --set 80
+# Per device: z13ctl aborts the whole batch if one hidraw endpoint stalls.
+for dev in keyboard lightbar; do z13ctl --device "$dev" brightness medium >/dev/null 2>&1 || true; done
+# Hardware-longevity fan curve (more aggressive than factory auto).
+# Factory tops at 40% @ 76°C — keeps chip hot. This curve hits 100% at 80°C
+# and ramps meaningfully from 40°C. Trade: more fan noise. Win: lower average
+# chip temp = longer hardware life + reduces probability of Strix Halo MES
+# firmware deadlock under sustained load.
+z13ctl fancurve --set "40:20%,50:35%,60:55%,70:75%,75:90%,80:100%,85:100%,90:100%"
+
+mkdir -p "$HOME/.config/z13-profiles"
+printf "balanced-daily-driver\n" > "$HOME/.config/z13-profiles/current-profile"
+
+echo "Z13 profile set to: Balanced Daily Driver"
+echo
+z13ctl status

@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+export PATH="$HOME/.local/bin:$PATH"
+
+z13ctl profile --set quiet
+z13ctl batterylimit --set 80
+# Per device: z13ctl aborts the whole batch if one hidraw endpoint stalls.
+for dev in keyboard lightbar; do z13ctl --device "$dev" brightness low >/dev/null 2>&1 || true; done
+
+mkdir -p "$HOME/.config/z13-profiles"
+printf "longevity-cool-stable\n" > "$HOME/.config/z13-profiles/current-profile"
+
+echo "Z13 profile set to: Longevity / Cool & Stable"
+echo
+z13ctl status

@@ -1,0 +1,131 @@
+#!/usr/bin/env bash
+set -u
+
+echo "=== Z13 Memory Check ==="
+date
+echo
+
+echo "=== Kernel and OS ==="
+uname -a
+if test -f /etc/os-release; then
+  cat /etc/os-release
+fi
+echo
+
+echo "=== Profile marker ==="
+if test -f "$HOME/.config/z13-profiles/current-profile"; then
+  cat "$HOME/.config/z13-profiles/current-profile"
+else
+  echo "No profile marker found at $HOME/.config/z13-profiles/current-profile"
+fi
+echo
+
+echo "=== RAM summary ==="
+free -h
+echo
+
+echo "=== /proc/meminfo essentials ==="
+grep -E 'MemTotal|MemAvailable|SwapTotal|SwapFree' /proc/meminfo
+echo
+
+echo "=== Active swap: swapon --show ==="
+swapon --show
+echo
+
+echo "=== Active swap: /proc/swaps ==="
+cat /proc/swaps
+echo
+
+echo "=== zramctl ==="
+zramctl
+echo
+
+echo "=== zram block devices ==="
+ls -la /sys/block | grep zram || echo "No zram entries found in /sys/block"
+echo
+
+echo "=== zram0 details if present ==="
+if test -d /sys/block/zram0; then
+  echo "--- /sys/block/zram0/disksize ---"
+  cat /sys/block/zram0/disksize
+  echo "--- /sys/block/zram0/comp_algorithm ---"
+  cat /sys/block/zram0/comp_algorithm
+  echo "--- /sys/block/zram0/mm_stat ---"
+  cat /sys/block/zram0/mm_stat
+else
+  echo "No /sys/block/zram0 directory found"
+fi
+echo
+
+echo "=== systemd zram unit files ==="
+systemctl list-unit-files | grep -i zram || echo "No zram unit files found by systemctl list-unit-files"
+echo
+
+echo "=== swap units ==="
+systemctl list-units --type=swap --all
+echo
+
+echo "=== zram-generator main config files ==="
+for path in \
+  /usr/lib/systemd/zram-generator.conf \
+  /usr/local/lib/systemd/zram-generator.conf \
+  /etc/systemd/zram-generator.conf \
+  /run/systemd/zram-generator.conf
+do
+  echo
+  echo "--- $path ---"
+  if test -f "$path"; then
+    cat "$path"
+  else
+    echo "not present"
+  fi
+done
+echo
+
+echo "=== zram-generator config directories ==="
+for dir in \
+  /usr/lib/systemd/zram-generator.conf.d \
+  /usr/local/lib/systemd/zram-generator.conf.d \
+  /etc/systemd/zram-generator.conf.d \
+  /run/systemd/zram-generator.conf.d
+do
+  echo
+  echo "--- $dir ---"
+  if test -d "$dir"; then
+    ls -la "$dir"
+  else
+    echo "not present"
+  fi
+done
+echo
+
+echo "=== Filesystems ==="
+lsblk -f
+echo
+
+echo "=== Mounts for / and /home ==="
+findmnt -no SOURCE,FSTYPE,SIZE,USED,AVAIL,TARGET /
+findmnt -no SOURCE,FSTYPE,SIZE,USED,AVAIL,TARGET /home
+echo
+
+echo "=== Disk free ==="
+df -h / /home "$HOME"
+echo
+
+echo "=== Filesystem type for HOME ==="
+stat -f -c 'Path: %n | Filesystem type: %T' "$HOME"
+echo
+
+echo "=== Btrfs command availability ==="
+command -v btrfs || echo "btrfs command not found"
+if command -v btrfs >/dev/null 2>&1; then
+  btrfs --version
+fi
+echo
+
+echo "=== VM tuning ==="
+sysctl vm.swappiness
+sysctl vm.page-cluster
+echo
+
+echo "=== Done ==="

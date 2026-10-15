@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# z13-restore-profile — re-apply the saved Z13 profile (battery + fans + brightness)
+# on user-session start. Reads ~/.config/z13-profiles/current-profile and dispatches
+# to the matching z13-{max,balanced,cool} script.
+#
+# Triggered by systemd user service z13-restore-profile.service. Runs in BOTH
+# desktop mode AND game mode because user-systemd default.target is reached in both.
+#
+# Why this exists: z13ctl fancurve writes are volatile — they don't survive a reboot.
+# Without this restorer, every reboot drops fans back to factory auto curve which
+# tops at 40% @ 76°C (way too lazy for sustained workloads on Strix Halo).
+
+set -euo pipefail
+export PATH="$HOME/.local/bin:$PATH"
+
+PROFILE_FILE="$HOME/.config/z13-profiles/current-profile"
+
+# New path (2026-10-09): the Z13-Helper profile engine. When the app's
+# profile store exists, re-apply its active profile (base profile, TDP, fan
+# curve, brightness, battery limit; Max Fans stays pinned if ON) and stop.
+# Hooks (boondock) are skipped at login on purpose. Falls through to the old
+# z13-* scripts if the engine or its store is missing.
+if [[ -x "$HOME/.local/bin/z13-profile" && -f "$HOME/.config/z13-helper/profiles.json" ]]; then
+    exec "$HOME/.local/bin/z13-profile" restore
+fi
+
+if [[ ! -f "$PROFILE_FILE" ]]; then
+    # No saved profile yet — pick the safe default
+    "$HOME/.local/bin/z13-balanced"
+    profile=""
+else
+    profile=$(tr -d '[:space:]' < "$PROFILE_FILE")
+fi
+
+case "$profile" in
+    "")
+        ;;  # no saved profile: balanced already applied above
+    maximum-throughput)
+        "$HOME/.local/bin/z13-max"
+        ;;
+    balanced-daily-driver)
+        "$HOME/.local/bin/z13-balanced"
+        ;;
+    longevity-cool-stable)
+        "$HOME/.local/bin/z13-cool"
+        ;;
+    *)
+        # Unknown value — log and fall back to balanced
+        echo "z13-restore-profile: unknown profile '$profile' in $PROFILE_FILE; falling back to balanced" >&2
+        "$HOME/.local/bin/z13-balanced"
+        ;;
+esac
+
+# Max Fans wins over the profile's curve (added 2026-10-01).
+# The Z13-Helper app / Decky plugin keep their Max Fans switch in max-fans.json.
+# Their watchdogs only re-pin 100% when the curve falls back to firmware AUTO, not when
+# a z13-* script writes a different custom curve, so without this step a reboot left the
+# button reading ON while the fans ran the profile curve. See kb-z13-controller-app.
+MAXF="$HOME/.config/z13-helper/max-fans.json"
+if grep -q '"enabled": *true' "$MAXF" 2>/dev/null; then
+    z13ctl fancurve --set "20:100%,30:100%,40:100%,50:100%,60:100%,70:100%,80:100%,90:100%" \
+        && echo "z13-restore-profile: Max Fans is ON, re-applied the 100% curve"
+fi

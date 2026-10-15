@@ -1,0 +1,12 @@
+// Z13-Helper: let deck start the lightbar USB reset without a password.
+// Only `start`, only z13-lightbar-reset.service; every other systemd action
+// (and every other user) falls through to polkit's normal rules.
+// Installed by install.sh to /etc/polkit-1/rules.d/ (ROADMAP §3).
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.freedesktop.systemd1.manage-units" &&
+        action.lookup("unit") == "z13-lightbar-reset.service" &&
+        action.lookup("verb") == "start" &&
+        subject.user == "deck") {
+        return polkit.Result.YES;
+    }
+});
