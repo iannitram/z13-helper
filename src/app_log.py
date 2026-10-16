@@ -61,6 +61,7 @@ MEMORY_PREFIX = "(memory) "     # list_crash_reports() key of a report kept in m
 
 
 def log_path():
+    """Path to the main app.log file under LOG_DIR."""
     return os.path.join(LOG_DIR, LOG_NAME)
 
 
@@ -71,10 +72,12 @@ def fan_trace_path(side):
 
 
 def crash_dir():
+    """Path to the crashes/ subdirectory under LOG_DIR."""
     return os.path.join(LOG_DIR, CRASH_SUBDIR)
 
 
 def fatal_path():
+    """Path to fatal.log under LOG_DIR, where faulthandler writes during this run."""
     return os.path.join(LOG_DIR, FATAL_NAME)
 
 
@@ -84,15 +87,23 @@ class RingHandler(logging.Handler):
     listener must hand off through a signal (queued across threads)."""
 
     def __init__(self, size=RING_SIZE):
+        """Create a RingHandler logging at DEBUG level with a ring buffer of *size*
+        tuples (levelno, created, text), an empty listener list, and a level counter."""
         super().__init__(logging.DEBUG)
         self.records = collections.deque(maxlen=size)   # (levelno, created, text)
         self._listeners = []
         self.counts = collections.Counter()              # levelname -> count this run
 
     def add_listener(self, fn):
+        """Register *fn* to be called with each new (levelno, created, text) tuple.
+        Listeners run on the logging thread; a Qt listener must hand off via a signal."""
         self._listeners.append(fn)
 
     def emit(self, record):
+        """Format *record*, append the result to the ring buffer, increment its level
+        counter, and call every listener with the new (levelno, created, text) tuple.
+        Never raises: formatting errors call ``handleError``, broken listeners are
+        silently skipped."""
         try:
             text = self.format(record)
         except Exception:  # noqa: BLE001
@@ -108,6 +119,8 @@ class RingHandler(logging.Handler):
                 pass
 
     def lines(self, min_level=logging.DEBUG):
+        """Return every stored formatted log line whose level is at least *min_level*,
+        in insertion order."""
         return [t for lv, _c, t in list(self.records) if lv >= min_level]
 
 
@@ -224,6 +237,10 @@ def _open_files():
 
 
 def _open_fatal():
+    """Open fatal.log for writing and enable faulthandler to write to it.
+    The file stays open for the process lifetime because faulthandler writes
+    from a signal handler and cannot open files itself. Silently ignores
+    OSError (e.g. disk full, permission denied)."""
     try:
         # Opened for the life of the process: faulthandler writes to the fd
         # from a signal handler, so it can't open anything itself.
