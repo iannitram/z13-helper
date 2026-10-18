@@ -238,7 +238,7 @@ def _open_files():
 
 def _open_fatal():
     """Open fatal.log for writing and enable faulthandler to write to it.
-    The file stays open for the process lifetime because faulthandler writes
+    The file stays open until shutdown() closes it, because faulthandler writes
     from a signal handler and cannot open files itself. Silently ignores
     OSError (e.g. disk full, permission denied)."""
     try:
