@@ -32,6 +32,8 @@ tests can use it. Crash reports never run subprocesses (the crash path must not
 hang).
 """
 
+from __future__ import annotations
+
 import collections
 import faulthandler
 import logging
@@ -42,6 +44,9 @@ import sys
 import threading
 import time
 import traceback
+import types
+from collections.abc import Callable
+from typing import List, Tuple
 
 LOG_DIR = os.path.expanduser("~/.local/state/z13-helper")
 LOG_NAME = "app.log"
@@ -60,21 +65,24 @@ _state = {"app_version": "?", "ring": None, "fatal_file": None, "crash_listeners
 MEMORY_PREFIX = "(memory) "     # list_crash_reports() key of a report kept in memory only
 
 
-def log_path():
+def log_path() -> str:
+    """Path to the main app.log file under LOG_DIR."""
     return os.path.join(LOG_DIR, LOG_NAME)
 
 
-def fan_trace_path(side):
+def fan_trace_path(side: str) -> str:
     """The fan watchdog's trace: side "desktop" (this app) or "gamemode" (the
     Decky plugin, which writes it as root and hands it to deck)."""
     return os.path.join(LOG_DIR, f"fan-trace-{side}.log")
 
 
-def crash_dir():
+def crash_dir() -> str:
+    """Path to the crashes/ subdirectory under LOG_DIR."""
     return os.path.join(LOG_DIR, CRASH_SUBDIR)
 
 
-def fatal_path():
+def fatal_path() -> str:
+    """Path to fatal.log under LOG_DIR, where faulthandler writes during this run."""
     return os.path.join(LOG_DIR, FATAL_NAME)
 
 
@@ -83,16 +91,24 @@ class RingHandler(logging.Handler):
     listeners about each new one. Listeners run on the logging thread: a Qt
     listener must hand off through a signal (queued across threads)."""
 
-    def __init__(self, size=RING_SIZE):
+    def __init__(self, size: int = RING_SIZE) -> None:
+        """Create a RingHandler logging at DEBUG level with a ring buffer of *size*
+        tuples (levelno, created, text), an empty listener list, and a level counter."""
         super().__init__(logging.DEBUG)
         self.records = collections.deque(maxlen=size)   # (levelno, created, text)
         self._listeners = []
         self.counts = collections.Counter()              # levelname -> count this run
 
-    def add_listener(self, fn):
+    def add_listener(self, fn: Callable[[tuple[int, float, str]], None]) -> None:
+        """Register *fn* to be called with each new (levelno, created, text) tuple.
+        Listeners run on the logging thread; a Qt listener must hand off via a signal."""
         self._listeners.append(fn)
 
-    def emit(self, record):
+    def emit(self, record: logging.LogRecord) -> None:
+        """Format *record*, append the result to the ring buffer, increment its level
+        counter, and call every listener with the new (levelno, created, text) tuple.
+        Never raises: formatting errors call ``handleError``, broken listeners are
+        silently skipped."""
         try:
             text = self.format(record)
         except Exception:  # noqa: BLE001
@@ -107,27 +123,29 @@ class RingHandler(logging.Handler):
             except Exception:  # noqa: BLE001  (a broken listener must not break logging)
                 pass
 
-    def lines(self, min_level=logging.DEBUG):
+    def lines(self, min_level=logging.DEBUG) -> List[str]:
+        """Return every stored formatted log line whose level is at least *min_level*,
+        in insertion order."""
         return [t for lv, _c, t in list(self.records) if lv >= min_level]
 
 
-def ring():
+def ring() -> RingHandler | None:
     """The in-memory handler set up by setup(), or None."""
     return _state["ring"]
 
 
-def set_version(v):
+def set_version(v: str) -> None:
     """setup() runs before the UI module (which owns APP_VERSION) is imported."""
     _state["app_version"] = v
     logging.getLogger("z13").info("App version %s", v)
 
 
-def previous_fatal():
+def previous_fatal() -> str | None:
     """Path of the hard-crash report recovered at startup, or None."""
     return _state["previous_fatal"]
 
 
-def on_crash(fn):
+def on_crash(fn: Callable[[str | None, str], None]) -> None:
     """Call fn(report_path, summary) after each crash report is written.
     Runs on the crashing thread; Qt listeners must hand off via a signal."""
     _state["crash_listeners"].append(fn)
@@ -137,12 +155,12 @@ def on_crash(fn):
 # setup
 # ----------------------------------------------------------------------
 
-def to_disk():
+def to_disk() -> bool:
     """True while logs and crash reports are written to LOG_DIR."""
     return _state["to_disk"]
 
 
-def setup(app_version="?", level=logging.INFO, stderr=True, to_disk=True):
+def setup(app_version: str = "?", level: int = logging.INFO, stderr: bool = True, to_disk: bool = True) -> RingHandler:
     """Install the handlers and hooks. Safe to call once per process; returns
     the RingHandler. Never raises: a read-only disk still gets the in-memory
     log and the stderr copy. to_disk=False (logging opted out) writes nothing."""
@@ -186,7 +204,7 @@ def setup(app_version="?", level=logging.INFO, stderr=True, to_disk=True):
     return rh
 
 
-def set_to_disk(enabled):
+def set_to_disk(enabled: bool) -> None:
     """Turn writing to LOG_DIR on or off for the rest of this run (the Error
     log checkbox). Files already on disk are left alone."""
     enabled = bool(enabled)
@@ -208,7 +226,7 @@ def set_to_disk(enabled):
         _stderr_fatal()
 
 
-def _open_files():
+def _open_files() -> bool:
     """Add the rotating app.log handler; False if the disk isn't writable."""
     try:
         os.makedirs(crash_dir(), exist_ok=True)
@@ -223,7 +241,11 @@ def _open_files():
     return True
 
 
-def _open_fatal():
+def _open_fatal() -> None:
+    """Open fatal.log for writing and enable faulthandler to write to it.
+    The file stays open until shutdown() closes it, because faulthandler writes
+    from a signal handler and cannot open files itself. Silently ignores
+    OSError (e.g. disk full, permission denied)."""
     try:
         # Opened for the life of the process: faulthandler writes to the fd
         # from a signal handler, so it can't open anything itself.
@@ -233,7 +255,7 @@ def _open_fatal():
         pass
 
 
-def _stderr_fatal():
+def _stderr_fatal() -> None:
     """Logging off: a hard crash's traceback still reaches the journal."""
     try:
         faulthandler.enable(file=sys.__stderr__, all_threads=True)
@@ -241,7 +263,7 @@ def _stderr_fatal():
         pass
 
 
-def shutdown():
+def shutdown() -> None:
     """Clean exit: an empty fatal.log means 'no hard crash'; remove it."""
     f = _state.get("fatal_file")
     if f:
@@ -255,7 +277,7 @@ def shutdown():
         _state["fatal_file"] = None
 
 
-def _recover_previous_fatal():
+def _recover_previous_fatal() -> str | None:
     """fatal.log with content = the last run died on a fatal signal. Move it into
     crashes/ with a header and return the new path."""
     p = fatal_path()
@@ -284,21 +306,23 @@ def _recover_previous_fatal():
 # hooks + reports
 # ----------------------------------------------------------------------
 
-def _excepthook(exc_type, exc, tb):
+def _excepthook(exc_type: type[BaseException], exc: BaseException,
+                tb: types.TracebackType | None) -> None:
     if issubclass(exc_type, KeyboardInterrupt):
         sys.__excepthook__(exc_type, exc, tb)
         return
     report_exception(exc_type, exc, tb, where="main thread")
 
 
-def _thread_excepthook(args):
+def _thread_excepthook(args: threading.ExceptHookArgs) -> None:
     if args.exc_type is SystemExit:
         return
     name = args.thread.name if args.thread else "unknown thread"
     report_exception(args.exc_type, args.exc_value, args.exc_traceback, where=f"thread {name}")
 
 
-def report_exception(exc_type, exc, tb, where="?"):
+def report_exception(exc_type: type[BaseException], exc: BaseException,
+                     tb: types.TracebackType | None, where: str = "?") -> str | None:
     """Log an uncaught exception, write a crash report, notify listeners.
     Returns the report path (None if it couldn't be written)."""
     summary = "".join(traceback.format_exception_only(exc_type, exc)).strip()
@@ -313,7 +337,8 @@ def report_exception(exc_type, exc, tb, where="?"):
     return path
 
 
-def write_crash_report(exc_type, exc, tb, where="?"):
+def write_crash_report(exc_type: type[BaseException], exc: BaseException,
+                       tb: types.TracebackType | None, where: str = "?") -> str | None:
     """Write the report to crashes/ and return its path; with logging off, keep
     it in memory under a MEMORY_PREFIX key instead (None if it couldn't be kept)."""
     stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -339,7 +364,7 @@ def write_crash_report(exc_type, exc, tb, where="?"):
     return path
 
 
-def _environment():
+def _environment() -> str:
     osr = {}
     try:
         with open("/run/host/os-release" if os.path.exists("/run/host/os-release") else "/etc/os-release") as f:
@@ -355,7 +380,7 @@ def _environment():
             f"Python: {platform.python_version()}")
 
 
-def _write_atomic(path, text):
+def _write_atomic(path: str, text: str) -> bool:
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         tmp = f"{path}.{os.getpid()}.tmp"
@@ -367,7 +392,7 @@ def _write_atomic(path, text):
         return False
 
 
-def _prune_crashes():
+def _prune_crashes() -> None:
     reports = list_crash_reports()
     for p, _m, _s in reports[MAX_CRASH_REPORTS:]:
         try:
@@ -380,7 +405,7 @@ def _prune_crashes():
 # reading (the log window, install_check)
 # ----------------------------------------------------------------------
 
-def list_crash_reports():
+def list_crash_reports() -> List[Tuple[str, float, str]]:
     """[(path, mtime, one-line summary)], newest first. Reports kept in memory
     (logging off) are listed too, keyed MEMORY_PREFIX + name."""
     out = [(k, m, _summary_of(k, t.splitlines())) for k, m, t in _state["memory_reports"]]
@@ -401,7 +426,7 @@ def list_crash_reports():
     return out
 
 
-def _summary(path):
+def _summary(path: str) -> str:
     """The exception line of a crash report, or the first faulthandler line."""
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
@@ -411,7 +436,7 @@ def _summary(path):
     return _summary_of(path, lines)
 
 
-def _summary_of(path, lines):
+def _summary_of(path: str, lines: List[str]) -> str:
     if os.path.basename(path).startswith("fatal-"):
         for ln in lines:
             if ln.startswith("Fatal Python error"):
@@ -430,7 +455,7 @@ def _summary_of(path, lines):
     return last
 
 
-def read_text(path, max_bytes=512 * 1024):
+def read_text(path: str, max_bytes: int = 512 * 1024) -> str:
     """A file's text (the tail, if it's large), or a report kept in memory."""
     for key, _m, text in _state["memory_reports"]:
         if key == path:
@@ -447,7 +472,7 @@ def read_text(path, max_bytes=512 * 1024):
         return f"(can't read {path}: {e})"
 
 
-def clear_crash_reports():
+def clear_crash_reports() -> int:
     n = len(_state["memory_reports"])
     _state["memory_reports"].clear()
     for p, _m, _s in list_crash_reports():
@@ -463,7 +488,7 @@ def clear_crash_reports():
 # Qt
 # ----------------------------------------------------------------------
 
-def install_qt_handler():
+def install_qt_handler() -> None:
     """Route Qt's own qDebug/qWarning/qCritical/qFatal into logging."""
     from PyQt6.QtCore import QtMsgType, qInstallMessageHandler
 
