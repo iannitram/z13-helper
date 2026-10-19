@@ -9,6 +9,12 @@ the device but not yet verified on the Z13. Plan and status: `docs/ROADMAP.md`.
 ## Unreleased
 
 ### Added
+- **Fan watchdog covers firmware auto mode** (2026-10-19). In auto mode (no custom curve, Max
+  Fans off) the firmware once left both fans at 0 RPM while the APU climbed 69 → 75 °C. When the
+  APU is at 65 °C or more and both fans read 0 RPM for 20 s, the watchdog (desktop and Decky) now
+  rewrites the platform profile, re-applies the active profile's TDP (the rewrite drops it) and
+  resets the curve (`tdp --set` re-applies z13ctl's stored one). Profile hooks are not re-run, so
+  Boondock's restore snapshot survives. At most once every 2 min. On-device check pending.
 - **Logging is opt-in** (ROADMAP §10 0c). A full `./install.sh` asks once "Do you want to enable
   error logging to help with development of the app?" (`--yes` answers yes, `--repair` keeps the
   recorded answer, `--dry-run` shows the question) and records `"logging": true|false` in

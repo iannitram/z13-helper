@@ -115,6 +115,7 @@ class DashboardUI(QMainWindow):
         self._fan_watchdog = FanWatchdog(sensors, controller,
                                          max_fans_on=max_fans_state.is_enabled,
                                          may_act=lambda: not self.control._pending,
+                                         active_tdp=lambda: self.control.active().get("tdp"),
                                          trace=self._make_fan_trace())
         self._fans_window = None
         self._updates_dialog = None

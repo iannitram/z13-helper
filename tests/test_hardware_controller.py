@@ -152,3 +152,13 @@ def test_run_command_missing_binary(fake_host):
     fake_host.fail("z13ctl", rc=127, out="No such file or directory: 'z13ctl'")
     with pytest.raises(RuntimeError, match="not found"):
         HardwareController(z13ctl_path="z13ctl")._run_command(["status"])
+
+
+def test_apply_tdp_takes_a_profiles_tdp_dict(fake_host):
+    c = HardwareController(z13ctl_path="z13ctl")
+    c.apply_tdp({"pl1": 20, "pl2": 30, "pl3": 40, "force": False})
+    c.apply_tdp({"pl1": 80, "pl2": 85, "pl3": 90, "force": True})
+    assert fake_host.argvs == [
+        ["z13ctl", "tdp", "--set", "20", "--pl2", "30", "--pl3", "40"],
+        ["z13ctl", "tdp", "--set", "80", "--pl2", "85", "--pl3", "90", "--force"],
+    ]

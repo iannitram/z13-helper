@@ -16,6 +16,15 @@ Two failure modes, both seen live on this machine:
    curve says the fans should be spinning and both read 0 RPM for a few
    ticks, the watchdog rewrites the profile and then the curve.
 
+4. **Auto mode stalled.** With no custom curve (pwmN_enable 2, Max Fans
+   off) the firmware itself can leave both fans at 0 RPM while the APU heats
+   up (2026-10-19: 69 -> 75 C in 30 s on the quiet profile). Only a profile
+   rewrite revived them. That rewrite also drops a custom TDP back to the
+   firmware's limits, so the active profile's TDP is re-applied after it,
+   followed by a curve reset (`tdp --set` re-applies z13ctl's last stored
+   curve). Profile hooks (boondock on/off) are NOT re-run: re-running
+   `boondock on` would overwrite its restore snapshot.
+
 This is the only copy. The desktop app ticks it from its telemetry timer;
 the Decky plugin ticks it in Game Mode from a copy installed in its
 py_modules/ (docs/adr/0001-decky-imports-root-owned-copies.md). Each
@@ -48,6 +57,13 @@ STALL_HYSTERESIS_C = 3
 #    +-100 almost every tick, so ONE reading bit-identical for this long means
 #    that tach is stale, not the fan steady. Per fan, since one can stall alone.
 FROZEN_S = 90
+# 4. Auto-mode stall (see the module docstring). Deliberately conservative:
+#    the firmware may idle the fans when cool, so only act when the APU is hot
+#    AND both fans have read 0 RPM for AUTO_STALL_S straight, and at most once
+#    per AUTO_RETRY_S (each recovery is a 5-10 s fan dip and a TDP re-write).
+AUTO_STALL_TEMP_C = 65
+AUTO_STALL_S = 20
+AUTO_RETRY_S = 120
 
 
 class FanWatchdog:
@@ -55,38 +71,42 @@ class FanWatchdog:
 
     sensors      a SensorReader (or anything with its fan/curve/temp reads).
     fans         the fan commands: rewrite_profile(), set_fans_max(),
-                 set_fancurve_pwm(points). Each raises on failure.
+                 set_fancurve_pwm(points), and for auto-mode recovery
+                 apply_tdp(tdp) (a profiles.json tdp dict) and
+                 reset_fancurve(). Each raises on failure.
     max_fans_on  () -> bool: is Max Fans on right now (re-read every tick).
     may_act      () -> bool: asked only just before a fan recovery. When it
                  says no, nothing is written and the retry gap doesn't start,
                  so the recovery happens on the first tick it says yes.
+    active_tdp   () -> profiles.json tdp dict or None: the active profile's
+                 TDP, re-applied after an auto-mode profile rewrite.
     clock        monotonic seconds; injectable for tests.
     trace        optional FanTrace: gets every tick's readings and decisions.
     """
 
     def __init__(self, sensors, fans, *, max_fans_on, may_act=lambda: True,
-                 clock=time.monotonic, trace=None):
+                 active_tdp=lambda: None, clock=time.monotonic, trace=None):
         self.sensors = sensors
         self.fans = fans
         self._max_fans_on = max_fans_on
         self._may_act = may_act
+        self._active_tdp = active_tdp
         self._clock = clock
         self.trace = trace
         self._stall_ticks = 0
         self._last_reapply = float("-inf")
+        self._last_auto = float("-inf")
+        self._auto_zero_since = None   # when both fans first read 0 RPM, hot, in auto
         self._last_rpm = [None, None]
         now = clock()
         self._rpm_changed_at = [now, now]
         self._holding = False   # may_act refused the last due recovery
         self._tick = None       # this tick's readings + events, for the trace
 
-    def _throttled(self) -> bool:
-        return self._clock() - self._last_reapply < RETRY_S
-
-    def _ready(self, why: str) -> bool:
+    def _ready(self, why: str, last=None, gap=RETRY_S) -> bool:
         """Past the retry gap and allowed to write. Checked in that order so the
         (possibly costly) may_act check runs only when a recovery is due."""
-        if self._throttled():
+        if self._clock() - (self._last_reapply if last is None else last) < gap:
             return False
         if not self._may_act():
             if not self._holding:
@@ -143,6 +163,11 @@ class FanWatchdog:
             msg = self._recover(True)
             return msg.replace("Fans were stalled at 0 RPM;", "Max Fans re-applied after a profile change;")
 
+        if enabled is False and not max_on:
+            self._stall_ticks = 0
+            return self._check_auto(now)
+        self._auto_zero_since = None
+
         # 2. Stalled curve: custom mode claims active, the curve says >0 at the
         #    current temperature, but both fans read 0 RPM.
         if enabled is not True:
@@ -189,6 +214,47 @@ class FanWatchdog:
         self._stall_ticks = 0
         self._event("ACT stall: both fans 0 RPM")
         return self._recover(max_on)
+
+    def _check_auto(self, now) -> str | None:
+        """4. Firmware auto mode with both fans stopped while the APU is hot."""
+        t = self._tick
+        temp = t["temp"] = self.sensors.get_apu_temp()
+        fan1, fan2 = t["rpm"] = self.sensors.get_fan_speeds()
+        if temp is None or fan1 is None or fan2 is None or temp < AUTO_STALL_TEMP_C \
+                or fan1 != 0 or fan2 != 0:
+            # Any spin, a cool APU or a sensor dropout breaks the streak.
+            self._auto_zero_since = None
+            self._holding = False
+            return None
+        if self._auto_zero_since is None:
+            self._auto_zero_since = now
+        stalled_s = now - self._auto_zero_since
+        t["stall"] = int(stalled_s)
+        if stalled_s < AUTO_STALL_S or not self._ready("auto stall", self._last_auto, AUTO_RETRY_S):
+            return None
+        self._last_auto = now
+        self._auto_zero_since = None
+        self._event(f"ACT auto stall: both fans 0 RPM at {temp:.0f} C for {stalled_s:.0f}s")
+        return self._recover_auto(temp)
+
+    def _recover_auto(self, temp) -> str:
+        """Rewrite the platform profile, then put the active profile's TDP back
+        (the rewrite dropped it to the firmware's limits) and reset the curve
+        (`tdp --set` re-applies z13ctl's last stored curve). No profile hooks."""
+        head = f"Fans stopped in auto mode at {temp:.0f} °C; profile rewritten"
+        try:
+            self.fans.rewrite_profile()
+        except Exception as e:  # noqa: BLE001
+            return f"Fan recovery failed: {e}"
+        try:
+            tdp = self._active_tdp()
+            if not tdp:
+                return head
+            self.fans.apply_tdp(tdp)
+            self.fans.reset_fancurve()
+            return f"{head}, TDP {tdp['pl1']}/{tdp['pl2']}/{tdp['pl3']} W re-applied"
+        except Exception as e:  # noqa: BLE001
+            return f"{head}, but TDP re-apply failed: {e}"
 
     def _recover(self, max_on: bool) -> str:
         """Rewrite the platform profile (same value) and then the curve."""

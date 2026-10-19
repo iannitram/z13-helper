@@ -611,8 +611,8 @@ class DeckyFans:
     before a bare curve write (the watchdog reports the error).
     """
 
-    def _z13ctl(self, *args):
-        rc, out = _run([Z13CTL, *args])
+    def _z13ctl(self, *args, as_deck=False):
+        rc, out = _run([Z13CTL, *args], as_deck=as_deck)
         if rc != 0:
             raise RuntimeError(f"z13ctl {' '.join(args)} failed (rc={rc}): {out}")
 
@@ -624,6 +624,13 @@ class DeckyFans:
 
     def set_fancurve_pwm(self, points):
         self._z13ctl("fancurve", "--set", ",".join(f"{int(t)}:{int(p)}" for t, p in points))
+
+    def apply_tdp(self, tdp):
+        # As deck, like apply_tdp() (the TDP slider's write).
+        self._z13ctl(*tdp_argv(tdp)[1:], as_deck=True)
+
+    def reset_fancurve(self):
+        self._z13ctl("fancurve", "--reset")
 
 
 def _desktop_session_active():
@@ -717,7 +724,9 @@ def make_fan_trace(path=None, owner=DECK_IDS):
 def make_fan_watchdog(sensors=None, fans=None, may_act=None, clock=time.monotonic, trace=None):
     return FanWatchdog(sensors or _sensors, fans or DeckyFans(),
                        max_fans_on=lambda: bool(_load_max_fans().get("enabled", False)),
-                       may_act=may_act or _in_gamemode, clock=clock, trace=trace)
+                       may_act=may_act or _in_gamemode,
+                       active_tdp=lambda: (active_profile(_read_store()) or {}).get("tdp"),
+                       clock=clock, trace=trace)
 
 
 async def fan_watchdog_tick(watchdog):
