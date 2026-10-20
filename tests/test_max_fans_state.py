@@ -87,7 +87,7 @@ def test_migrate_legacy_seeds_once(state_path):
 
 def test_migrate_legacy_from_empty_config(state_path):
     mfs.migrate_legacy({})
-    assert mfs.load() == {"enabled": False, "saved_curve": None}
+    assert mfs.load() == {"enabled": False}   # no snapshot key = unknown, not firmware auto
 
 
 def test_profiles_and_max_fans_state_share_the_file(profiles_env):

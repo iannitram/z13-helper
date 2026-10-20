@@ -260,10 +260,10 @@ def _load_max_fans():
         except (OSError, ValueError):
             pass
         legacy, old = _shared_config(), _load_state()
-        state = {
-            "enabled": bool(legacy.get("fans_max", old.get("max_fans", False))),
-            "saved_curve": legacy.get("fan_curve_saved") or old.get("saved_curve"),
-        }
+        state = {"enabled": bool(legacy.get("fans_max", old.get("max_fans", False)))}
+        seeded = legacy.get("fan_curve_saved") or old.get("saved_curve")
+        if seeded is not None:   # absent = unknown, null = firmware auto
+            state["saved_curve"] = seeded
         _save_max_fans(state)
         return state
 
@@ -711,12 +711,13 @@ def max_fans_off_argv(state, store):
     """z13ctl argv for Max Fans OFF; same order as the desktop app's off()
     (src/dashboard_ui.py): the saved snapshot ([temp, pwm]), else the ACTIVE
     profile's curve ([temp, pct]), else firmware auto. saved_curve null means
-    "the profile had no curve" (profiles.apply), so it must not fall back to a
-    made-up custom curve."""
-    saved = (state or {}).get("saved_curve")
+    "the profile had no curve" (profiles.apply), so it is firmware auto and must
+    not fall back to a curve; a missing key (unknown) takes the profile fallback."""
+    state = state or {}
+    saved = state.get("saved_curve")
     if saved:
         return [Z13CTL, "fancurve", "--set", ",".join(f"{int(t)}:{int(p)}" for t, p in saved)]
-    curve = (active_profile(store) or {}).get("fan_curve")
+    curve = None if ("saved_curve" in state and saved is None) else (active_profile(store) or {}).get("fan_curve")
     if curve:
         return [Z13CTL, "fancurve", "--set", ",".join(f"{int(t)}:{int(p)}%" for t, p in curve)]
     return [Z13CTL, "fancurve", "--reset"]

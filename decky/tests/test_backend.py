@@ -499,8 +499,12 @@ class MaxFansOffTest(unittest.TestCase):
         argv = m.max_fans_off_argv({"saved_curve": [[40, 51], [50, 102]]}, _store("Balanced"))
         self.assertEqual(argv[-3:], ["fancurve", "--set", "40:51,50:102"])
 
-    def test_null_saved_uses_active_profile_curve_in_percent(self):
+    def test_null_saved_is_firmware_auto_even_with_a_profile_curve(self):
         argv = m.max_fans_off_argv({"enabled": True, "saved_curve": None}, _store("Balanced"))
+        self.assertEqual(argv[-2:], ["fancurve", "--reset"])
+
+    def test_missing_saved_uses_active_profile_curve_in_percent(self):
+        argv = m.max_fans_off_argv({"enabled": True}, _store("Balanced"))
         self.assertEqual(argv[-2], "--set")
         self.assertTrue(argv[-1].startswith("40:20%,50:35%"))
 
