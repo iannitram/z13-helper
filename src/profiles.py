@@ -331,25 +331,14 @@ def _keep_aside(copy):
         os.replace(STORE_PATH, dest)
 
 
-def load_store(create=True):
-    """The store dict; creates the default one on first use.
-
-    A store that parses but has the wrong shape is handled like a corrupt
-    one: the original is kept as profiles.json.corrupt-<time>. If some
-    profiles survive validation they are kept and the rest dropped; if none
-    do, the defaults replace it.
-    """
+def _repair_or_seed(create):
+    """Back up and rewrite a store that needs it. Caller holds the store lock."""
     raw = _read_json(STORE_PATH)
     store, changed = _sanitize_store(raw)
     if store is not None:
         if changed and create:
             _keep_aside(copy=True)
             _write_json(STORE_PATH, store)
-        # Keys added after a store was seeded: built-ins take the shipped value.
-        shipped = {p["name"]: p for p in default_profiles()}
-        for p in store["profiles"]:
-            if "max_fans" not in p:
-                p["max_fans"] = bool(p.get("builtin") and shipped.get(p["name"], {}).get("max_fans"))
         return store
     store = {"version": 1, "active": _legacy_active() or "Balanced",
              "profiles": default_profiles()}
@@ -359,6 +348,36 @@ def load_store(create=True):
             # replacing the user's custom profiles with the defaults.
             _keep_aside(copy=False)
         _write_json(STORE_PATH, store)
+    return store
+
+
+def load_store(create=True):
+    """The store dict; creates the default one on first use.
+
+    A store that parses but has the wrong shape is handled like a corrupt
+    one: the original is kept as profiles.json.corrupt-<time>. If some
+    profiles survive validation they are kept and the rest dropped; if none
+    do, the defaults replace it.
+
+    A read that needs no repair takes no lock. Anything that writes (repair or
+    first-run seed) takes the store lock and re-reads under it, so a concurrent
+    loader or writer that got there first is never overwritten from a stale
+    snapshot and the backup is made once.
+    """
+    raw = _read_json(STORE_PATH)
+    store, changed = _sanitize_store(raw)
+    if store is None or (changed and create):
+        if create:
+            with store_lock():
+                store = _repair_or_seed(create)
+        elif store is None:
+            store = {"version": 1, "active": _legacy_active() or "Balanced",
+                     "profiles": default_profiles()}
+    # Keys added after a store was seeded: built-ins take the shipped value.
+    shipped = {p["name"]: p for p in default_profiles()}
+    for p in store["profiles"]:
+        if "max_fans" not in p:
+            p["max_fans"] = bool(p.get("builtin") and shipped.get(p["name"], {}).get("max_fans"))
     return store
 
 
