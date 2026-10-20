@@ -372,7 +372,7 @@ Z13-Helper is a thin layer over other people's work. Thank you to all of them.
 
 **Tooling**
 - **[pytest](https://docs.pytest.org/)** for the test suite.
-- Written by Ian Martin with a lot of help from
+- Written by iannitram with a lot of help from
   **[Claude Code](https://claude.com/claude-code)** (Anthropic).
 
 If your project is used here and isn't credited, or is credited wrongly, please open an issue.
