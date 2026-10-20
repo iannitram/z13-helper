@@ -41,7 +41,7 @@ Status marks: ✅ shipped · 🔧 in progress · ⏳ planned · 🚧 gated (need
   profile-rewrite recovery. Both watchdog branches (curve dropped / fans stalled) now recover with
   **profile rewrite + curve**; a bare curve write is never used for recovery. Verified: an external
   same-value `platform_profile` write is absorbed by the 1.4.2 daemon with no RPM dip.
-- **The tach can lie (21:00, Ian's observation):** the *left* fan physically stopped while `fan1_input`
+- **The tach can lie (21:00, observed on the device):** the *left* fan physically stopped while `fan1_input`
   read 8 700 on every sample and the other fan's reading kept jittering; toggling Max Fans (a curve
   change → firmware re-ramp) brought it back. So "RPM > 0" is not proof. Third watchdog rule: **one
   fan's reading bit-identical for 90 s** while the curve asks ≥ 50 % → stale tach → profile rewrite +
@@ -122,7 +122,7 @@ Remaining:
 ---
 
 ## 4. Phase 8 — Profiles engine ✅ (2026-10-09; z13ctl mirror still 🚧)
-**Replaces the Boondock button with a Profile dropdown** (Ian, 2026-10-09). A profile bundles what
+**Replaces the Boondock button with a Profile dropdown** (2026-10-09). A profile bundles what
 G-Helper calls a "mode": base platform profile + TDP + fan curve + undervolt + brightness + battery
 limit + an enter/exit hook. Boondock becomes a profile whose hooks run the script for the
 non-hardware effects.
@@ -149,7 +149,7 @@ non-hardware effects.
   (`profile --create`, `tdp/fancurve/undervolt --set --profile <name>`) so the daemon re-applies it on
   resume and `autoswitch --ac/--battery` can pick between two of ours.
 
-- ✅ **Per-profile Max Fans** (Ian, 2026-10-11): profile field `max_fans`; Turbo ships with it ON.
+- ✅ **Per-profile Max Fans** (2026-10-11): profile field `max_fans`; Turbo ships with it ON.
   Switching *to* such a profile turns Max Fans ON, switching *away* turns it OFF (and resets to
   firmware auto if the new profile has no curve); `restore` (login/resume) leaves the user's toggle
   alone. Checkbox "Max Fans" in the Fans + Power window. Older stores get the shipped value on load.
@@ -220,7 +220,7 @@ latest release/commit with what's installed where we can read it (`z13ctl --vers
 Mechanics: GitHub REST (`/releases/latest`, or `/commits?per_page=1` for untagged projects), ETag
 cache in `~/.config/z13-helper/updates.json`, unauthenticated (60 req/h is plenty), network via
 `flatpak-spawn --host curl` (the sandbox has no network at runtime — keep it that way).
-**Install / Update** (added 2026-10-09, Ian's ask): rows with an installer can be installed from the
+**Install / Update** (added 2026-10-09, the owner's ask): rows with an installer can be installed from the
 dialog — it shows the plan, asks, streams the log (`src/installers.py`, runs on the host):
 - **z13ctl**: release tarball, sha256 checked against `checksums.txt`, backup `z13ctl.bak-<old>`,
   `sudo z13ctl setup`, daemon user units with a `--no-button` drop-in, `enable --now`.
@@ -254,7 +254,7 @@ schema + `z13-profile` CLI, z13ctl output formats parsed by `main.py`.
 
 ---
 
-## 8. Phase 12 — Adopt z13ctl 1.4.2 ✅ installed 2026-10-09 (Ian's go); follow-ups 🔧
+## 8. Phase 12 — Adopt z13ctl 1.4.2 ✅ installed 2026-10-09 (the owner's go); follow-ups 🔧
 **Why:** named profiles + autoswitch + resume re-apply + `subscribe` events + the curve-drop and TDP-undone
 fixes + the EC hard-lock fixes. It would let us delete `z13-fan-resume.sh`, most of the Max Fans
 watchdog, and the polling.
@@ -282,7 +282,7 @@ events (not in 1.4.2's CLI — check the socket API) instead of polling.
   z13ctl, not sysfs (principle 1).
 - **48–180 Hz VRR profile for gamescope** (`~/.config/gamescope/scripts/`, modelled on
   `asus.rogally.lcd.lua`). Unverified whether the Tianma TL134ADXP03 accepts front-porch modegen.
-- **Open since Phase 6:** QAM focus test with a game running (only Ian can do it).
+- **Open since Phase 6:** QAM focus test with a game running (only the owner can do it).
 
 ---
 
@@ -291,7 +291,7 @@ events (not in 1.4.2's CLI — check the socket API) instead of polling.
 **As built (2026-10-11):** `install.sh` (repo root) + `tooling/install_check.py` (host-file manifest,
 keep-list entries, `flatpak-diff`, and `verify` = §12 as code) + `src/installers.py repair z13ctl|decky`.
 - `./install.sh` asks "Install dependencies?" → `installers.py install z13ctl` then `repair z13ctl`
-  (an "already up to date" install would otherwise skip setup) → `install decky` (always, per Ian).
+  (an "already up to date" install would otherwise skip setup) → `install decky` (always, per the owner).
   Declining = repair the installed ones. `/etc` changes are listed and asked once.
 - `./install.sh --repair`: no prompts; **keeps the installed z13ctl version** (the 1.4.x pin is
   deliberate; installs latest only if the binary is missing), `sudo z13ctl setup --perms-only` (full
@@ -327,7 +327,7 @@ re-run any time:
 2. **Dependencies (prompted)** — z13ctl latest via `src/installers.py install z13ctl` (sha256, backup,
    `sudo z13ctl setup` = udev rules + `z13ctl-perms.service`, daemon units `--no-button`);
    **Decky Loader latest** via `installers.py install decky` (official installer script, stale-loader
-   health check) — always, not only when missing (Ian, 2026-10-09); Flatpak runtime
+   health check) — always, not only when missing (2026-10-09); Flatpak runtime
    `org.kde.Platform//6.10`; `pnpm`/node for the plugin build (optional: ship `decky/dist` prebuilt so a
    plain install needs no node).
 3. **App** — `bash flatpak/build.sh` (or install a prebuilt bundle from a GitHub release of this repo
@@ -357,11 +357,11 @@ side button, fans, profiles and the QAM plugin back without any other step.
 
 ---
 
-## 9b. Phase 12c — Post-update tasks in the Updates panel ⏳ (added 2026-10-15, widened same day, Ian)
+## 9b. Phase 12c — Post-update tasks in the Updates panel ⏳ (added 2026-10-15, widened same day)
 
 **Why.** A SteamOS atomic update ("nuclear update") wipes `/usr`, Valve's grub file and the pacman
 keyring, and rolls `/etc` changes back unless they're registered. Today the maintainer re-applies
-things by hand from a wiki checklist. Ian wants the app to do it, **selectively**: tick what you need,
+things by hand from a wiki checklist. The owner wants the app to do it, **selectively**: tick what you need,
 see what it will run, run it, read the log.
 
 **The feature.**

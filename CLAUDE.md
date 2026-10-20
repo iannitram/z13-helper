@@ -109,7 +109,7 @@ Mode (not after a deliberate Quit). Note the Decky backend runs as **deck**, not
   `packaging/host/` are reference only.
 - **Logs and crashes:** the app logs to `~/.local/state/z13-helper/app.log`; uncaught exceptions
   and hard crashes land in `.../crashes/` (`src/app_log.py`; in-app: Help → Error log, Ctrl+L).
-  Start there when Ian reports misbehaviour, together with `journalctl --user -u z13ctl`.
+  Start there when the owner reports misbehaviour, together with `journalctl --user -u z13ctl`.
   Logging is **opt-in**: `"logging": false` in `~/.config/z13-helper/install.json` (asked by
   `install.sh`, toggled in Help → Error log; missing = on) means no files there at all, only the
   in-memory Error log and the journal (`src/install_record.py`, mirrored in `decky/main.py`).

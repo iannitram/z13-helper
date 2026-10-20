@@ -8,12 +8,12 @@ user taps through to Decky → the Z13 plugin (Phase 5). In **Desktop Mode** the
 toggling the PyQt window (already working).
 
 > ⚠️ Not polish — a **hard dependency.** The right-edge touchscreen swipe → QAM does **not** work on
-> this Z13 (confirmed by Ian; the Deck gesture depends on the `deck-uhid` controller context we
+> this Z13 (confirmed on the device; the Deck gesture depends on the `deck-uhid` controller context we
 > removed to fix games). So a button/JS path is the **only** touch-friendly way into the plugin.
 
 ## ✅ SHIPPED (2026-07-15)
 
-Built as a **general controller-free Game-Mode navigation** control (Ian's steer: the button is *not*
+Built as a **general controller-free Game-Mode navigation** control (the owner's steer: the button is *not*
 plugin-specific — it's a system nav entry point for using the Z13 in Game Mode without a controller).
 
 **Gestures** (the button is a *momentary pulse* — see the evtest finding below — so gestures are by
@@ -25,7 +25,7 @@ count, not hold):
 | **double tap** | Steam menu (left): app switching / library / power. |
 
 Fired instantly per press (no debounce), so single-tap QAM is instant; a double-tap therefore flashes
-the QAM (1st tap) then flips to the Steam menu (2nd tap) — Ian's chosen trade-off over adding latency.
+the QAM (1st tap) then flips to the Steam menu (2nd tap) — the owner's chosen trade-off over adding latency.
 
 **Components** (all new, in the repo):
 - `tooling/z13_cdp.py` — **dependency-free** (stdlib-only) CDP client + menu actions. Replaces the

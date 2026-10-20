@@ -1,6 +1,6 @@
 {
   "name": "Z13-Helper",
-  "author": "Ian Martin",
+  "author": "iannitram",
   "flags": ["debug", "_root"],
   "api_version": 1,
   "publish": {
