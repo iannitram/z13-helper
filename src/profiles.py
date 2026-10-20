@@ -130,12 +130,13 @@ def default_profiles():
         _profile("Balanced", "balanced", builtin=True, fan_curve=BALANCED_CURVE,
                  brightness="medium", battery_limit=80),
         _profile("Turbo", "performance", builtin=True, fan_curve=TURBO_CURVE,
-                 brightness="high", battery_limit=80, max_fans=True),   # Ian, 2026-10-11
-        # Hardware side of boondock is explicit here; the script does the rest
-        # (screen dim, background services) and restores them on exit.
+                 brightness="high", battery_limit=80, max_fans=True),
+        # Hardware side of boondock is explicit here; the hooks run only the script's
+        # session half (screen dim, background services), never its power writes,
+        # which would overwrite this profile's own settings.
         _profile("Boondock", "quiet", builtin=True,
                  tdp={"pl1": 20, "pl2": 30, "pl3": 40, "force": False},
-                 enter=f"{BOONDOCK_BIN} on", exit_=f"{BOONDOCK_BIN} off"),
+                 enter=f"{BOONDOCK_BIN} session-on", exit_=f"{BOONDOCK_BIN} session-off"),
     ]
 
 
@@ -271,6 +272,23 @@ def _legacy_active():
         return None
 
 
+def _migrate_boondock_hooks(p):
+    """Stores seeded before the session split saved Boondock's hooks as plain
+    `boondock on` / `boondock off`, which redo the power hardware after the engine
+    set the profile's own. Rewrite exactly those two strings; an edited hook stays."""
+    if p.get("name") != "Boondock" or not p.get("builtin"):
+        return
+    hooks = p.get("hooks")
+    if not isinstance(hooks, dict):
+        return
+    for key, old, new in (("enter", "on", "session-on"), ("exit", "off", "session-off")):
+        cmd = hooks.get(key)
+        if isinstance(cmd, str):
+            parts = cmd.split()
+            if len(parts) == 2 and parts[0].endswith("boondock") and parts[1] == old:
+                hooks[key] = f"{parts[0]} {new}"
+
+
 def _loaded_profile_ok(p):
     """True when a profile read from disk is safe to hand to the rest of the app.
 
@@ -378,6 +396,7 @@ def load_store(create=True):
     for p in store["profiles"]:
         if "max_fans" not in p:
             p["max_fans"] = bool(p.get("builtin") and shipped.get(p["name"], {}).get("max_fans"))
+        _migrate_boondock_hooks(p)
     return store
 
 
