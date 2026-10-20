@@ -55,6 +55,34 @@ def log(msg):
     print(msg, flush=True)
 
 
+class Report:
+    """What an install/repair run actually did, printed as one `RESULT: {json}`
+    line at the end so the dialog can say so instead of guessing.
+    changed  : steps that altered the machine (in order), even if a later step failed
+    rollback : "not-attempted" | "restored-verified" | "restore-failed" | "not-rolled-back"
+    """
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.changed = []
+        self.rollback = "not-attempted"
+        self.daemon_after_rollback = None   # "running" | "not-running" once a restore happened
+
+    def step(self, what):
+        self.changed.append(what)
+
+    def as_dict(self):
+        d = {"changed": list(self.changed), "rollback": self.rollback}
+        if self.daemon_after_rollback:
+            d["daemon_after_rollback"] = self.daemon_after_rollback
+        return d
+
+
+REPORT = Report()
+
+
 def run(argv, timeout=600, check=True, **kw):
     log("  $ " + " ".join(argv))
     p = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, **kw)
@@ -195,6 +223,34 @@ def _start_daemon(restart=True):
     return rc
 
 
+def _rollback_binary(bak):
+    """Put the backed-up binary back and verify it by hash. Sets REPORT.rollback.
+    Only the binary is restored; udev rules, units and services are not undone."""
+    if not bak or not os.path.exists(bak):
+        REPORT.rollback = "not-rolled-back"
+        log("Rollback: no previous binary to restore — NOT rolled back")
+        return
+    try:
+        shutil.copy2(bak, Z13CTL + ".new")
+        os.replace(Z13CTL + ".new", Z13CTL)
+        ok = sha256(Z13CTL) == sha256(bak)
+    except OSError as e:
+        log(f"Rollback: restoring {bak} failed ({e})")
+        ok = False
+    REPORT.rollback = "restored-verified" if ok else "restore-failed"
+    log("Rollback: previous binary restored and verified (hash matches backup)" if ok
+        else "Rollback: FAILED to restore the previous binary")
+    if ok:
+        # The daemon may still be running the new binary or be down: restart it on the old one.
+        try:
+            up = _start_daemon() == 0
+        except Exception as e:  # noqa: BLE001
+            log(f"Rollback: daemon restart raised ({e})")
+            up = False
+        REPORT.daemon_after_rollback = "running" if up else "not-running"
+        log("Rollback: daemon running again" if up else "Rollback: daemon NOT running")
+
+
 def install_z13ctl():
     old = _z13ctl_installed_version()
     log(f"Installed z13ctl: {old or 'none'}")
@@ -209,6 +265,7 @@ def install_z13ctl():
         return 0
     ver, tmp = _fetch_release()
 
+    bak = None
     if old and os.path.exists(Z13CTL):
         bak = f"{Z13CTL}.bak-{old}"
         shutil.copy2(Z13CTL, bak)
@@ -216,12 +273,23 @@ def install_z13ctl():
     os.makedirs(os.path.dirname(Z13CTL), exist_ok=True)
     shutil.copy2(os.path.join(tmp, "z13ctl"), Z13CTL + ".new")
     os.replace(Z13CTL + ".new", Z13CTL)
+    REPORT.step(f"z13ctl binary replaced ({old or 'none'} -> {ver})")
     log(f"Installed {Z13CTL} ({ver})")
 
-    # Permissions: udev rules + perms service (the 1.4 perms unit also covers PPT).
-    _setup_perms()
-    _install_daemon_units(os.path.join(tmp, "contrib", "systemd", "user"))
-    _start_daemon()
+    try:
+        # Permissions: udev rules + perms service (the 1.4 perms unit also covers PPT).
+        _setup_perms()
+        REPORT.step("udev rules + perms service (sudo z13ctl setup)")
+        _install_daemon_units(os.path.join(tmp, "contrib", "systemd", "user"))
+        REPORT.step("daemon user units + override")
+        if _start_daemon() != 0:
+            REPORT.step("daemon enable/start attempted")
+            raise RuntimeError("z13ctl daemon is not active after install")
+        REPORT.step("daemon started")
+    except BaseException:
+        _rollback_binary(bak)
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise
 
     # Let the resident app pick up the new backend (it re-spawns z13ctl per call,
     # but its version probe and the Updates row are cached).
@@ -286,7 +354,9 @@ def repair_z13ctl():
         if DRY_RUN:
             log("(dry run) would enable z13ctl.socket and (re)start z13ctl.service")
         else:
-            _start_daemon(restart=changed)
+            if _start_daemon(restart=changed) != 0:
+                log("FAILED: z13ctl daemon is not active after repair")
+                return 1
     else:
         log("Daemon: active")
     return 0
@@ -336,10 +406,14 @@ def install_decky():
         return 0
     script = fetch(DECKY_INSTALLER, os.path.join(CACHE, "decky_install_release.sh"))
     log("Downloaded installer script")
+    REPORT.step("Decky Loader installer started (may be partially applied)")
     run(["sudo", "-n", "bash", script], timeout=900)
     time.sleep(8)
-    _decky_health()
+    healthy = _decky_health() == 0
     log("Decky Loader now: " + (_decky_installed_version() or "?"))
+    if not healthy:
+        log("FAILED: plugin_loader.service is not active after the install")
+        return 1
     return 0
 
 
@@ -389,6 +463,7 @@ def install_steamos():
     if "no update available" in low:
         log("SteamOS check contradicts itself (exit 0, text says no update); the updater was not run.")
         return 1
+    REPORT.step("steamos-update started (may be partially applied)")
     run(["sudo", "-n", "steamos-update"], timeout=3600)
     log("SteamOS update staged. Reboot to finish.")
     return 0
@@ -415,11 +490,13 @@ def main(argv):
     if argv[0] == "repair":
         install_fn = REPAIRS[argv[1]]
     log(f"== {'Repairing' if argv[0] == 'repair' else 'Installing'} {argv[1]} ==")
+    REPORT.reset()
     try:
         rc = install_fn()
     except Exception as e:  # noqa: BLE001
         log(f"FAILED: {e}")
-        return 1
+        rc = 1
+    log("RESULT: " + json.dumps(REPORT.as_dict()))
     return rc
 
 

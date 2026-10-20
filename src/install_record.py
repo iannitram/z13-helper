@@ -116,3 +116,30 @@ def verdict(lines, rc):
         if t.startswith("Not all green"):
             return False, t
     return (rc == 0), ("Finished (exit 0)" if rc == 0 else f"Failed (exit {rc})")
+
+
+def failure_text(lines, rc):
+    """Dialog text for a failed installers.py run, from its `RESULT: {json}` line
+    (what changed, whether the previous binary was restored and verified)."""
+    import json
+    res = None
+    for line in reversed(lines):
+        t = clean(line).strip()
+        if t.startswith("RESULT: "):
+            try:
+                res = json.loads(t[len("RESULT: "):])
+            except ValueError:
+                pass
+            break
+    head = f"Failed (exit {rc})"
+    if res is None:
+        return head + " — what changed is unknown; see the log"
+    changed = res.get("changed") or []
+    what = ("changed before the failure: " + "; ".join(changed)) if changed else "nothing was changed"
+    rb = {"restored-verified": "previous binary restored and verified",
+          "restore-failed": "rollback FAILED — previous binary not restored",
+          "not-rolled-back": "not rolled back",
+          "not-attempted": "not rolled back" if changed else ""}.get(res.get("rollback"), "not rolled back")
+    if res.get("rollback") == "restored-verified" and res.get("daemon_after_rollback"):
+        rb += ", daemon " + ("running" if res["daemon_after_rollback"] == "running" else "NOT running")
+    return f"{head} — {what}" + (f"; {rb}" if rb else "")
