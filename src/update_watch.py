@@ -160,11 +160,34 @@ def _fetch_kernel(cached):
             "notes": "latest stable", "etag": etag, "error": None}
 
 
+_UPDATE_AVAILABLE = re.compile(r"\bupdates?\s+(?:is\s+)?available\b")
+
+
+def _steamos_outcome(rc, text):
+    """Classify a `steamos-update check` result. The exit code decides first;
+    the text is only read when the command ran successfully."""
+    low = (text or "").lower()
+    first = (text or "").splitlines()[0][:120] if text else ""
+    if rc != 0:
+        if rc == host.RC_NOT_FOUND or "not found" in low or "no such file" in low:
+            return "unavailable", f"steamos-update not found: {first}"
+        return "failed", f"steamos-update check exited {rc}: {first}"
+    if "no update available" in low:
+        return "up-to-date", ""
+    if _UPDATE_AVAILABLE.search(low):
+        return "update-available", ""
+    return "unknown", f"unrecognised steamos-update output: {first}"
+
+
 def _fetch_steamos(cached):
-    rc, text, _ = host.run(["steamos-update", "check"], timeout=90)
-    available = "no update available" not in text.lower() and rc == 0
-    return {"latest": "update available" if available else (_steamos_version() or ""),
-            "published": "", "url": None, "notes": text[:200], "etag": None, "error": None}
+    res = host.run(["steamos-update", "check"], timeout=90)
+    outcome, msg = _steamos_outcome(res.rc, res.out)
+    base = {"published": "", "url": None, "notes": (res.out or "")[:200], "etag": None}
+    if outcome in ("failed", "unavailable", "unknown"):
+        return dict(base, latest=None, error=msg)
+    if outcome == "up-to-date":
+        return dict(base, latest=_steamos_version() or "", error=None)
+    return dict(base, latest="update available", error=None)
 
 
 # ----------------------------------------------------------------------

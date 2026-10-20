@@ -375,9 +375,16 @@ def plan_steamos():
 
 def install_steamos():
     rc, out = run(["steamos-update", "check"], check=False, timeout=120)
-    if "no update available" in out.lower():
+    low = out.lower()
+    if rc != 0:
+        log(f"SteamOS update check failed (exit {rc}); the updater was not run.")
+        return 1
+    if "no update available" in low:
         log("No SteamOS update available.")
         return 0
+    if not re.search(r"\bupdates?\s+(?:is\s+)?available\b", low):
+        log("SteamOS update check gave no recognisable result; the updater was not run.")
+        return 1
     run(["sudo", "-n", "steamos-update"], timeout=3600)
     log("SteamOS update staged. Reboot to finish.")
     return 0
