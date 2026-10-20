@@ -748,6 +748,33 @@ class DeckyFans:
     def rewrite_profile(self):
         self._z13ctl("profile", "--set", _current_platform_profile())
 
+    # What the firmware profile write above resets (z13ctl: it hands the power
+    # limits back to firmware and clears the undervolt). Same commands as
+    # src/profiles.py apply_tdp / apply_undervolt, for the active profile. Each
+    # returns a problem text, or None; the watchdog reports it and carries on.
+
+    def restore_tdp(self):
+        tdp = (active_profile(_read_store()) or {}).get("tdp")
+        if not tdp:
+            return None
+        rc, out = _run(tdp_argv(tdp), as_deck=True)
+        if rc != 0:
+            return f"TDP not restored ({out[-120:] or f'rc={rc}'})"
+        return None  # no readback: reading the PPT values can lock the EC
+
+    def restore_undervolt(self):
+        uv = (active_profile(_read_store()) or {}).get("undervolt")
+        if uv is None:
+            return None
+        rc, out = _run([Z13CTL, "undervolt", "--set", str(uv)], as_deck=True)
+        if rc != 0:
+            return f"undervolt not restored ({out[-120:] or f'rc={rc}'})"
+        rc, out = _run([Z13CTL, "undervolt", "--get"], as_deck=True)
+        m_ = re.search(r"-?\d+", out) if rc == 0 else None
+        if m_ and int(m_.group(0)) != uv:
+            return f"undervolt reads {m_.group(0)}, wanted {uv}"
+        return None
+
     def set_fans_max(self):
         self._z13ctl("fancurve", "--set", MAX_FANS_SPEC)
 

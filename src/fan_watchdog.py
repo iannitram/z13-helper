@@ -345,17 +345,39 @@ class FanWatchdog:
                 pass
 
     def _recover(self, max_on: bool) -> str:
-        """Rewrite the platform profile (same value) and then the curve."""
+        """Rewrite the platform profile (same value), then restore what that
+        write resets, in profiles.apply's order: the profile's TDP, the curve,
+        the undervolt (z13ctl: a firmware profile resets undervolt and hands the
+        power limits back to firmware). A failed restore is reported, and does
+        not stop the curve."""
+        problems = []
+
+        def restore(name):
+            fn = getattr(self.fans, name, None)   # optional on a fans object
+            if fn is None:
+                return
+            try:
+                problem = fn()
+            except Exception as e:  # noqa: BLE001
+                problem = f"{name}: {e}"
+            if problem:
+                problems.append(problem)
+
+        def result(text):
+            return f"{text}; {'; '.join(problems)}" if problems else text
+
         try:
             curve = None if max_on else self.sensors.custom_fan_curve_points()
             self.fans.rewrite_profile()
+            restore("restore_tdp")
             if max_on:
                 self.fans.set_fans_max()
             elif curve:
                 self.fans.set_fancurve_pwm(curve)
-            else:
-                return "Fans stalled; profile rewritten (no curve to restore)"
-            return "Fans were stalled at 0 RPM; profile and curve re-applied"
+            restore("restore_undervolt")
+            if not max_on and not curve:
+                return result("Fans stalled; profile rewritten (no curve to restore)")
+            return result("Fans were stalled at 0 RPM; profile and curve re-applied")
         except Exception as e:  # noqa: BLE001
             return f"Fan recovery failed: {e}"
 
