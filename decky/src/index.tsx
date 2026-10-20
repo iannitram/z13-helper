@@ -5,7 +5,7 @@ import {
   DropdownItem,
   staticClasses,
 } from "@decky/ui";
-import { definePlugin } from "@decky/api";
+import { definePlugin, toaster } from "@decky/api";
 import { useCallback, useEffect, useState } from "react";
 import { FaFan } from "react-icons/fa";
 import {
@@ -18,6 +18,7 @@ import {
   getPowerState,
   PowerState,
 } from "./backend";
+import { switchProfile } from "./profileSwitch";
 import { TelemetryRow } from "./components/Telemetry";
 import { PowerLimits } from "./components/PowerLimits";
 import { BatteryLimit } from "./components/BatteryLimit";
@@ -79,9 +80,31 @@ function Content() {
             selectedOption={profile}
             onChange={async (o) => {
               const name = o.data as string;
+              const previous = profile;
               setProfileState(name);
-              if (appProfiles) await setAppProfile(name);
-              else await setProfile(name);
+              const r = await switchProfile(
+                {
+                  apply: appProfiles ? setAppProfile : setProfile,
+                  readProfile: async () =>
+                    appProfiles ? (await getProfiles()).active : await getProfile(),
+                  readMaxFans: getMaxFans,
+                },
+                name,
+              );
+              // A false result can still mean the profile is active (one step failed): show what
+              // the backend reports; revert only if that re-read failed.
+              if (r.profile) setProfileState(r.profile);
+              else if (!r.ok) setProfileState(previous);
+              if (r.maxFans !== undefined) setMaxFansState(r.maxFans);
+              if (!r.ok) {
+                toaster.toast({
+                  title: "Z13-Helper",
+                  body:
+                    r.profile === name
+                      ? `${name} is active, but some settings did not apply`
+                      : `Could not switch to ${name}`,
+                });
+              }
               loadPower(); // TDP / battery limit belong to the (new) active profile
             }}
           />
