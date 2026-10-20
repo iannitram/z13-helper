@@ -1,0 +1,4 @@
+PPT limits (asus-armoury):
+  PL1 (sustained):   45 W  (range 28-80 W)
+  PL2 (mid-burst):   55 W  (range 32-92 W)
+  PL3 (short-burst): 65 W  (range 45-93 W)

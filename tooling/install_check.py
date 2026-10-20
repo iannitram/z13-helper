@@ -46,7 +46,8 @@ LIGHTBAR_RESET_UNIT = "z13-lightbar-reset.service"
 DECKY_PLUGIN = os.path.join(HOME, "homebrew", "plugins", "z13-helper")
 DECKY_LOGS = os.path.join(HOME, "homebrew", "logs", "z13-helper")
 DECKY_FILES = ["plugin.json", "package.json", "main.py", "dist/index.js",
-               "py_modules/fan_watchdog.py", "py_modules/sensor_reader.py", "py_modules/host.py"]
+               "py_modules/fan_watchdog.py", "py_modules/sensor_reader.py", "py_modules/host.py",
+               "py_modules/power_range.py"]
 
 
 def decky_source(f):

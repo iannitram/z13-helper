@@ -25,6 +25,7 @@ if os.path.isdir(_PY_MODULES) and _PY_MODULES not in sys.path:
     sys.path.insert(0, _PY_MODULES)
 from fan_watchdog import FanTrace, FanWatchdog  # noqa: E402
 import host  # noqa: E402
+import power_range  # noqa: E402
 from sensor_reader import SensorReader  # noqa: E402
 
 # This process is always a Decky backend. host.detect() spots that from the loader's
@@ -223,19 +224,35 @@ def _in_gamemode():
 # Phase 11 helpers (pure where possible; decky/tests/ covers them)
 # ----------------------------------------------------------------------
 
-def clamp_tdp(pl1, pl2, pl3):
-    """Clamp to PL_MIN..PL_MAX and enforce sPPT >= SPL, fPPT >= sPPT.
+_RANGES_CACHE = {}
+
+
+def tdp_ranges():
+    """Per-rail (min, max) the kernel accepts, from `z13ctl tdp --get`; 5..93 W if
+    that fails. Read once per plugin run (when the panel is first opened), never polled."""
+    if "r" not in _RANGES_CACHE:
+        rc, out = _run([Z13CTL, "tdp", "--get"], as_deck=True)
+        _RANGES_CACHE["r"] = (power_range.parse_tdp_ranges(out) if rc == 0
+                              else dict(power_range.DEFAULT_RANGES))
+    return _RANGES_CACHE["r"]
+
+
+def clamp_tdp(pl1, pl2, pl3, ranges=None):
+    """Clamp each rail to its range (default PL_MIN..PL_MAX) and enforce sPPT >= SPL, fPPT >= sPPT.
 
     Mirrors the desktop window's slider rule (a lower rail pushes the higher ones
     up; a higher rail can't go below the lower one). Returns a profiles.json `tdp`
     dict. `force` follows the desktop app (pl1 > 75 W) because profiles.validate()
     and z13ctl both require it there; it is False for every SPL <= 75 W.
     """
-    def one(v):
-        return max(PL_MIN, min(PL_MAX, int(round(float(v)))))
-    a = one(pl1)
-    b = max(one(pl2), a)
-    c = max(one(pl3), b)
+    r = ranges or {}
+
+    def one(v, k):
+        lo, hi = r.get(k, (PL_MIN, PL_MAX))
+        return max(lo, min(hi, int(round(float(v)))))
+    a = one(pl1, "pl1")
+    b = max(one(pl2, "pl2"), a)
+    c = max(one(pl3, "pl3"), b)
     return {"pl1": a, "pl2": b, "pl3": c, "force": a > PL1_SAFE_MAX}
 
 
@@ -518,6 +535,12 @@ def power_state():
     p = active_profile(_ensure_store()) or {}
     tdp = p.get("tdp")
     pl = (tdp["pl1"], tdp["pl2"], tdp["pl3"]) if tdp else DEFAULT_TDP
+    ranges = tdp_ranges()
+    note = ""
+    if tdp:   # show the stored values clamped into the kernel's range; the store is untouched
+        st = power_range.tdp_status(tdp, ranges)
+        pl = (st["accepted"]["pl1"], st["accepted"]["pl2"], st["accepted"]["pl3"])
+        note = st["note"]
     live_bl = _live_battery_limit()
     bl = live_bl if live_bl is not None else p.get("battery_limit")
     # Last level set from this panel, else the desktop app's (config.json, read only),
@@ -528,7 +551,9 @@ def power_state():
         "active": p.get("name", ""),
         "tdp_enabled": bool(tdp),
         "pl1": int(pl[0]), "pl2": int(pl[1]), "pl3": int(pl[2]),
-        "pl_min": PL_MIN, "pl_max": PL_MAX, "pl1_safe_max": PL1_SAFE_MAX,
+        "pl_min": min(r[0] for r in ranges.values()), "pl_max": max(r[1] for r in ranges.values()),
+        "pl_ranges": {k: list(v) for k, v in ranges.items()}, "tdp_note": note,
+        "pl1_safe_max": PL1_SAFE_MAX,
         "battery_limit": clamp_battery(bl) if bl is not None else BATTERY_MAX,
         "brightness": brightness if brightness in BRIGHTNESS_LEVELS else "",
     }
@@ -543,7 +568,7 @@ def apply_tdp(enabled, pl1, pl2, pl3):
     OFF -> `z13-profile apply <active> --no-hooks`: the platform-profile rewrite is
            what hands the limits back to the firmware (desktop does the same).
     """
-    tdp = clamp_tdp(pl1, pl2, pl3)
+    tdp = clamp_tdp(pl1, pl2, pl3, tdp_ranges())
     name, err = _set_active_field(tdp=tdp if enabled else None)
     if err:
         return {"ok": False, "saved": False, "message": f"Not saved: {err}", "tdp": tdp}

@@ -85,6 +85,34 @@ def fake_host(test, fail_if=(), out=FAIL_OUT):
     return fh
 
 
+class TdpRangesTest(unittest.TestCase):
+    ARMOURY = os.path.join(os.path.dirname(HERE), "..", "tests", "fixtures", "tdp_get_armoury.txt")
+
+    def setUp(self):
+        m._RANGES_CACHE.clear()
+        self.addCleanup(m._RANGES_CACHE.clear)
+
+    def _host(self, out, rc=0):
+        fh = FakeHost().fail("tdp --get", rc=rc, out=out)
+        patcher = mock.patch.object(host, "run", fh.run)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return fh
+
+    def test_armoury_ranges_are_read_once_and_clamp_per_rail(self):
+        fh = self._host(open(self.ARMOURY).read())
+        r = m.tdp_ranges()
+        self.assertEqual(r["pl1"], (28, 80))
+        m.tdp_ranges()
+        self.assertEqual(sum("tdp" in c.argv for c in fh.calls), 1)
+        self.assertEqual(m.clamp_tdp(20, 30, 40, r),
+                         {"pl1": 28, "pl2": 32, "pl3": 45, "force": False})
+
+    def test_failed_read_falls_back_to_5_93(self):
+        self._host("boom", rc=1)
+        self.assertEqual(m.tdp_ranges(), {"pl1": (5, 93), "pl2": (5, 93), "pl3": (5, 93)})
+
+
 class ClampTdpTest(unittest.TestCase):
     def test_in_range_unchanged(self):
         self.assertEqual(m.clamp_tdp(20, 30, 40),
