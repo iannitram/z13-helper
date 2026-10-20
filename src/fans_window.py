@@ -23,7 +23,7 @@ from fan_curve_widget import FanCurveWidget, DEFAULT_CURVE
 from profile_control import ProfileControl
 
 PL_MIN, PL_MAX = 5, 93           # IsZ1325 cap in G-Helper: the outer envelope; the live per-rail range
-                                 # comes from `z13ctl tdp --get` (power_range). z13ctl --force above 75
+                                 # is picked by power_range.detect_ranges (sysfs existence checks only). z13ctl --force above 75
 PL1_SAFE_MAX = 75
 # Shown when the profile has no TDP override. Deliberately NOT read live:
 # `z13ctl tdp --get` can go through the asus-armoury ppt_* files, which may
