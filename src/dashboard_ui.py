@@ -34,7 +34,7 @@ import install_record
 import max_fans_state
 import profiles
 import update_watch
-from fan_watchdog import FanTrace, FanWatchdog
+from fan_watchdog import FanTrace, FanWatchdog, FanWatchdogRunner
 from screen_brightness import ScreenBrightness, MIN_PERCENT
 from apply_worker import ApplyWorker
 from profile_control import ProfileControl
@@ -116,6 +116,8 @@ class DashboardUI(QMainWindow):
                                          max_fans_on=max_fans_state.is_enabled,
                                          may_act=lambda: not self.control._pending,
                                          trace=self._make_fan_trace())
+        self._fan_runner = FanWatchdogRunner(self._fan_watchdog, self.worker.submit)
+        self.worker.done.connect(self._on_fan_recovery_done)
         self._fans_window = None
         self._updates_dialog = None
         self._update_thread = None
@@ -769,10 +771,8 @@ class DashboardUI(QMainWindow):
                 self.power_label.setText("On AC" + (f" · {st.lower()}" if st not in ("Charging",) else " · charging"))
         except Exception:
             pass
-        msg = self._fan_watchdog.tick()
-        if msg:
-            logging.getLogger("z13.fans").warning("Fan watchdog: %s", msg)
-            self.status_bar.showMessage(msg, 8000)
+        # Decides and enqueues only; the recovery runs on the worker.
+        self._show_fan_message(self._fan_runner.tick())
         if self.isVisible():
             self._sync_screen_brightness()
         # The Decky plugin (or z13-profile on the host) may have switched profiles.
@@ -782,6 +782,15 @@ class DashboardUI(QMainWindow):
                 self._refresh_profile_ui()
         except Exception:
             pass
+
+    def _show_fan_message(self, msg):
+        if msg:
+            logging.getLogger("z13.fans").warning("Fan watchdog: %s", msg)
+            self.status_bar.showMessage(msg, 8000)
+
+    @pyqtSlot(str, object)
+    def _on_fan_recovery_done(self, label, result):
+        self._show_fan_message(self._fan_runner.on_done(label, result))
 
     # ------------------------------------------------------------------
     # Side button listener
