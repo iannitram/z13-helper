@@ -95,6 +95,8 @@ class FanWatchdog:
         self._rpm_changed_at = [now, now]
         self._temp_at_change = [None, None]   # APU temp when each reading last changed
         self._zero_since = [None, None]       # when each fan started reading 0 under demand
+        self._alive_since = [None, None]      # start of an unbroken run of moving positive readings
+        self._plateau = [None, None]          # highest moving RPM seen at max requested duty
         self._attempts = [0, 0]               # detection recoveries per fan, until it shows life
         self._grace_until = float("-inf")     # after our writes / a resume: don't judge yet
         self._last_tick_at = None
@@ -141,6 +143,7 @@ class FanWatchdog:
         self._grace_until = now + RETRY_S
         for i in fans:
             self._attempts[i] += 1
+            self._alive_since[i] = None
         return True
 
     def _event(self, text):
@@ -228,13 +231,17 @@ class FanWatchdog:
         for i, rpm in enumerate((fan1, fan2)):
             if rpm != self._last_rpm[i] or self._temp_at_change[i] is None:
                 if rpm > 0 and rpm != self._last_rpm[i]:
-                    self._attempts[i] = 0           # alive: forgive earlier attempts
-                    self._clear_fault(i)
+                    if self._last_rpm[i] is not None and expected is not None and expected >= 255:
+                        self._plateau[i] = max(self._plateau[i] or 0, rpm)
+                    if self._alive_since[i] is None:
+                        self._alive_since[i] = now
                 self._last_rpm[i] = rpm
                 self._rpm_changed_at[i] = now
                 self._temp_at_change[i] = temp
                 self._suspect_logged[i] = False
             elif rpm > 0 and now - self._rpm_changed_at[i] >= FROZEN_S:
+                if self._plateau[i] is not None and rpm >= self._plateau[i]:
+                    continue    # holding its own full-speed plateau: healthy (README)
                 partner_moving = now - self._rpm_changed_at[1 - i] < FROZEN_S
                 warmed = temp - self._temp_at_change[i] >= STALL_HYSTERESIS_C
                 if partner_moving and warmed:
@@ -244,6 +251,16 @@ class FanWatchdog:
                     self._event(f"SUSPECT fan {i + 1} reading constant at {rpm} RPM for "
                                 f"{FROZEN_S}s; not corroborated (partner moving: {partner_moving}, "
                                 f"warmed: {warmed})")
+        # Forgive attempts and clear a fault only after sustained health: an
+        # unbroken run of moving readings as long as the zero rule needs to
+        # condemn a fan (ONE_FAN_ZERO_S). A fan that spins briefly after each
+        # recovery and dies again never gets there, so the bound holds.
+        for i, rpm in enumerate((fan1, fan2)):
+            if rpm == 0 or (rpm == self._last_rpm[i] and now - self._rpm_changed_at[i] >= RETRY_S):
+                self._alive_since[i] = None
+            elif self._alive_since[i] is not None and now - self._alive_since[i] >= ONE_FAN_ZERO_S:
+                self._attempts[i] = 0
+                self._clear_fault(i)
         # 4. Per-fan zero under demand, after the grace.
         for i, rpm in enumerate((fan1, fan2)):
             if demand and rpm == 0 and now >= self._grace_until:

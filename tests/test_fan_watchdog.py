@@ -470,9 +470,13 @@ def test_one_fan_recovery_is_bounded_and_becomes_a_visible_fault(env):
     assert ns.wd.fault and "fan 1" in ns.wd.fault
     faults = [m for m in msgs if m and m.startswith("Fault:")]
     assert faults == [ns.wd.fault]               # announced once, not every tick
-    # The fan coming back clears it.
+    # One spinning reading does not clear it; sustained moving readings do.
     ns.sensors.fans = (4000, 4100)
     run(ns, 1)
+    assert ns.wd.fault
+    for k in range(int(ONE_FAN_ZERO_S // TICK) + 2):
+        ns.sensors.fans = (4000 + (k % 2) * 100, 8000 + (k % 2) * 100)
+        run(ns, 1)
     assert ns.wd.fault is None
 
 
@@ -481,3 +485,32 @@ def test_both_fans_stalled_is_bounded_too(env):
     run(ns, 300)
     assert call_names(ns.ctl).count("rewrite_profile") == MAX_RECOVERY_ATTEMPTS
     assert ns.wd.fault and "fan 1 and fan 2" in ns.wd.fault
+
+
+def test_flapping_fan_that_spins_briefly_after_each_recovery_hits_the_bound(env):
+    ns = env.make(curve=MAX_CURVE, temp=80.0)
+    spin_until = [None]
+    for _ in range(600):                         # 900 simulated seconds
+        before = len(ns.ctl.calls)
+        fan1 = 0
+        if spin_until[0] is not None and ns.clock() < spin_until[0]:
+            fan1 = 7000 + (int(ns.clock()) % 2) * 100
+        ns.sensors.fans = (fan1, 8000 + (int(ns.clock()) % 2) * 100)
+        run(ns, 1)
+        if len(ns.ctl.calls) > before:           # a recovery: fan 1 spins ~3 s, then dies
+            spin_until[0] = ns.clock() + 3
+    assert call_names(ns.ctl).count("rewrite_profile") == MAX_RECOVERY_ATTEMPTS
+    assert ns.wd.fault and "fan 1" in ns.wd.fault
+
+
+def test_fan_holding_its_full_speed_plateau_is_not_frozen(env):
+    ns = env.make(curve=MAX_CURVE, temp=60.0)
+    for k in range(12):                          # ramps up, jittering, to its plateau
+        ns.sensors.fans = (8000 + 100 * min(k, 8), 7000 + (k % 2) * 100)
+        run(ns, 1)
+    for k in range(400):                         # then holds 8800 for 10 minutes while warming 1 C/min
+        ns.sensors.temp += TICK / 60
+        ns.sensors.fans = (8800, 7000 + (k % 2) * 100)
+        run(ns, 1)
+    assert ns.ctl.calls == []
+    assert ns.wd.fault is None
