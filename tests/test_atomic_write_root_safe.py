@@ -220,19 +220,35 @@ def fakehome(dmain, tmp_path, monkeypatch):
     import pwd
     home = tmp_path / "home"
     home.mkdir()
-    uid = os.getuid()
+    # The product hands files to its fixed owner (DECK_UID/DECK_GID), whatever uid runs
+    # the tests, so the fake owner is that id: no passwd entry or runner uid is assumed.
+    uid, gid = dmain.DECK_UID, dmain.DECK_GID
     real_pw = pwd.getpwuid
+    real_fstat = os.fstat
+    made = real_fstat(os.open(home, os.O_RDONLY | os.O_DIRECTORY))  # what we really own
+    real_uid, real_gid = made.st_uid, made.st_gid
 
     def fake_pw(u):
         if u == uid:
             return types.SimpleNamespace(pw_dir=str(home))
         return real_pw(u)
+
+    class _Stat:
+        def __init__(self, st):
+            self._st = st
+            self.st_uid = uid if st.st_uid == real_uid else st.st_uid
+            self.st_gid = gid if st.st_gid == real_gid else st.st_gid
+
+        def __getattr__(self, name):
+            return getattr(self._st, name)
+
     monkeypatch.setattr(pwd, "getpwuid", fake_pw)
+    monkeypatch.setattr(os, "fstat", lambda fd: _Stat(real_fstat(fd)))
     monkeypatch.setattr(os, "geteuid", lambda: 0)
     calls = []
     monkeypatch.setattr(os, "fchown", lambda fd, u, g: calls.append((u, g)))
     monkeypatch.setattr(os, "chown", lambda *a, **k: pytest.fail("path chown"))
-    return types.SimpleNamespace(home=home, owner=(uid, os.getgid()), chown=calls, tmp=tmp_path)
+    return types.SimpleNamespace(home=home, owner=(uid, gid), chown=calls, tmp=tmp_path)
 
 
 def _writers(dm, home, owner):
@@ -304,7 +320,7 @@ def test_normal_path_creates_dirs_owned_by_owner(dmain, fakehome):
 def test_home_owned_by_someone_else_is_refused(dmain, fakehome, monkeypatch):
     real = os.fstat
     monkeypatch.setattr(os, "fstat", lambda fd: types.SimpleNamespace(
-        st_uid=os.getuid() + 1, st_mode=real(fd).st_mode, st_gid=0))
+        st_uid=fakehome.owner[0] + 1, st_mode=real(fd).st_mode, st_gid=0))
     fn, _ = _writers(dmain, fakehome.home, fakehome.owner)["store"]
     with pytest.raises(OSError):
         fn()
