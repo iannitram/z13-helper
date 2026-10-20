@@ -7,6 +7,11 @@
 #                   if no snapshot exists).
 # `boondock status` → show what's currently in effect.
 #
+# `on`/`off` are the two halves together. Profile hooks call only the SESSION half
+# (`session-on` / `session-off`: screen + background services, no power hardware),
+# because the profile engine already applied the profile's own TDP/base/fans.
+# `hardware-on` / `hardware-off` are the standalone power half (quiet + 20/30/40 W).
+#
 # DESIGN RULE (learned the hard way 2026-07-01): interactive workloads are NOT
 # touched by default. The dev-VM ("the Shuttle") is left running unless you pass
 # `--pause-vm`, because you might be working in it.
@@ -16,15 +21,17 @@
 set -uo pipefail
 
 # ---------- tunables ----------
-Z=/home/deck/.local/bin/z13ctl
-STATE=/home/deck/.local/state/boondock.state
-BL=/sys/class/backlight/amdgpu_bl0
+# Paths are overridable from the environment so tests can run the script against stubs.
+Z=${BOONDOCK_Z13CTL:-/home/deck/.local/bin/z13ctl}
+STATE=${BOONDOCK_STATE:-/home/deck/.local/state/boondock.state}
+BL=${BOONDOCK_BACKLIGHT:-/sys/class/backlight/amdgpu_bl0}
+PPT_DIR=${BOONDOCK_PPT_DIR:-/sys/devices/platform/asus-nb-wmi}
 BOONDOCK_BRIGHT_PCT=35                 # screen brightness in boondock mode
 DEFAULT_RESTORE_PCT=80                 # brightness if we restore without a snapshot
 TDP_PL1=20; TDP_PL2=30; TDP_PL3=40     # PPT (sustained/short/fast) in W — 20W keeps VM work usable
 BG_SERVICES=(llama-swap)               # systemd services safe to stop off-grid
 BG_CONTAINERS=(pm-fork-runner-z13)     # docker containers safe to stop off-grid
-PROFILE_SYSFS=/sys/firmware/acpi/platform_profile
+PROFILE_SYSFS=${BOONDOCK_PROFILE_SYSFS:-/sys/firmware/acpi/platform_profile}
 # ------------------------------
 
 mkdir -p "$(dirname "$STATE")"
@@ -32,28 +39,33 @@ bright_max() { cat "$BL/max_brightness"; }
 set_bright_pct() { local pct=$1 max; max=$(bright_max); local v=$(( max * pct / 100 )); echo "$v" | sudo tee "$BL/brightness" >/dev/null; }
 say() { printf '  %s\n' "$*"; }
 
-do_on() {
-  local pause_vm=0; [ "${1:-}" = "--pause-vm" ] && pause_vm=1
-  echo "🏕️  boondock ON"
+# The state file holds two independent groups of keys: session keys (brightness, svc,
+# ctr, vm) and hardware keys (profile, pl1..pl3). Each operation rewrites only its own.
+SESSION_KEYS='brightness|svc|ctr|vm'
+HW_KEYS='profile|pl1|pl2|pl3'
+state_drop() { [ -f "$STATE" ] && { grep -Ev "^($1)=" "$STATE" > "$STATE.tmp"; mv "$STATE.tmp" "$STATE"; }; return 0; }
+state_get() { grep "^$1=" "$STATE" 2>/dev/null | cut -d= -f2; }
+state_cleanup() { [ -f "$STATE" ] && [ ! -s "$STATE" ] && rm -f "$STATE"; return 0; }
 
-  # 1. snapshot current state so `off` restores exactly
+# ---- session effects: profile-independent, touch NO power hardware ----
+# This is what the built-in Boondock profile's hooks run (session-on / session-off). The
+# profile engine has already applied the profile's own base, TDP and fans before the enter
+# hook, so nothing here may select a firmware profile, write TDP or read PPT values.
+do_session_on() {
+  local pause_vm=0; [ "${1:-}" = "--pause-vm" ] && pause_vm=1
+  echo "🏕️  boondock session ON"
+
+  # 1. snapshot current session state so `session-off` restores exactly
+  state_drop "$SESSION_KEYS"
   {
     echo "brightness=$(cat "$BL/brightness" 2>/dev/null)"
-    echo "profile=$(cat "$PROFILE_SYSFS" 2>/dev/null)"
-    echo "pl1=$(cat /sys/devices/platform/asus-nb-wmi/ppt_pl1_spl 2>/dev/null)"
-    echo "pl2=$(cat /sys/devices/platform/asus-nb-wmi/ppt_pl2_sppt 2>/dev/null)"
-    echo "pl3=$(cat /sys/devices/platform/asus-nb-wmi/ppt_fppt 2>/dev/null)"
     for s in "${BG_SERVICES[@]}"; do systemctl is-active "$s" >/dev/null 2>&1 && echo "svc=$s"; done
     for c in "${BG_CONTAINERS[@]}"; do docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$c" && echo "ctr=$c"; done
     [ "$pause_vm" = 1 ] && [ "$(sudo virsh domstate dev-vm 2>/dev/null)" = running ] && echo "vm=dev-vm"
-  } > "$STATE"
+  } >> "$STATE"
 
-  # 2. hardware: dim + quiet profile + capped TDP
+  # 2. dim the screen
   set_bright_pct "$BOONDOCK_BRIGHT_PCT"; say "brightness → ${BOONDOCK_BRIGHT_PCT}%"
-  "$Z" profile --set quiet >/dev/null 2>&1; say "profile → quiet (low-power)"
-  # z13ctl only (no sudo, no sysfs writes): it has the udev/perms grants as deck.
-  "$Z" tdp --set "$TDP_PL1" --pl2 "$TDP_PL2" --pl3 "$TDP_PL3" >/dev/null 2>&1
-  say "TDP → ${TDP_PL1}W sustained / ${TDP_PL2}W / ${TDP_PL3}W boost"
 
   # 3. stop BACKGROUND infra only (restartable services, not interactive sessions)
   for s in "${BG_SERVICES[@]}"; do systemctl is-active "$s" >/dev/null 2>&1 && { sudo systemctl stop "$s" && say "stopped service: $s"; }; done
@@ -65,37 +77,67 @@ do_on() {
   else
     [ "$(sudo virsh domstate dev-vm 2>/dev/null)" = running ] && say "dev-vm left RUNNING (use --pause-vm to include it)"
   fi
-  echo "  → run 'boondock off' when you're back on power."
+  return 0
 }
 
-do_off() {
-  echo "🔌 boondock OFF — restoring"
-  if [ -f "$STATE" ]; then
-    . <(sed 's/^/local_/' "$STATE" 2>/dev/null) 2>/dev/null  # not used; parse manually below
-    local b p p1 p2 p3; b=$(grep '^brightness=' "$STATE"|cut -d= -f2); p=$(grep '^profile=' "$STATE"|cut -d= -f2)
-    p1=$(grep '^pl1=' "$STATE"|cut -d= -f2); p2=$(grep '^pl2=' "$STATE"|cut -d= -f2); p3=$(grep '^pl3=' "$STATE"|cut -d= -f2)
-    [ -n "$p" ]  && { "$Z" profile --set "$p" >/dev/null 2>&1; say "profile → $p"; }
-    [ -n "$p1" ] && { "$Z" tdp --set "$p1" --pl2 "${p2:-$p1}" --pl3 "${p3:-$p1}" >/dev/null 2>&1; say "TDP → ${p1}/${p2}/${p3}W"; }
+do_session_off() {
+  echo "🔌 boondock session OFF — restoring"
+  if [ -n "$(state_get brightness)" ] || grep -Eq "^($SESSION_KEYS)=" "$STATE" 2>/dev/null; then
+    local b; b=$(state_get brightness)
     [ -n "$b" ]  && { echo "$b" | sudo tee "$BL/brightness" >/dev/null; say "brightness restored"; }
-    for s in $(grep '^svc=' "$STATE"|cut -d= -f2); do sudo systemctl start "$s" && say "restarted service: $s"; done
-    for c in $(grep '^ctr=' "$STATE"|cut -d= -f2); do docker start "$c" >/dev/null && say "restarted container: $c"; done
-    for v in $(grep '^vm=' "$STATE"|cut -d= -f2); do [ "$(sudo virsh domstate "$v" 2>/dev/null)" = paused ] && { sudo virsh resume "$v" >/dev/null && say "resumed $v"; }; done
-    rm -f "$STATE"
+    for s in $(state_get svc); do sudo systemctl start "$s" && say "restarted service: $s"; done
+    for c in $(state_get ctr); do docker start "$c" >/dev/null && say "restarted container: $c"; done
+    for v in $(state_get vm); do [ "$(sudo virsh domstate "$v" 2>/dev/null)" = paused ] && { sudo virsh resume "$v" >/dev/null && say "resumed $v"; }; done
+    state_drop "$SESSION_KEYS"
   else
     say "no snapshot — restoring to defaults"
-    "$Z" profile --set balanced >/dev/null 2>&1; say "profile → balanced (firmware TDP)"
     set_bright_pct "$DEFAULT_RESTORE_PCT"; say "brightness → ${DEFAULT_RESTORE_PCT}%"
     for s in "${BG_SERVICES[@]}"; do sudo systemctl start "$s" >/dev/null 2>&1 && say "started service: $s"; done
     for c in "${BG_CONTAINERS[@]}"; do docker start "$c" >/dev/null 2>&1 && say "started container: $c"; done
     [ "$(sudo virsh domstate dev-vm 2>/dev/null)" = paused ] && { sudo virsh resume dev-vm >/dev/null && say "resumed dev-vm"; }
   fi
-  echo "  → beast mode restored."
+  state_cleanup
 }
+
+# ---- hardware: STANDALONE use only (the profile engine owns power for profiles) ----
+# Never call from a profile hook: it would overwrite the profile's own TDP / base.
+do_hw_on() {
+  echo "🏕️  boondock hardware ON"
+  state_drop "$HW_KEYS"
+  {
+    echo "profile=$(cat "$PROFILE_SYSFS" 2>/dev/null)"
+    echo "pl1=$(cat "$PPT_DIR/ppt_pl1_spl" 2>/dev/null)"
+    echo "pl2=$(cat "$PPT_DIR/ppt_pl2_sppt" 2>/dev/null)"
+    echo "pl3=$(cat "$PPT_DIR/ppt_fppt" 2>/dev/null)"
+  } >> "$STATE"
+  "$Z" profile --set quiet >/dev/null 2>&1; say "profile → quiet (low-power)"
+  # z13ctl only (no sudo, no sysfs writes): it has the udev/perms grants as deck.
+  "$Z" tdp --set "$TDP_PL1" --pl2 "$TDP_PL2" --pl3 "$TDP_PL3" >/dev/null 2>&1
+  say "TDP → ${TDP_PL1}W sustained / ${TDP_PL2}W / ${TDP_PL3}W boost"
+}
+
+do_hw_off() {
+  echo "🔌 boondock hardware OFF — restoring"
+  local p p1 p2 p3; p=$(state_get profile); p1=$(state_get pl1); p2=$(state_get pl2); p3=$(state_get pl3)
+  if [ -n "$p$p1" ]; then
+    [ -n "$p" ]  && { "$Z" profile --set "$p" >/dev/null 2>&1; say "profile → $p"; }
+    [ -n "$p1" ] && { "$Z" tdp --set "$p1" --pl2 "${p2:-$p1}" --pl3 "${p3:-$p1}" >/dev/null 2>&1; say "TDP → ${p1}/${p2}/${p3}W"; }
+    state_drop "$HW_KEYS"
+  else
+    say "no snapshot — restoring to defaults"
+    "$Z" profile --set balanced >/dev/null 2>&1; say "profile → balanced (firmware TDP)"
+  fi
+  state_cleanup
+}
+
+# `on` / `off` (by hand): both halves, as before.
+do_on()  { do_hw_on; do_session_on "$@"; echo "  → run 'boondock off' when you're back on power."; }
+do_off() { do_hw_off; do_session_off; echo "  → beast mode restored."; }
 
 do_status() {
   local max cur pct; max=$(bright_max); cur=$(cat "$BL/brightness"); pct=$(( cur * 100 / max ))
   echo "boondock status:"
-  say "brightness: ${pct}%   profile: $(cat "$PROFILE_SYSFS" 2>/dev/null)   TDP(PL1): $(cat /sys/devices/platform/asus-nb-wmi/ppt_pl1_spl 2>/dev/null)W"
+  say "brightness: ${pct}%   profile: $(cat "$PROFILE_SYSFS" 2>/dev/null)   TDP(PL1): $(cat $PPT_DIR/ppt_pl1_spl 2>/dev/null)W"
   say "dev-vm: $(sudo virsh domstate dev-vm 2>/dev/null || echo n/a)"
   for s in "${BG_SERVICES[@]}"; do say "service $s: $(systemctl is-active "$s" 2>/dev/null)"; done
   [ -f "$STATE" ] && say "MODE: boondock ON (snapshot present)" || say "MODE: normal (no snapshot)"
@@ -104,6 +146,10 @@ do_status() {
 case "${1:-status}" in
   on)     shift; do_on "$@";;
   off)    do_off;;
+  session-on)  shift; do_session_on "$@";;     # profile hooks: no power hardware
+  session-off) do_session_off;;
+  hardware-on)  do_hw_on;;                     # standalone only
+  hardware-off) do_hw_off;;
   status) do_status;;
-  *) echo "usage: boondock {on [--pause-vm]|off|status}"; exit 1;;
+  *) echo "usage: boondock {on [--pause-vm]|off|session-on [--pause-vm]|session-off|hardware-on|hardware-off|status}"; exit 1;;
 esac
