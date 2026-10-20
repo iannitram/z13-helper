@@ -96,3 +96,66 @@ def test_fan_trace_is_created_0600_without_chmod(tmp_path, monkeypatch):
     finally:
         os.umask(old)
     assert path.stat().st_mode & 0o777 == 0o600
+
+
+def _planted(tmp_path):
+    target = tmp_path / "victim.txt"
+    target.write_text("victim\n")
+    target.chmod(0o644)
+    link = tmp_path / "fan-trace.log"
+    link.symlink_to(target)
+    return target, link
+
+
+def test_handler_refuses_planted_symlink(tmp_path, monkeypatch):
+    """The watchdog runs as root in a deck-writable dir: a symlink at the log path
+    must not be opened, chmod'ed or chowned (fail closed, no path-based fallback)."""
+    import fan_watchdog
+    target, link = _planted(tmp_path)
+    calls = []
+    monkeypatch.setattr(fan_watchdog.os, "chmod", lambda *a, **k: calls.append(("chmod", a)))
+    monkeypatch.setattr(fan_watchdog.os, "chown", lambda *a, **k: calls.append(("chown", a)))
+    with pytest.raises(OSError):
+        fan_watchdog._OwnedRotatingHandler(str(link), (os.getuid(), os.getgid()))
+    assert calls == []
+    assert target.read_text() == "victim\n"
+    assert target.stat().st_mode & 0o777 == 0o644
+
+
+def test_to_file_with_planted_symlink_disables_logging(tmp_path, capsys):
+    import fan_watchdog
+    target, link = _planted(tmp_path)
+    trace = fan_watchdog.FanTrace.to_file(str(link), name="symlink-test")
+    trace.log.info("must not land in the victim")
+    assert target.read_text() == "victim\n"
+    assert target.stat().st_mode & 0o777 == 0o644
+    assert "refus" in capsys.readouterr().err.lower()
+
+
+def test_rollover_does_not_follow_symlink(tmp_path):
+    import fan_watchdog
+    path = tmp_path / "t.log"
+    h = fan_watchdog._OwnedRotatingHandler(str(path), None, maxBytes=10, backupCount=2)
+    target = tmp_path / "victim.txt"
+    target.write_text("victim\n")
+    target.chmod(0o644)
+    path.unlink()
+    path.symlink_to(target)
+    h.doRollover()
+    h.close()
+    assert target.read_text() == "victim\n"
+    assert target.stat().st_mode & 0o777 == 0o644
+    assert path.is_file() and not path.is_symlink()
+    assert path.stat().st_mode & 0o777 == 0o600
+
+
+def test_handler_refuses_non_regular_file(tmp_path):
+    import fan_watchdog
+    fifo = tmp_path / "fifo.log"
+    os.mkfifo(fifo)
+    reader = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
+    try:
+        with pytest.raises(OSError):
+            fan_watchdog._OwnedRotatingHandler(str(fifo), None)
+    finally:
+        os.close(reader)
