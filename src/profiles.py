@@ -130,12 +130,13 @@ def default_profiles():
         _profile("Balanced", "balanced", builtin=True, fan_curve=BALANCED_CURVE,
                  brightness="medium", battery_limit=80),
         _profile("Turbo", "performance", builtin=True, fan_curve=TURBO_CURVE,
-                 brightness="high", battery_limit=80, max_fans=True),   # Ian, 2026-10-11
-        # Hardware side of boondock is explicit here; the script does the rest
-        # (screen dim, background services) and restores them on exit.
+                 brightness="high", battery_limit=80, max_fans=True),
+        # Hardware side of boondock is explicit here; the hooks run only the script's
+        # session half (screen dim, background services), never its power writes,
+        # which would overwrite this profile's own settings.
         _profile("Boondock", "quiet", builtin=True,
                  tdp={"pl1": 20, "pl2": 30, "pl3": 40, "force": False},
-                 enter=f"{BOONDOCK_BIN} on", exit_=f"{BOONDOCK_BIN} off"),
+                 enter=f"{BOONDOCK_BIN} session-on", exit_=f"{BOONDOCK_BIN} session-off"),
     ]
 
 
