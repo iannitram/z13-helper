@@ -14,6 +14,9 @@ import json
 import time
 import asyncio
 import sys
+import contextlib
+import fcntl
+import threading
 
 import decky  # modern API (NOT decky_plugin)
 
@@ -136,6 +139,48 @@ def _shared_config():
         return {}
 
 
+# Copy of profiles.file_lock (this backend can't import src/): one stable lock file
+# next to each shared store, held around the whole read-modify-write, so the desktop
+# app, z13-profile and this backend can't lose each other's updates. The lock file is
+# kept deck-owned because we run as root and the other writers run as deck.
+_lock_state = threading.local()
+
+
+@contextlib.contextmanager
+def _file_lock(path):
+    held = _lock_state.__dict__.setdefault("held", {})
+    if held.get(path):
+        held[path] += 1
+        try:
+            yield
+        finally:
+            held[path] -= 1
+        return
+    fd = None
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        lock_path = f"{path}.lock"
+        fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o666)
+        if os.geteuid() == 0:
+            try:
+                os.fchown(fd, DECK_UID, DECK_GID)
+                os.fchmod(fd, 0o664)
+            except OSError:
+                pass
+        fcntl.flock(fd, fcntl.LOCK_EX)
+    except OSError:
+        if fd is not None:
+            os.close(fd)
+        fd = None   # can't lock: behave as before, unlocked
+    held[path] = 1
+    try:
+        yield
+    finally:
+        held.pop(path, None)
+        if fd is not None:
+            os.close(fd)
+
+
 def _load_max_fans():
     """Shared Max Fans state; seeds it from the legacy stores on first use."""
     try:
@@ -147,13 +192,21 @@ def _load_max_fans():
         pass
     # Same precedence as the desktop app's migration: its config.json first,
     # then this plugin's old private state.json.
-    legacy, old = _shared_config(), _load_state()
-    state = {
-        "enabled": bool(legacy.get("fans_max", old.get("max_fans", False))),
-        "saved_curve": legacy.get("fan_curve_saved") or old.get("saved_curve"),
-    }
-    _save_max_fans(state)
-    return state
+    with _file_lock(MAX_FANS_STATE):
+        try:   # another writer may have seeded it while we waited
+            with open(MAX_FANS_STATE) as f:
+                state = json.load(f)
+            if isinstance(state, dict):
+                return state
+        except (OSError, ValueError):
+            pass
+        legacy, old = _shared_config(), _load_state()
+        state = {
+            "enabled": bool(legacy.get("fans_max", old.get("max_fans", False))),
+            "saved_curve": legacy.get("fan_curve_saved") or old.get("saved_curve"),
+        }
+        _save_max_fans(state)
+        return state
 
 
 def _save_max_fans(state):
@@ -168,9 +221,10 @@ def _save_max_fans(state):
 
 
 def _update_max_fans(**changes):
-    state = _load_max_fans()
-    state.update(changes)
-    _save_max_fans(state)
+    with _file_lock(MAX_FANS_STATE):
+        state = _load_max_fans()
+        state.update(changes)
+        _save_max_fans(state)
 
 
 def _current_curve_pwm():
@@ -329,12 +383,16 @@ def write_store_atomic(store, path=None):
 
 def _set_active_field(**fields):
     """Read-modify-write the active profile. Returns (name, error-or-None)."""
-    store = _ensure_store()
-    if store is None:
+    # Seed first: it runs z13-profile, which takes the same lock.
+    if _ensure_store() is None:
         return None, "profiles.json missing (is z13-profile installed?)"
     try:
-        name = update_active_profile(store, **fields)
-        write_store_atomic(store)
+        with _file_lock(PROFILES_STORE):
+            store = _read_store()   # re-read under the lock: never write an older snapshot
+            if store is None:
+                return None, "profiles.json missing (is z13-profile installed?)"
+            name = update_active_profile(store, **fields)
+            write_store_atomic(store)
     except (KeyError, ValueError, OSError) as e:
         return None, str(e)
     return name, None
