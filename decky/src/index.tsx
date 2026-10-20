@@ -91,12 +91,19 @@ function Content() {
                 },
                 name,
               );
+              // A false result can still mean the profile is active (one step failed): show what
+              // the backend reports; revert only if that re-read failed.
+              if (r.profile) setProfileState(r.profile);
+              else if (!r.ok) setProfileState(previous);
+              if (r.maxFans !== undefined) setMaxFansState(r.maxFans);
               if (!r.ok) {
-                setProfileState(previous);
-                toaster.toast({ title: "Z13-Helper", body: `Could not switch to ${name}` });
-              } else {
-                if (r.profile) setProfileState(r.profile);
-                if (r.maxFans !== undefined) setMaxFansState(r.maxFans);
+                toaster.toast({
+                  title: "Z13-Helper",
+                  body:
+                    r.profile === name
+                      ? `${name} is active, but some settings did not apply`
+                      : `Could not switch to ${name}`,
+                });
               }
               loadPower(); // TDP / battery limit belong to the (new) active profile
             }}

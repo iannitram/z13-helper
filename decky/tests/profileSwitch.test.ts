@@ -25,17 +25,29 @@ function deps(applyResult: boolean | Error) {
   };
 }
 
-test("false result: no state refresh, reports failure so the caller reverts", async () => {
+test("false result, backend reports the new name active: state re-read, ok false", async () => {
   const { d, calls } = deps(false);
   const r = await switchProfile(d, "Turbo");
-  assert.equal(r.ok, false);
-  assert.deepEqual(calls, ["apply:Turbo"]);
+  assert.deepEqual(r, { ok: false, profile: "Turbo", maxFans: true });
+  assert.ok(calls.includes("readProfile") && calls.includes("readMaxFans"));
 });
 
-test("rejected promise: treated as failure, not thrown", async () => {
-  const { d } = deps(new Error("backend gone"));
+test("false result, backend reports the old name: old name returned", async () => {
+  const { d } = deps(false);
+  d.readProfile = async () => "Balanced";
   const r = await switchProfile(d, "Turbo");
   assert.equal(r.ok, false);
+  assert.equal(r.profile, "Balanced");
+});
+
+test("rejected promise and failed re-read: not thrown, no state (caller reverts)", async () => {
+  const { d } = deps(new Error("backend gone"));
+  d.readProfile = async () => {
+    throw new Error("x");
+  };
+  const r = await switchProfile(d, "Turbo");
+  assert.equal(r.ok, false);
+  assert.equal(r.profile, undefined);
 });
 
 test("success: active profile and Max Fans are re-read from the backend", async () => {

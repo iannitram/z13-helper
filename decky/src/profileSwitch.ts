@@ -8,13 +8,15 @@ export interface SwitchDeps {
 
 export interface SwitchResult {
   ok: boolean;
-  /** Authoritative state re-read after a successful switch (absent if that read failed). */
+  /** Authoritative state re-read after the call, success or not (absent if that read failed). */
   profile?: string;
   maxFans?: boolean;
 }
 
-/** Apply a profile; on success re-read the active profile and Max Fans together
- *  (entering/leaving Turbo changes Max Fans). A false result or a rejected call is a failure. */
+/** Apply a profile, then re-read the active profile and Max Fans together
+ *  (entering/leaving Turbo changes Max Fans). A false result or a rejected call is `ok: false`,
+ *  but the profile may still be active (apply returns false when any single step fails), so
+ *  the state is re-read either way and the caller shows what the backend reports. */
 export async function switchProfile(deps: SwitchDeps, name: string): Promise<SwitchResult> {
   let ok = false;
   try {
@@ -22,10 +24,9 @@ export async function switchProfile(deps: SwitchDeps, name: string): Promise<Swi
   } catch {
     ok = false;
   }
-  if (!ok) return { ok: false };
   const [profile, maxFans] = await Promise.all([
     deps.readProfile().catch(() => undefined),
     deps.readMaxFans().catch(() => undefined),
   ]);
-  return { ok: true, profile, maxFans };
+  return { ok, profile, maxFans };
 }
