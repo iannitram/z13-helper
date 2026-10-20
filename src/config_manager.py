@@ -1,7 +1,9 @@
 import json
 import os
 import logging
+import shutil
 import threading
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +22,20 @@ class ConfigManager:
         if os.path.exists(self.config_path):
             try:
                 with open(self.config_path, 'r') as f:
-                    self.config = json.load(f)
+                    data = json.load(f)
+                if not isinstance(data, dict):
+                    # Valid JSON of the wrong shape: callers treat config as a
+                    # dict. Keep the file for recovery, start clean.
+                    backup = f"{self.config_path}.corrupt-{time.strftime('%Y%m%d-%H%M%S')}"
+                    logger.error(f"Config at {self.config_path} is a {type(data).__name__}, "
+                                 f"not an object; kept as {backup}, starting with defaults")
+                    try:
+                        shutil.copy2(self.config_path, backup)
+                    except OSError as e:
+                        logger.error(f"Could not keep a backup of {self.config_path}: {e}")
+                    self.config = {}
+                else:
+                    self.config = data
             except (json.JSONDecodeError, IOError) as e:
                 logger.error(f"Failed to load config from {self.config_path}: {e}")
                 self.config = {}
