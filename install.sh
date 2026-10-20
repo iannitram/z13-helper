@@ -413,8 +413,20 @@ host_files() {
     ((n)) || info "all match the repo"
     ((units_changed)) && act systemctl --user daemon-reload
 
+    # z13-battery-default.service is retired: z13-restore-profile is the one login writer of
+    # the charge limit (profile's limit, or 80% via z13-balanced when no profile store exists).
+    # Upgrades remove the installed copy, or Wants= from z13-helper would still start it.
+    local RETIRED_UNIT=z13-battery-default.service RETIRED_FILE="$HOME/.config/systemd/user/z13-battery-default.service"
+    if [[ -e $RETIRED_FILE ]] || [[ $(systemctl --user is-enabled "$RETIRED_UNIT" 2>/dev/null) == enabled ]]; then
+        act systemctl --user disable --now "$RETIRED_UNIT"
+        ((DRY)) || backup "$RETIRED_FILE"
+        act rm -f "$RETIRED_FILE"
+        act systemctl --user daemon-reload
+        CHANGED+=("retired $RETIRED_UNIT")
+    fi
+
     local u
-    for u in z13-battery-default.service z13-button-watcher.service z13-helper.service z13-restore-profile.service; do
+    for u in z13-button-watcher.service z13-helper.service z13-restore-profile.service; do
         [[ $(systemctl --user is-enabled "$u" 2>/dev/null) == enabled ]] && continue
         act systemctl --user enable "$u" && CHANGED+=("enabled $u")
     done

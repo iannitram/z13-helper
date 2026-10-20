@@ -131,3 +131,22 @@ def test_dry_run_repair_writes_nothing(tmp_path, real_subprocess):
         if c.startswith("sudo "):
             assert c in ("sudo -n true",) or c.startswith("sudo -n cmp -s "), c
         assert not c.startswith("logger"), c
+
+
+@needs_bash[0]
+@needs_bash[1]
+def test_dry_run_enables_one_battery_writer(tmp_path, real_subprocess):
+    out = dry_run(tmp_path, real_subprocess)
+    assert "systemctl --user enable z13-restore-profile.service" in out
+    assert "systemctl --user enable z13-battery-default.service" not in out
+
+
+@needs_bash[0]
+@needs_bash[1]
+def test_dry_run_upgrade_retires_installed_battery_default(tmp_path, real_subprocess):
+    home_units = tmp_path / "home" / ".config" / "systemd" / "user"
+    home_units.mkdir(parents=True)
+    (home_units / "z13-battery-default.service").write_text("[Unit]\n")
+    out = dry_run(tmp_path, real_subprocess)
+    assert "disable --now z13-battery-default.service" in out
+    assert "rm -f" in out and "z13-battery-default.service" in out
