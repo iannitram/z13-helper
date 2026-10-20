@@ -321,6 +321,10 @@ class _OwnedRotatingHandler(logging.handlers.RotatingFileHandler):
 
     def _open(self):
         stream = super()._open()
+        try:
+            os.chmod(self.baseFilename, 0o600)   # owner-only: a log is private to the user
+        except OSError:
+            pass
         if self._owner is not None:
             try:
                 os.chown(self.baseFilename, *self._owner)
