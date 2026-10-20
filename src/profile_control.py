@@ -117,16 +117,17 @@ class ProfileControl(QObject):
         if new_name in self.names():
             self.message.emit(f"A profile named {new_name!r} already exists")
             return False
-        store = self.store()
-        for p in store["profiles"]:
-            if p["name"] == old:
-                if p.get("builtin"):
-                    self.message.emit("Built-in profiles keep their names")
-                    return False
-                p["name"] = new_name
-        if store.get("active") == old:
-            store["active"] = new_name
-        profiles.save_store(store)
+        with profiles.store_lock():
+            store = self.store()
+            for p in store["profiles"]:
+                if p["name"] == old:
+                    if p.get("builtin"):
+                        self.message.emit("Built-in profiles keep their names")
+                        return False
+                    p["name"] = new_name
+            if store.get("active") == old:
+                store["active"] = new_name
+            profiles.save_store(store)
         self.changed.emit()
         return True
 
@@ -146,16 +147,17 @@ class ProfileControl(QObject):
 
     def factory_defaults(self, name):
         """Reset a built-in to its shipped values; a custom profile loses its overrides."""
-        store = self.store()
         defaults = {p["name"]: p for p in profiles.default_profiles()}
-        for i, p in enumerate(store["profiles"]):
-            if p["name"] != name:
-                continue
-            if name in defaults:
-                store["profiles"][i] = defaults[name]
-            else:
-                p.update({"tdp": None, "fan_curve": None, "undervolt": None})
-        profiles.save_store(store)
+        with profiles.store_lock():
+            store = self.store()
+            for i, p in enumerate(store["profiles"]):
+                if p["name"] != name:
+                    continue
+                if name in defaults:
+                    store["profiles"][i] = defaults[name]
+                else:
+                    p.update({"tdp": None, "fan_curve": None, "undervolt": None})
+            profiles.save_store(store)
         self.changed.emit()
         if name == self.active_name():
             self.reapply_active()
