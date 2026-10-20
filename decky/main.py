@@ -631,11 +631,7 @@ class DeckyFans:
         rc, out = _run(tdp_argv(tdp), as_deck=True)
         if rc != 0:
             return f"TDP not restored ({out[-120:] or f'rc={rc}'})"
-        rc, out = _run([Z13CTL, "tdp", "--get"], as_deck=True)
-        got = {f"pl{n}": int(w) for n, w in re.findall(r"PL([123])\s+\([^)]+\):\s+(\d+)", out)}
-        if rc == 0 and any(got.get(k) not in (None, tdp[k]) for k in ("pl1", "pl2", "pl3")):
-            return f"TDP reads {got}, wanted {tdp['pl1']}/{tdp['pl2']}/{tdp['pl3']} W"
-        return None
+        return None  # no readback: reading the PPT values can lock the EC
 
     def restore_undervolt(self):
         uv = (active_profile(_read_store()) or {}).get("undervolt")

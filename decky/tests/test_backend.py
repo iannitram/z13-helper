@@ -569,6 +569,7 @@ class RecoveryRestoresTuningTest(unittest.TestCase):
         self.assertTrue(sets[2].startswith("fancurve --set"))
         self.assertEqual(sets[3], "undervolt --set -12")
         self.assertEqual(" ".join(run.calls[-1][0][1:]), "undervolt --get")
+        self.assertNotIn("tdp --get", [" ".join(c[0][1:]) for c in run.calls])
 
     def test_failed_undervolt_is_reported_and_curve_still_written(self):
         run = fake_host(self, fail_if=("undervolt",), out="ryzen_smu not loaded")

@@ -58,12 +58,20 @@ def test_recovery_restores_tdp_and_undervolt_after_profile_write(profiles_env, f
     assert "re-applied" in msg
 
 
-def test_recovery_reads_back_tdp_and_undervolt(profiles_env, fake_host, ctl):
+def test_recovery_reads_back_undervolt_but_never_tdp(profiles_env, fake_host, ctl):
     store_with(user_profile())
     make_wd(ctl)._recover(False)
     lines = fake_host.lines
-    assert f"{Z} tdp --get" in lines[lines.index(f"{Z} tdp --set 18 --pl2 22 --pl3 25"):]
+    assert f"{Z} tdp --get" not in lines
     assert lines[-1] == f"{Z} undervolt --get"
+
+
+def test_failed_tdp_is_reported(profiles_env, fake_host, ctl):
+    store_with(user_profile())
+    fake_host.fail("tdp --set", out="nope")
+    msg = make_wd(ctl)._recover(False)
+    assert "TDP not restored" in msg
+    assert any(" fancurve --set " in l for l in fake_host.lines)
 
 
 def test_failed_undervolt_does_not_block_the_curve_and_is_reported(profiles_env, fake_host, ctl):
