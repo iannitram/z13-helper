@@ -89,6 +89,12 @@ do_session_off() {
     for c in $(state_get ctr); do docker start "$c" >/dev/null && say "restarted container: $c"; done
     for v in $(state_get vm); do [ "$(sudo virsh domstate "$v" 2>/dev/null)" = paused ] && { sudo virsh resume "$v" >/dev/null && say "resumed $v"; }; done
     state_drop "$SESSION_KEYS"
+    # An older `boondock on` wrote hardware keys into the same snapshot. A profile hook
+    # must not write power, so leave the hardware as is and clear the stale keys
+    # (otherwise status reports ON forever and a later `off` restores old values).
+    if grep -Eq "^($HW_KEYS)=" "$STATE" 2>/dev/null; then
+      state_drop "$HW_KEYS"; say "hardware snapshot found: power left as is, snapshot cleared"
+    fi
   else
     say "no snapshot — restoring to defaults"
     set_bright_pct "$DEFAULT_RESTORE_PCT"; say "brightness → ${DEFAULT_RESTORE_PCT}%"

@@ -132,3 +132,19 @@ def test_user_edited_boondock_hook_is_left_alone(profiles_env):
     profiles.save_store(store)
     got = next(p for p in profiles.load_store()["profiles"] if p["name"] == "Boondock")
     assert got["hooks"] == {"enter": "echo mine", "exit": "echo bye"}
+
+
+def test_session_off_clears_old_combined_snapshot(real_subprocess, env):
+    """A snapshot written by the pre-split `boondock on` holds hardware keys too: the
+    session-off hook restores the session part, writes no power, and clears the file."""
+    state = Path(env["BOONDOCK_STATE"])
+    state.write_text("brightness=800\nprofile=balanced\npl1=30\npl2=30\npl3=30\n")
+    p = real_subprocess(["bash", str(SCRIPT), "session-off"], env=env, capture_output=True,
+                        text=True, timeout=30, stdin=subprocess.DEVNULL)
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert "sudo tee" in Path(env["STUB_LOG"]).read_text()      # brightness restored
+    assert hardware_touches(Path(env["STUB_LOG"]).read_text().splitlines()) == []
+    assert not state.exists()
+    st = real_subprocess(["bash", str(SCRIPT), "status"], env=env, capture_output=True,
+                         text=True, timeout=30, stdin=subprocess.DEVNULL)
+    assert "MODE: normal" in st.stdout
