@@ -70,7 +70,6 @@ MANIFEST = [
     ("tooling/diag/z13-memory-check", f"{BIN}/z13-memory-check", "755", False),
     ("tooling/diag/z13-storage-check", f"{BIN}/z13-storage-check", "755", False),
     ("tooling/diag/z13-whereami", f"{BIN}/z13-whereami", "755", False),
-    ("packaging/host/systemd/user/z13-battery-default.service", f"{UNITS}/z13-battery-default.service", "644", False),
     ("packaging/host/systemd/user/z13-button-watcher.service", f"{UNITS}/z13-button-watcher.service", "644", False),
     ("packaging/host/systemd/user/z13-helper.service", f"{UNITS}/z13-helper.service", "644", False),
     ("packaging/host/systemd/user/z13-restore-profile.service", f"{UNITS}/z13-restore-profile.service", "644", False),
@@ -80,7 +79,7 @@ MANIFEST = [
     ("packaging/host/systemd/system/z13-lightbar-reset.service", f"{ETC_UNITS}/z13-lightbar-reset.service", "644", True),
     ("packaging/host/polkit/50-z13-lightbar-reset.rules", POLKIT_RULE, "644", True),
 ]
-USER_UNITS_ENABLED = ["z13-battery-default.service", "z13-button-watcher.service",
+USER_UNITS_ENABLED = ["z13-button-watcher.service",
                       "z13-helper.service", "z13-restore-profile.service", "z13ctl.socket"]
 # Ours (resume hook, lightbar reset + its polkit rule) + z13ctl setup's two
 # files. They survive an atomic update only while listed here.

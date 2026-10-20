@@ -1,8 +1,7 @@
 [Unit]
 Description=Z13: re-apply saved profile (battery, fans, brightness) on user-session start
 # Runs in BOTH desktop mode AND game mode because user-systemd default.target is
-# reached in both. Replaces the now-redundant z13-battery-default.service whose
-# job is subsumed here (every profile script also re-applies the 80% battery limit).
+# reached in both. This is the only login writer of the battery charge limit.
 After=default.target
 
 [Service]
