@@ -138,7 +138,7 @@ def test_fake_root_chowns_the_fd_never_the_path(case, dmain, tmp_path, monkeypat
 def test_temp_name_is_not_predictable(dmain, tmp_path, monkeypatch):
     seen = []
     real = os.replace
-    monkeypatch.setattr(os, "replace", lambda a, b: (seen.append(os.path.basename(a)), real(a, b)))
+    monkeypatch.setattr(os, "replace", lambda a, b, **kw: (seen.append(os.path.basename(a)), real(a, b, **kw)))
     for _ in range(3):
         dmain.write_store_atomic({"active": "A", "profiles": []}, str(tmp_path / "p.json"))
     assert len(set(seen)) == 3
@@ -146,7 +146,7 @@ def test_temp_name_is_not_predictable(dmain, tmp_path, monkeypatch):
 
 
 def test_write_failure_leaves_no_temp(dmain, tmp_path, monkeypatch):
-    def boom(a, b):
+    def boom(a, b, **kw):
         raise OSError("replace failed")
     monkeypatch.setattr(os, "replace", boom)
     with pytest.raises(OSError):
@@ -204,8 +204,108 @@ def test_symlink_at_trace_dir_is_not_chowned(dmain, tmp_path, monkeypatch):
 
 def test_new_trace_dir_is_chowned_by_fd(dmain, tmp_path, monkeypatch):
     monkeypatch.setattr(dmain, "logging_enabled", lambda: True)
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
     fch, ch = [], []
     monkeypatch.setattr(os, "fchown", lambda fd, u, g: fch.append((u, g)))
     monkeypatch.setattr(os, "chown", lambda *a, **k: ch.append(a))
     dmain.make_fan_trace(str(tmp_path / "new" / "trace.log"), owner=(1000, 1000))
     assert (tmp_path / "new").is_dir() and ch == [] and (1000, 1000) in fch
+
+
+# ---- parent-directory symlinks: every writer walks from the owner's home, no-follow
+
+@pytest.fixture
+def fakehome(dmain, tmp_path, monkeypatch):
+    """A fake owner home under tmp_path (patched pwd), plus a fake-root fchown recorder."""
+    import pwd
+    home = tmp_path / "home"
+    home.mkdir()
+    uid = os.getuid()
+    real_pw = pwd.getpwuid
+
+    def fake_pw(u):
+        if u == uid:
+            return types.SimpleNamespace(pw_dir=str(home))
+        return real_pw(u)
+    monkeypatch.setattr(pwd, "getpwuid", fake_pw)
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    calls = []
+    monkeypatch.setattr(os, "fchown", lambda fd, u, g: calls.append((u, g)))
+    monkeypatch.setattr(os, "chown", lambda *a, **k: pytest.fail("path chown"))
+    return types.SimpleNamespace(home=home, owner=(uid, os.getgid()), chown=calls, tmp=tmp_path)
+
+
+def _writers(dm, home, owner):
+    cfg = home / ".config" / "z13-helper"
+    state = home / ".local" / "state" / "z13-helper"
+
+    def store():
+        dm.write_store_atomic({"active": "A", "profiles": []}, str(cfg / "profiles.json"))
+
+    def fans():
+        dm.MAX_FANS_STATE = str(cfg / "max-fans.json")
+        dm._save_max_fans({"enabled": True})
+
+    def stamp():
+        if not dm._stamp_rate_limited(str(cfg / "stamp"), lambda: 1.0, lambda a: "x")[0]:
+            raise AssertionError
+        # the stamp swallows OSError; surface it for the test
+        dm._atomic_write_text(str(cfg / "stamp"), "1\n", owner=owner)
+
+    def trace():
+        dm.logging_enabled = lambda: True
+        t = dm.make_fan_trace(str(state / "trace.log"), owner=owner)
+        if t is None:
+            raise OSError("no trace")
+    return {"store": (store, ".config"), "fans": (fans, ".config"),
+            "stamp": (stamp, ".config"), "trace": (trace, ".local")}
+
+
+@pytest.mark.parametrize("which", ["store", "fans", "stamp", "trace"])
+@pytest.mark.parametrize("level", ["top", "mid"])
+def test_parent_symlink_is_refused(which, level, dmain, fakehome):
+    fn, top = _writers(dmain, fakehome.home, fakehome.owner)[which]
+    victim = fakehome.tmp / "victim"
+    victim.mkdir()
+    if level == "top":
+        (fakehome.home / top).symlink_to(victim)
+    else:
+        real = fakehome.tmp / "elsewhere"
+        real.mkdir()
+        parent = fakehome.home / top
+        parent.mkdir()
+        sub = "z13-helper" if top == ".config" else "state"
+        (parent / sub).symlink_to(victim)
+    with pytest.raises(OSError):
+        fn()
+    assert list(victim.iterdir()) == []
+    assert fakehome.chown == []
+
+
+def test_dot_local_state_symlink_refused(dmain, fakehome):
+    victim = fakehome.tmp / "victim"
+    victim.mkdir()
+    (fakehome.home / ".local").mkdir()
+    (fakehome.home / ".local" / "state").symlink_to(victim)
+    fn, _ = _writers(dmain, fakehome.home, fakehome.owner)["trace"]
+    with pytest.raises(OSError):
+        fn()
+    assert list(victim.iterdir()) == [] and fakehome.chown == []
+
+
+def test_normal_path_creates_dirs_owned_by_owner(dmain, fakehome):
+    fn, _ = _writers(dmain, fakehome.home, fakehome.owner)["store"]
+    fn()
+    assert (fakehome.home / ".config" / "z13-helper" / "profiles.json").is_file()
+    # .config and z13-helper were both created and handed to the owner, plus the file
+    assert fakehome.chown.count(fakehome.owner) >= 3
+
+
+def test_home_owned_by_someone_else_is_refused(dmain, fakehome, monkeypatch):
+    real = os.fstat
+    monkeypatch.setattr(os, "fstat", lambda fd: types.SimpleNamespace(
+        st_uid=os.getuid() + 1, st_mode=real(fd).st_mode, st_gid=0))
+    fn, _ = _writers(dmain, fakehome.home, fakehome.owner)["store"]
+    with pytest.raises(OSError):
+        fn()
+    assert fakehome.chown == []
