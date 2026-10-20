@@ -178,7 +178,8 @@ def _loaded_profile_ok(p):
     """
     try:
         validate(p)
-    except (ValueError, TypeError):
+    except Exception as e:   # any shape surprise (KeyError, OverflowError...) drops the entry
+        print(f"z13-profile: ignoring invalid profile entry: {type(e).__name__}: {e}", file=sys.stderr)
         return False
     hooks = p.get("hooks")
     if hooks is None:
@@ -217,8 +218,16 @@ def _sanitize_store(store):
 
 def _keep_aside(copy):
     """Keep the on-disk store for recovery under a .corrupt-<time> name."""
-    dest = f"{STORE_PATH}.corrupt-{time.strftime('%Y%m%d-%H%M%S')}"
-    (shutil.copy2 if copy else os.replace)(STORE_PATH, dest)
+    stamp = f"{time.strftime('%Y%m%d-%H%M%S')}-{time.time_ns() // 1000 % 1_000_000:06d}-{os.getpid()}"
+    base = f"{STORE_PATH}.corrupt-{stamp}"
+    dest, n = base, 0
+    while os.path.exists(dest):      # never overwrite an existing backup
+        n += 1
+        dest = f"{base}-{n}"
+    if copy:
+        shutil.copy2(STORE_PATH, dest)
+    else:
+        os.replace(STORE_PATH, dest)
 
 
 def load_store(create=True):

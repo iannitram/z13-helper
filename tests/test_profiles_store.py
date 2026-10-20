@@ -368,8 +368,11 @@ def test_cli_restore_with_no_active_falls_back_to_a_profile(profiles_env, cli_ho
     restore always has a profile to apply (#14)."""
     profiles_env.store.parent.mkdir(parents=True)
     profiles_env.store.write_text(json.dumps({"version": 1, "active": None, "profiles": []}))
+    assert profiles.main(["restore"]) == 0
+    captured = capsys.readouterr()
+    assert "no active profile" not in captured.err
+    assert "Applying profile: Balanced" in captured.out
     assert profiles.active_name() == "Balanced"
-    assert "no active profile" not in capsys.readouterr().err
 
 
 def test_cli_requires_a_command(profiles_env):
@@ -468,3 +471,19 @@ def test_clean_store_makes_no_backup(profiles_env):
     _seed(profiles_env, json.dumps({"version": 1, "active": "Mine", "profiles": [custom(max_fans=False)]}))
     profiles.load_store()
     assert not _backups(profiles_env)
+
+
+@pytest.mark.parametrize("bad", [[{}] * 8, [[float("inf"), 1]] + GOOD_CURVE[1:]])
+def test_exotic_bad_fan_curve_drops_entry_without_raising(profiles_env, bad):
+    _seed(profiles_env, json.dumps({"active": "Mine", "profiles": [custom("Mine"), custom("Odd", fan_curve=bad)]}))
+    assert [p["name"] for p in profiles.load_store()["profiles"]] == ["Mine"]
+
+
+def test_backups_never_overwrite_each_other(profiles_env, monkeypatch):
+    monkeypatch.setattr(profiles.time, "strftime", lambda fmt: "20260101-000000")
+    monkeypatch.setattr(profiles.time, "time_ns", lambda: 1_000_000)
+    monkeypatch.setattr(profiles.os, "getpid", lambda: 1)
+    for content in ('{"profiles":[null]}', '{"profiles":[1]}'):
+        _seed(profiles_env, content)
+        profiles.load_store()
+    assert sorted(b.read_text() for b in _backups(profiles_env)) == ['{"profiles":[1]}', '{"profiles":[null]}']
