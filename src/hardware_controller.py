@@ -65,6 +65,37 @@ class HardwareController:
         """
         return self._run_command(["profile", "--set", self.get_platform_profile()])
 
+    def _active_app_profile(self):
+        try:
+            return profiles.get_profile(profiles.active_name())
+        except Exception:  # noqa: BLE001  (a bad store must not stop a recovery)
+            return None
+
+    def restore_tdp(self):
+        """After a firmware profile write: re-apply the active app profile's TDP
+        (profiles.apply's step). Not read back: reading the PPT values can lock the EC.
+        Returns a problem text, or None."""
+        p = self._active_app_profile()
+        if not p or not p.get("tdp"):
+            return None
+        for _, ok, msg in profiles.apply_tdp(p, z13ctl=self.z13ctl_path):
+            if not ok:
+                return f"TDP not restored ({msg})"
+        return None
+
+    def restore_undervolt(self):
+        """As restore_tdp, for the undervolt (the firmware profile write resets it)."""
+        p = self._active_app_profile()
+        if not p or p.get("undervolt") is None:
+            return None
+        for _, ok, msg in profiles.apply_undervolt(p, z13ctl=self.z13ctl_path):
+            if not ok:
+                return f"undervolt not restored ({msg})"
+        got = self.get_undervolt()
+        if got is not None and got != p["undervolt"]:
+            return f"undervolt reads {got}, wanted {p['undervolt']}"
+        return None
+
     def get_platform_profile(self) -> str:
         """The firmware profile actually in force (quiet/balanced/performance).
 
