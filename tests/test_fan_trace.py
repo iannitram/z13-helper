@@ -103,6 +103,7 @@ def test_recovery_dumps_history_and_follows_up(clock):
 def test_history_lines_are_not_written_twice(clock):
     wd, s, _, cap, _ = make(clock, curve=MAX_CURVE, temp=55.0)
     for k in range(int(FROZEN_S / TICK) + 5):                  # suspect run, then frozen trigger
+        s.temp += 0.1                                          # warming: corroborates the freeze
         s.fans = (8700, 6000 + (k % 2) * 100)
         ticks(clock, wd, 1)
     assert any("*** ACT frozen tach: fan 1" in l for l in cap.lines)
