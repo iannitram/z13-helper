@@ -456,6 +456,34 @@ def curve_spec(curve):
     return ",".join(f"{int(t)}:{int(p)}%" for t, p in curve)
 
 
+def apply_tdp(profile, *, z13ctl=Z13CTL):
+    """The TDP step of apply(): [] when the profile has no TDP (the firmware's
+    limits then stand), else one (step, ok, message). Also used by fan recovery."""
+    tdp = profile.get("tdp")
+    if not tdp:
+        return []
+    argv = [z13ctl, "tdp", "--set", str(tdp["pl1"]),
+            "--pl2", str(tdp["pl2"]), "--pl3", str(tdp["pl3"])]
+    if tdp.get("force"):
+        argv.append("--force")
+    rc, out, _ = host.run(argv, timeout=120)
+    ok = rc == 0
+    return [("tdp", ok, f"{tdp['pl1']}/{tdp['pl2']}/{tdp['pl3']} W" if ok else (out or f"rc={rc}"))]
+
+
+def apply_undervolt(profile, *, z13ctl=Z13CTL):
+    """The undervolt step of apply() (needs ryzen_smu; absent on stock SteamOS ->
+    reported, not fatal): [] when the profile sets none. Also used by fan recovery."""
+    uv = profile.get("undervolt")
+    if uv is None:
+        return []
+    rc, out, _ = host.run([z13ctl, "undervolt", "--set", str(uv)], timeout=120)
+    if rc == 0:
+        return [("undervolt", True, f"{uv}")]
+    return [("undervolt", False, "unavailable (ryzen_smu not loaded)"
+             if "ryzen_smu" in out else out)]
+
+
 def apply(profile, *, previous=None, z13ctl=Z13CTL,
           skip_hooks=False):
     """Put the machine into the state `profile` describes.
@@ -487,13 +515,7 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
 
     # 3. TDP (None = whatever the firmware profile dictates, restored by the
     #    profile write above).
-    tdp = profile.get("tdp")
-    if tdp:
-        argv = [z13ctl, "tdp", "--set", str(tdp["pl1"]),
-                "--pl2", str(tdp["pl2"]), "--pl3", str(tdp["pl3"])]
-        if tdp.get("force"):
-            argv.append("--force")
-        step("tdp", argv, f"{tdp['pl1']}/{tdp['pl2']}/{tdp['pl3']} W")
+    results.extend(apply_tdp(profile, z13ctl=z13ctl))
 
     # 4. Fan curve. Max Fans wins while it is ON: keep 100% pinned, but remember
     #    the profile's curve as the one to restore when it's switched OFF.
@@ -524,14 +546,7 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
         results.append(("fans", True, "firmware auto"))
 
     # 5. Undervolt (needs ryzen_smu; absent on stock SteamOS -> reported, not fatal).
-    uv = profile.get("undervolt")
-    if uv is not None:
-        rc, out, _ = host.run([z13ctl, "undervolt", "--set", str(uv)], timeout=120)
-        if rc == 0:
-            results.append(("undervolt", True, f"{uv}"))
-        else:
-            results.append(("undervolt", False, "unavailable (ryzen_smu not loaded)"
-                            if "ryzen_smu" in out else out))
+    results.extend(apply_undervolt(profile, z13ctl=z13ctl))
 
     # 6. Lighting, per device so one stalled hidraw endpoint can't block the other.
     #    The keyboard goes first, so it is set before any lightbar recovery.

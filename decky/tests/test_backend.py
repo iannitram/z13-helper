@@ -541,6 +541,43 @@ class DeckyFansTest(unittest.TestCase):
         self.assertEqual([c[0][1] for c in run.calls], ["profile"])
 
 
+class RecoveryRestoresTuningTest(unittest.TestCase):
+    """The firmware profile write resets undervolt and power limits: recovery puts
+    the active profile's back (TDP, curve, undervolt) and reads them back."""
+
+    def setUp(self):
+        self._orig = m._current_platform_profile, m.PROFILES_STORE
+        m._current_platform_profile = lambda: "quiet"
+        d = tempfile.mkdtemp(prefix="z13-decky-store-")
+        m.PROFILES_STORE = os.path.join(d, "profiles.json")
+        store = _store("Boondock")
+        store["profiles"][2]["undervolt"] = -12
+        with open(m.PROFILES_STORE, "w") as f:
+            json.dump(store, f)
+
+    def tearDown(self):
+        m._current_platform_profile, m.PROFILES_STORE = self._orig
+
+    def test_recovery_ends_with_tdp_and_undervolt_after_profile_write(self):
+        run = fake_host(self)
+        wd = m.make_fan_watchdog(StalledSensors(), m.DeckyFans(), may_act=lambda: True)
+        msgs = [wd.tick() for _ in range(fan_watchdog.STALL_TICKS)]
+        self.assertEqual(msgs[-1], "Fans were stalled at 0 RPM; profile and curve re-applied")
+        sets = [" ".join(c[0][1:]) for c in run.calls if "--set" in c[0]]
+        self.assertEqual(sets[0], "profile --set quiet")
+        self.assertEqual(sets[1], "tdp --set 20 --pl2 30 --pl3 40")
+        self.assertTrue(sets[2].startswith("fancurve --set"))
+        self.assertEqual(sets[3], "undervolt --set -12")
+        self.assertEqual(" ".join(run.calls[-1][0][1:]), "undervolt --get")
+
+    def test_failed_undervolt_is_reported_and_curve_still_written(self):
+        run = fake_host(self, fail_if=("undervolt",), out="ryzen_smu not loaded")
+        wd = m.make_fan_watchdog(StalledSensors(), m.DeckyFans(), may_act=lambda: True)
+        msgs = [wd.tick() for _ in range(fan_watchdog.STALL_TICKS)]
+        self.assertIn("undervolt not restored", msgs[-1])
+        self.assertTrue(any(c[0][1:3] == ["fancurve", "--set"] for c in run.calls))
+
+
 class FanWatchdogLoopTest(unittest.TestCase):
     def setUp(self):
         m._write_lock = None
