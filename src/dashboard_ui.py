@@ -542,11 +542,11 @@ class DashboardUI(QMainWindow):
             return "Max Fans ON — both fans at 100%"
 
         def off():
-            saved = max_fans_state.saved_curve()
+            kind, saved = max_fans_state.restore_plan()
             curve = self.control.active().get("fan_curve")
-            if saved:
+            if kind == "curve":
                 c.set_fancurve_pwm(saved)
-            elif curve:
+            elif kind == "unknown" and curve:
                 c.set_fancurve(curve)
             else:
                 c.reset_fancurve()
