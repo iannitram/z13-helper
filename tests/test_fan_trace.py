@@ -133,7 +133,7 @@ def test_trace_failure_never_stops_the_watchdog(clock):
 
 def test_to_file_writes_and_chowns(tmp_path, monkeypatch):
     chowned = []
-    monkeypatch.setattr(os, "chown", lambda p, u, g: chowned.append((p, u, g)))
+    monkeypatch.setattr(os, "fchown", lambda fd, u, g: chowned.append((os.fstat(fd).st_ino, u, g)))
     path = tmp_path / "state" / "fan-trace-gamemode.log"
     trace = FanTrace.to_file(str(path), None, "gamemode-test", owner=(1000, 1000))
     trace.log.info("hello")
@@ -141,7 +141,7 @@ def test_to_file_writes_and_chowns(tmp_path, monkeypatch):
         h.flush()
     text = path.read_text()
     assert "fan trace started (gamemode-test" in text and "hello" in text
-    assert (str(path), 1000, 1000) in chowned
+    assert (path.stat().st_ino, 1000, 1000) in chowned
     assert not trace.log.propagate
 
 

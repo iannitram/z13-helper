@@ -24,9 +24,12 @@ check, so nothing here knows which process it is running in.
 """
 
 import collections
+import errno
 import logging
 import logging.handlers
 import os
+import stat
+import sys
 import time
 
 # How many consecutive telemetry ticks (1.5 s each) of "should spin but 0 RPM"
@@ -453,8 +456,13 @@ class FanTrace:
         for h in list(logger.handlers):
             logger.removeHandler(h)
             h.close()
-        handler = _OwnedRotatingHandler(path, owner, maxBytes=TRACE_MAX_BYTES,
-                                        backupCount=TRACE_BACKUPS, encoding="utf-8")
+        try:
+            handler = _OwnedRotatingHandler(path, owner, maxBytes=TRACE_MAX_BYTES,
+                                            backupCount=TRACE_BACKUPS, encoding="utf-8")
+        except OSError as e:   # e.g. a symlink planted at the path: refuse, don't follow
+            print(f"z13 fan trace: refusing to open {path}: {e}; file logging disabled",
+                  file=sys.stderr)
+            handler = logging.NullHandler()
         handler.setFormatter(logging.Formatter("%(message)s"))
         logger.addHandler(handler)
         trace = cls(logger, sensors)
@@ -525,10 +533,28 @@ class _OwnedRotatingHandler(logging.handlers.RotatingFileHandler):
         super().__init__(path, **kw)
 
     def _open(self):
-        stream = super()._open()
-        if self._owner is not None:
+        """Open the log through one fd, never through the path a second time.
+
+        The watchdog runs as root and the log lives in a deck-writable folder, so a
+        planted symlink must not be followed: O_NOFOLLOW makes that an ELOOP, which
+        is raised (fail closed, no fallback to a path open). Mode, owner and the
+        regular-file check all act on the fd. Created 0600 from the first byte."""
+        flags = (os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW
+                 | os.O_CLOEXEC | os.O_NONBLOCK)   # NONBLOCK: a FIFO can't hang the open
+        fd = os.open(self.baseFilename, flags, 0o600)
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise OSError(errno.EINVAL, "not a regular file", self.baseFilename)
             try:
-                os.chown(self.baseFilename, *self._owner)
+                os.fchmod(fd, 0o600)
             except OSError:
                 pass
-        return stream
+            if self._owner is not None:
+                try:
+                    os.fchown(fd, *self._owner)
+                except OSError:
+                    pass
+            return os.fdopen(fd, self.mode, encoding=self.encoding, errors=self.errors)
+        except BaseException:
+            os.close(fd)
+            raise
