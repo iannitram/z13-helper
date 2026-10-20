@@ -19,6 +19,7 @@ import stat
 import errno
 import fcntl
 import threading
+import tempfile
 
 import decky  # modern API (NOT decky_plugin)
 
@@ -125,6 +126,37 @@ def _run(args, timeout=15, *, as_deck=False):
         decky.logger.warning("cmd %s failed: rc=%s output_len=%d", name, rc, len(out))
     decky.logger.debug("cmd %s output: %s", name, out)
     return rc, out
+
+
+def _atomic_write_text(path, text, *, mode=0o644, owner=None):
+    """Replace `path` with `text` without trusting the directory.
+
+    The directory can be writable by the deck user while this runs as root, so the
+    temp file gets an unpredictable name and is created with O_EXCL (mkstemp); mode and
+    owner are set on the open fd, never by path; a symlink at `path` is refused rather
+    than replaced through. The temp file is removed on any failure.
+    `owner` is (uid, gid) or None; it applies only when running as root.
+    """
+    d = os.path.dirname(path) or "."
+    try:
+        if stat.S_ISLNK(os.lstat(path).st_mode):
+            raise OSError(errno.ELOOP, "refusing to write through a symlink", path)
+    except FileNotFoundError:
+        pass
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=f".{os.path.basename(path)}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+            f.flush()
+            os.fchmod(f.fileno(), mode)
+            if owner is not None and os.geteuid() == 0:
+                os.fchown(f.fileno(), *owner)
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
 
 
 def _state_path():
@@ -271,12 +303,7 @@ def _load_max_fans():
 def _save_max_fans(state):
     """Write the shared state atomically, owned by deck even if we run as root."""
     os.makedirs(os.path.dirname(MAX_FANS_STATE), exist_ok=True)
-    tmp = f"{MAX_FANS_STATE}.{os.getpid()}.tmp"
-    with open(tmp, "w") as f:
-        json.dump(state, f)
-    if os.geteuid() == 0:
-        os.chown(tmp, 1000, 1000)
-    os.replace(tmp, MAX_FANS_STATE)
+    _atomic_write_text(MAX_FANS_STATE, json.dumps(state), owner=(DECK_UID, DECK_GID))
 
 
 def _update_max_fans(**changes):
@@ -429,24 +456,14 @@ def write_store_atomic(store, path=None):
     path = path or PROFILES_STORE
     d = os.path.dirname(path)
     os.makedirs(d, exist_ok=True)
-    tmp = f"{path}.{os.getpid()}.decky.tmp"
-    try:
-        with open(tmp, "w") as f:
-            json.dump(store, f, indent=2)   # same layout as src/profiles.py
-            f.flush()
-            os.fsync(f.fileno())
-        os.chmod(tmp, 0o644)
-        if os.geteuid() == 0:
-            try:
-                st = os.stat(d)
-                uid, gid = (st.st_uid, st.st_gid) if st.st_uid != 0 else (DECK_UID, DECK_GID)
-            except OSError:
-                uid, gid = DECK_UID, DECK_GID
-            os.chown(tmp, uid, gid)
-        os.replace(tmp, path)
-    finally:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
+    owner = None
+    if os.geteuid() == 0:
+        try:
+            st = os.stat(d)
+            owner = (st.st_uid, st.st_gid) if st.st_uid != 0 else (DECK_UID, DECK_GID)
+        except OSError:
+            owner = (DECK_UID, DECK_GID)
+    _atomic_write_text(path, json.dumps(store, indent=2), owner=owner)   # same layout as src/profiles.py
 
 
 def _stale_message(store, profile):
@@ -527,12 +544,8 @@ def _stamp_rate_limited(stamp, now, skipped_msg):
     except OSError:
         pass
     try:
-        tmp = f"{stamp}.{os.getpid()}.tmp"
-        with open(tmp, "w") as f:
-            f.write(f"{now():.0f}\n")
-        if os.geteuid() == 0:
-            os.chown(tmp, DECK_UID, DECK_GID)   # the deck-side CLI rewrites it too
-        os.replace(tmp, stamp)
+        # deck-owned: the deck-side CLI rewrites it too
+        _atomic_write_text(stamp, f"{now():.0f}\n", owner=(DECK_UID, DECK_GID))
     except OSError:
         pass
     return True, None
@@ -643,10 +656,7 @@ def _save_plugin_state(**changes):
     state.update(changes)
     try:
         os.makedirs(os.path.dirname(_state_path()), exist_ok=True)
-        tmp = _state_path() + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump(state, f)
-        os.replace(tmp, _state_path())
+        _atomic_write_text(_state_path(), json.dumps(state))
     except OSError as e:
         decky.logger.error("state.json write failed: %s", e)
 
