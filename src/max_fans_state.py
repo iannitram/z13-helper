@@ -35,6 +35,33 @@ def saved_curve():
     return (load() or {}).get("saved_curve")
 
 
+def restore_plan():
+    """What Max Fans OFF should restore, as (kind, curve).
+
+    ("curve", pts): put the saved [temp, pwm] snapshot back.
+    ("auto", None): the snapshot is explicitly null, i.e. the profile has no
+        custom curve, so release the fans to firmware auto.
+    ("unknown", None): no snapshot key, or the file is missing/unreadable;
+        the caller falls back to the active profile's curve, else auto.
+    """
+    state = load()
+    if state is None or "saved_curve" not in state:
+        return ("unknown", None)
+    curve = state["saved_curve"]
+    if curve is None:
+        return ("auto", None)
+    return ("curve", curve) if curve else ("unknown", None)
+
+
+def record_profile_curve(curve):
+    """Max Fans is ON and the profile's curve ([temp, pct]) changed: keep the
+    restore snapshot in step. None (custom curve disabled) clears it to auto."""
+    if curve:
+        save(saved_curve=[[int(t), round(int(p) * 255 / 100)] for t, p in curve])
+    else:
+        save(saved_curve=None)
+
+
 def save(**changes):
     """Merge `changes` into the state file atomically (tmp + rename)."""
     state = load() or {}
@@ -50,5 +77,7 @@ def migrate_legacy(config):
     """Seed the shared file from the app's old config.json keys, once."""
     if load() is not None:
         return
-    save(enabled=bool(config.get("fans_max", False)),
-         saved_curve=config.get("fan_curve_saved"))
+    seed = {"enabled": bool(config.get("fans_max", False))}
+    if config.get("fan_curve_saved") is not None:
+        seed["saved_curve"] = config["fan_curve_saved"]   # absent = unknown, null = auto
+    save(**seed)

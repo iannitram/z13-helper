@@ -177,8 +177,7 @@ class ProfileControl(QObject):
         def push_curve():
             curve = profile.get("fan_curve")
             if max_fans_state.is_enabled():
-                if curve:
-                    max_fans_state.save(saved_curve=[[int(t), round(int(p) * 255 / 100)] for t, p in curve])
+                max_fans_state.record_profile_curve(curve)
                 return "saved (Max Fans is ON; applies when it's switched off)"
             if curve:
                 return c.set_fancurve(curve)
