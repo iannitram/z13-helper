@@ -50,7 +50,7 @@ shells to a CLI + a React switch that runs in Game Mode.
 - Whether a plugin can be **deep-linked** (side button → straight to our plugin) or the user must go
   QAM → Decky tab → plugin. (Feeds Phase 6.)
 - The QAM entry gesture is handled in **Phase 6**. ⚠️ **Correction (2026-07-14):** the right-edge
-  touchscreen swipe → QAM does **NOT** work on this Z13 (confirmed by Ian) — that Deck gesture appears
+  touchscreen swipe → QAM does **NOT** work on this Z13 (confirmed on the device) — that Deck gesture appears
   to depend on the `deck-uhid` controller context we removed. So there is likely **no touch path to
   the QAM** here, which promotes Phase 6 from "polish" to a **hard dependency** for a usable
   touch-driven Game-Mode experience.

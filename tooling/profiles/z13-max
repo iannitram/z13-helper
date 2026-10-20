@@ -10,7 +10,7 @@ for dev in keyboard lightbar; do z13ctl --device "$dev" brightness high >/dev/nu
 # Aggressive hardware-longevity fan curve. Performance pushes the chip hard;
 # this curve idles at 50% even at 40°C and hits 100% by 70°C. Stays well below
 # thermal throttle (~95°C) under sustained load. Reduces probability of Strix
-# Halo MES firmware deadlock. Ian's explicit guidance: noise on Performance is fine.
+# Halo MES firmware deadlock. The owner's explicit guidance: noise on Performance is fine.
 # Tightened on 2026-05-05 after a near-miss MES firmware deadlock at 99°C with
 # stuck fans (fan2 PWM channel got disabled by EC; cold-boot recovered + we added
 # amdgpu.cwsr_enable=0 to grub-steamos cmdline as the protective workaround).
