@@ -325,6 +325,21 @@ def _keep_aside(copy):
 def load_store(create=True):
     """The store dict; creates the default one on first use.
 
+    Any rewrite (sanitize-and-rewrite, first-run creation) happens under the
+    store lock, re-reading inside it, so it cannot clobber a concurrent
+    read-modify-write. Plain reads stay lock-free.
+    """
+    if create:
+        store, changed = _sanitize_store(_read_json(STORE_PATH))
+        if store is None or changed:
+            with store_lock():
+                return _load_store(create)
+    return _load_store(create)
+
+
+def _load_store(create=True):
+    """The store dict; creates the default one on first use.
+
     A store that parses but has the wrong shape is handled like a corrupt
     one: the original is kept as profiles.json.corrupt-<time>. If some
     profiles survive validation they are kept and the rest dropped; if none
