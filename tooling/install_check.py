@@ -67,6 +67,7 @@ MANIFEST = [
     ("tooling/boondock", f"{BIN}/boondock", "755", False),
     ("tooling/z13-button-watcher", f"{BIN}/z13-button-watcher", "755", False),
     ("tooling/z13_cdp.py", f"{BIN}/z13_cdp.py", "644", False),
+    ("tooling/z13_gamemode_report.py", f"{BIN}/z13-gamemode-report", "755", False),
     ("tooling/diag/z13-memory-check", f"{BIN}/z13-memory-check", "755", False),
     ("tooling/diag/z13-storage-check", f"{BIN}/z13-storage-check", "755", False),
     ("tooling/diag/z13-whereami", f"{BIN}/z13-whereami", "755", False),
