@@ -10,8 +10,7 @@ Documentation=file:///home/deck/dev/z13-helper/README.md
 # plasma-workspace.target activates only when Plasma comes up (desktop entry) and is
 # absent under gamescope, so this scopes cleanly to Desktop Mode. PartOf makes it stop
 # when Plasma stops, so no stale instance lingers into the next session.
-After=plasma-workspace.target z13-battery-default.service
-Wants=z13-battery-default.service
+After=plasma-workspace.target
 PartOf=plasma-workspace.target
 StartLimitIntervalSec=120
 StartLimitBurst=5

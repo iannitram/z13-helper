@@ -457,7 +457,7 @@ def curve_spec(curve):
 
 
 def apply(profile, *, previous=None, z13ctl=Z13CTL,
-          skip_hooks=False):
+          skip_hooks=False, login_battery_default=None):
     """Put the machine into the state `profile` describes.
 
     Order matters: the platform-profile write makes asus-wmi drop any custom
@@ -560,9 +560,14 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
             results.append((f"brightness ({dev})", rc == 0, br if rc == 0 else (out or f"rc={rc}")))
 
     # 7. Battery charge limit.
+    # A login restore passes login_battery_default=80: a profile that sets no limit
+    # (e.g. Boondock) then gets the 80% fallback, as the retired 80% unit used to give.
     bl = profile.get("battery_limit")
+    note = ""
+    if bl is None and login_battery_default is not None:
+        bl, note = login_battery_default, " (fallback: profile sets no limit)"
     if bl is not None:
-        step("battery limit", [z13ctl, "batterylimit", "--set", str(bl)], f"{bl}%")
+        step("battery limit", [z13ctl, "batterylimit", "--set", str(bl)], f"{bl}%{note}")
 
     # 8. Enter hook.
     if not skip_hooks:
@@ -638,7 +643,8 @@ def main(argv=None):
             print(f"Applying profile: {name}")
             # On restore the hooks are intentionally skipped: a login shouldn't
             # re-run `boondock on` (its snapshot is from the previous session).
-            results = apply_by_name(name, skip_hooks=args.no_hooks or args.cmd == "restore")
+            results = apply_by_name(name, skip_hooks=args.no_hooks or args.cmd == "restore",
+                                    login_battery_default=80 if args.cmd == "restore" else None)
         except KeyError as e:
             print(e, file=sys.stderr)
             return 1
