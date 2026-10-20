@@ -190,7 +190,8 @@ class UpdatesDialog(QDialog):
     def _fill(self, table, rows):
         table.setRowCount(len(rows))
         for r, row in enumerate(rows):
-            vals = [row["label"], row["installed"] or "—", row["latest"] or "—", row["published"] or "",
+            latest = "check failed" if row.get("error") else (row["latest"] or "—")
+            vals = [row["label"], row["installed"] or "—", latest, row["published"] or "",
                     (row["note"] or "") + (("\n" + (row["notes"] or "")) if row.get("notes") else "")]
             for c, val in enumerate(vals):
                 it = QTableWidgetItem(val.splitlines()[0] if c == 4 else val)
