@@ -83,14 +83,14 @@ export function PowerLimits({ state }: { state: PowerState | null }) {
                   : description
               }
               value={rails[key]}
-              min={min}
-              max={max}
+              min={state?.pl_ranges?.[key][0] ?? min}
+              max={state?.pl_ranges?.[key][1] ?? max}
               step={1}
               showValue
               valueSuffix=" W"
               disabled={!enabled || !haveProfile}
               onChange={(v: number) => {
-                const next = clampTdp({ ...railsRef.current, [key]: v }, min, max);
+                const next = clampTdp({ ...railsRef.current, [key]: v }, min, max, state?.pl_ranges);
                 setRails(next);
                 schedule(next);
               }}
@@ -98,6 +98,11 @@ export function PowerLimits({ state }: { state: PowerState | null }) {
           </div>
         </PanelSectionRow>
       ))}
+      {state?.tdp_note && (
+        <PanelSectionRow>
+          <div style={{ fontSize: "12px", opacity: 0.8 }}>{state.tdp_note}</div>
+        </PanelSectionRow>
+      )}
       {msg && (
         <PanelSectionRow>
           <div style={{ fontSize: "12px", opacity: 0.8 }}>{msg}</div>
