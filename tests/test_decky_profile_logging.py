@@ -159,3 +159,57 @@ def test_handler_refuses_non_regular_file(tmp_path):
             fan_watchdog._OwnedRotatingHandler(str(fifo), None)
     finally:
         os.close(reader)
+
+
+def _hardlinked(tmp_path):
+    target = tmp_path / "victim-hl.txt"
+    target.write_text("victim\n")
+    target.chmod(0o644)
+    link = tmp_path / "fan-trace-hl.log"
+    os.link(target, link)
+    return target, link
+
+
+def test_handler_refuses_hard_linked_log(tmp_path):
+    import fan_watchdog
+    target, link = _hardlinked(tmp_path)
+    with pytest.raises(OSError):
+        fan_watchdog._OwnedRotatingHandler(str(link), (os.getuid(), os.getgid()))
+    assert target.read_text() == "victim\n"
+    assert target.stat().st_mode & 0o777 == 0o644
+
+
+def test_to_file_with_hard_linked_log_disables_logging(tmp_path, capsys):
+    import fan_watchdog
+    target, link = _hardlinked(tmp_path)
+    trace = fan_watchdog.FanTrace.to_file(str(link), name="hardlink-test")
+    trace.log.info("must not land in the victim")
+    assert target.read_text() == "victim\n"
+    assert target.stat().st_mode & 0o777 == 0o644
+    assert "refus" in capsys.readouterr().err.lower()
+
+
+def test_normal_log_file_still_logs(tmp_path):
+    import fan_watchdog
+    path = tmp_path / "ok.log"
+    h = fan_watchdog._OwnedRotatingHandler(str(path), None)
+    h.emit(logging.LogRecord("t", logging.INFO, "f", 1, "hello", None, None))
+    h.close()
+    assert "hello" in path.read_text()
+    assert path.stat().st_mode & 0o777 == 0o600
+
+
+def test_rollover_reopen_refuses_hard_linked_log(tmp_path):
+    import fan_watchdog
+    path = tmp_path / "t.log"
+    h = fan_watchdog._OwnedRotatingHandler(str(path), None, maxBytes=10, backupCount=0)
+    target = tmp_path / "victim.txt"
+    target.write_text("victim\n")
+    target.chmod(0o644)
+    path.unlink()
+    os.link(target, path)
+    with pytest.raises(OSError):
+        h.doRollover()
+    h.close()
+    assert target.read_text() == "victim\n"
+    assert target.stat().st_mode & 0o777 == 0o644

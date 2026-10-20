@@ -538,13 +538,17 @@ class _OwnedRotatingHandler(logging.handlers.RotatingFileHandler):
         The watchdog runs as root and the log lives in a deck-writable folder, so a
         planted symlink must not be followed: O_NOFOLLOW makes that an ELOOP, which
         is raised (fail closed, no fallback to a path open). Mode, owner and the
-        regular-file check all act on the fd. Created 0600 from the first byte."""
+        regular-file and single-link checks all act on the fd. Created 0600 from the first byte."""
         flags = (os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW
                  | os.O_CLOEXEC | os.O_NONBLOCK)   # NONBLOCK: a FIFO can't hang the open
         fd = os.open(self.baseFilename, flags, 0o600)
         try:
-            if not stat.S_ISREG(os.fstat(fd).st_mode):
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode):
                 raise OSError(errno.EINVAL, "not a regular file", self.baseFilename)
+            if st.st_nlink != 1:   # a hard link would let us append to/chown another file
+                raise OSError(errno.EINVAL, "log file has multiple hard links",
+                              self.baseFilename)
             try:
                 os.fchmod(fd, 0o600)
             except OSError:
