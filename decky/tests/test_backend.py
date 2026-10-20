@@ -298,6 +298,15 @@ class FileLockSafetyTest(unittest.TestCase):
                 release.set()
                 t.join(5)
 
+    def test_lock_file_owned_by_current_user_is_accepted(self):
+        # An unprivileged runner is neither root nor the deck uid.
+        self.assertNotEqual(os.geteuid(), 0)
+        with mock.patch.object(m, "DECK_UID", os.geteuid() + 1):
+            with m._file_lock(self.store):
+                pass
+            with m._file_lock(self.store):   # now it exists: the owner check runs
+                pass
+
     def test_normal_use_creates_plain_lock_file(self):
         with m._file_lock(self.store):
             pass

@@ -180,7 +180,7 @@ def _open_lock(lock_path):
             if os.geteuid() == 0:
                 os.fchown(fd, DECK_UID, DECK_GID)
             os.fchmod(fd, 0o660)
-        elif st.st_uid not in {0, DECK_UID}:
+        elif st.st_uid not in {0, DECK_UID, os.geteuid()}:
             raise StoreLockError(f"{lock_path} has an unexpected owner; refusing")
     except BaseException:
         os.close(fd)
