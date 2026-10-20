@@ -37,6 +37,7 @@ CLI:
 import argparse
 import json
 import os
+import shutil
 import sys
 import time
 
@@ -169,10 +170,71 @@ def _legacy_active():
         return None
 
 
+def _loaded_profile_ok(p):
+    """True when a profile read from disk is safe to hand to the rest of the app.
+
+    The write-path rules (validate) plus the loose ends it leaves open on a
+    hand-edited file: hooks must be {enter, exit} strings.
+    """
+    try:
+        validate(p)
+    except (ValueError, TypeError):
+        return False
+    hooks = p.get("hooks")
+    if hooks is None:
+        return True
+    return isinstance(hooks, dict) and all(
+        isinstance(hooks.get(k, ""), str) for k in ("enter", "exit"))
+
+
+def _sanitize_store(store):
+    """Check a parsed store's shape. Returns (store, changed), or (None, True)
+    when nothing usable is left.
+
+    Drops only the profile entries that are invalid (or repeat an earlier
+    name), so one bad entry doesn't cost the user their other custom profiles;
+    an active name that no longer exists falls back to Balanced, else the
+    first profile. `changed` says the file differs from what was on disk.
+    """
+    if not isinstance(store, dict) or not isinstance(store.get("profiles"), list):
+        return None, True
+    good, seen = [], set()
+    for p in store["profiles"]:
+        if _loaded_profile_ok(p) and p["name"] not in seen:
+            seen.add(p["name"])
+            good.append(p)
+    if not good:
+        return None, True
+    changed = len(good) != len(store["profiles"])
+    active = store.get("active")
+    if not isinstance(active, str) or active not in seen:
+        active = "Balanced" if "Balanced" in seen else good[0]["name"]
+        changed = True
+    if changed:
+        store = dict(store, profiles=good, active=active)
+    return store, changed
+
+
+def _keep_aside(copy):
+    """Keep the on-disk store for recovery under a .corrupt-<time> name."""
+    dest = f"{STORE_PATH}.corrupt-{time.strftime('%Y%m%d-%H%M%S')}"
+    (shutil.copy2 if copy else os.replace)(STORE_PATH, dest)
+
+
 def load_store(create=True):
-    """The store dict; creates the default one on first use."""
-    store = _read_json(STORE_PATH)
-    if store and isinstance(store.get("profiles"), list):
+    """The store dict; creates the default one on first use.
+
+    A store that parses but has the wrong shape is handled like a corrupt
+    one: the original is kept as profiles.json.corrupt-<time>. If some
+    profiles survive validation they are kept and the rest dropped; if none
+    do, the defaults replace it.
+    """
+    raw = _read_json(STORE_PATH)
+    store, changed = _sanitize_store(raw)
+    if store is not None:
+        if changed and create:
+            _keep_aside(copy=True)
+            _write_json(STORE_PATH, store)
         # Keys added after a store was seeded: built-ins take the shipped value.
         shipped = {p["name"]: p for p in default_profiles()}
         for p in store["profiles"]:
@@ -185,7 +247,7 @@ def load_store(create=True):
         if os.path.exists(STORE_PATH):
             # Unreadable or malformed: keep it for recovery instead of silently
             # replacing the user's custom profiles with the defaults.
-            os.replace(STORE_PATH, f"{STORE_PATH}.corrupt-{time.strftime('%Y%m%d-%H%M%S')}")
+            _keep_aside(copy=False)
         _write_json(STORE_PATH, store)
     return store
 

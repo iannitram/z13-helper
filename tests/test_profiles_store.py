@@ -363,11 +363,13 @@ def test_cli_restore_reapplies_active_without_hooks(profiles_env, cli_host, caps
     assert ["z13ctl", "profile", "--set", "quiet"] in cli_host.argvs
 
 
-def test_cli_restore_with_no_active(profiles_env, cli_host, capsys):
+def test_cli_restore_with_no_active_falls_back_to_a_profile(profiles_env, cli_host, capsys):
+    """A store with no usable active name (or no profiles) is repaired at load, so
+    restore always has a profile to apply (#14)."""
     profiles_env.store.parent.mkdir(parents=True)
     profiles_env.store.write_text(json.dumps({"version": 1, "active": None, "profiles": []}))
-    assert profiles.main(["restore"]) == 1
-    assert "no active profile" in capsys.readouterr().err
+    assert profiles.active_name() == "Balanced"
+    assert "no active profile" not in capsys.readouterr().err
 
 
 def test_cli_requires_a_command(profiles_env):
@@ -384,3 +386,85 @@ def test_print_results_format_parsed_by_install_check(capsys):
     pat = re.compile(r"\s*(ok|ERR)\s+(.+?)\s{2,}(.*)$")
     rows = [pat.match(line).groups() for line in capsys.readouterr().out.splitlines()]
     assert rows == [("ERR", "brightness (lightbar)", "timed out"), ("ok", "profile", "quiet")]
+
+
+# ----------------------------------------------------------------------
+# well-formed JSON of the wrong shape (#14)
+# ----------------------------------------------------------------------
+
+def _seed(paths, content):
+    paths.store.parent.mkdir(parents=True, exist_ok=True)
+    paths.store.write_text(content)
+    return content
+
+
+def _backups(paths):
+    return list(paths.store.parent.glob("profiles.json.corrupt-*"))
+
+
+@pytest.mark.parametrize("content", ['{"profiles":[null]}', '{"profiles":[]}',
+                                     '{"profiles":[1,"x",{"name":""}]}'])
+def test_structurally_empty_store_is_kept_aside_and_reseeded(profiles_env, content):
+    _seed(profiles_env, content)
+    store = profiles.load_store()
+    assert [p["name"] for p in store["profiles"]] == ["Silent", "Balanced", "Turbo", "Boondock"]
+    assert store["active"] == "Balanced"
+    kept = _backups(profiles_env)
+    assert len(kept) == 1 and kept[0].read_text() == content
+    assert stored(profiles_env) == store
+
+
+def test_null_entry_among_good_profiles_is_dropped_others_kept(profiles_env):
+    content = _seed(profiles_env, json.dumps(
+        {"version": 1, "active": "Mine", "profiles": [custom(max_fans=False), None, custom("Bad", base="nope")]}))
+    store = profiles.load_store()
+    assert [p["name"] for p in store["profiles"]] == ["Mine"]
+    assert store["active"] == "Mine"
+    kept = _backups(profiles_env)
+    assert len(kept) == 1 and kept[0].read_text() == content
+    assert [p["name"] for p in stored(profiles_env)["profiles"]] == ["Mine"]
+
+
+def test_active_name_that_does_not_exist_falls_back(profiles_env):
+    content = _seed(profiles_env, json.dumps(
+        {"version": 1, "active": "Ghost", "profiles": [custom("Mine"), custom("Balanced")]}))
+    store = profiles.load_store()
+    assert store["active"] == "Balanced"
+    assert profiles.get_profile(store["active"], store) is not None
+    assert _backups(profiles_env)[0].read_text() == content
+
+
+def test_active_fallback_without_balanced_uses_first_profile(profiles_env):
+    _seed(profiles_env, json.dumps({"active": 7, "profiles": [custom("Mine")]}))
+    assert profiles.load_store()["active"] == "Mine"
+
+
+def test_non_string_hook_drops_that_profile(profiles_env):
+    _seed(profiles_env, json.dumps({"active": "Mine", "profiles": [
+        custom("Mine"), custom("Hooky", hooks={"enter": 5, "exit": ""})]}))
+    assert [p["name"] for p in profiles.load_store()["profiles"]] == ["Mine"]
+
+
+def test_duplicate_names_keep_first(profiles_env):
+    _seed(profiles_env, json.dumps({"active": "Mine", "profiles": [custom("Mine"), custom("Mine", base="quiet")]}))
+    got = profiles.load_store()["profiles"]
+    assert len(got) == 1 and got[0]["base"] == "balanced"
+
+
+def test_unsorted_fan_curve_drops_that_profile(profiles_env):
+    bad = [[90, 100]] + GOOD_CURVE[:7]
+    _seed(profiles_env, json.dumps({"active": "Mine", "profiles": [custom("Mine"), custom("Curvy", fan_curve=bad)]}))
+    assert [p["name"] for p in profiles.load_store()["profiles"]] == ["Mine"]
+
+
+def test_wrong_shape_read_only_writes_nothing(profiles_env):
+    content = _seed(profiles_env, '{"profiles":[null]}')
+    store = profiles.load_store(create=False)
+    assert store["active"] == "Balanced"
+    assert profiles_env.store.read_text() == content and not _backups(profiles_env)
+
+
+def test_clean_store_makes_no_backup(profiles_env):
+    _seed(profiles_env, json.dumps({"version": 1, "active": "Mine", "profiles": [custom(max_fans=False)]}))
+    profiles.load_store()
+    assert not _backups(profiles_env)
