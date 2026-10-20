@@ -503,14 +503,23 @@ def test_flapping_fan_that_spins_briefly_after_each_recovery_hits_the_bound(env)
     assert ns.wd.fault and "fan 1" in ns.wd.fault
 
 
-def test_fan_holding_its_full_speed_plateau_is_not_frozen(env):
+def test_steady_at_plateau_with_flat_temps_is_left_alone(env):
     ns = env.make(curve=MAX_CURVE, temp=60.0)
     for k in range(12):                          # ramps up, jittering, to its plateau
         ns.sensors.fans = (8000 + 100 * min(k, 8), 7000 + (k % 2) * 100)
         run(ns, 1)
-    for k in range(400):                         # then holds 8800 for 10 minutes while warming 1 C/min
-        ns.sensors.temp += TICK / 60
+    for k in range(400):                         # then holds 8800 for 10 minutes, temps flat
         ns.sensors.fans = (8800, 7000 + (k % 2) * 100)
         run(ns, 1)
     assert ns.ctl.calls == []
     assert ns.wd.fault is None
+
+
+def test_2026_10_09_shape_frozen_at_plateau_with_rising_temps_recovers(env):
+    # fan 1 bit-identical at 8700 on every sample, partner jittering, APU warming.
+    ns = env.make(curve=MAX_CURVE, temp=55.0)
+    for k in range(int(FROZEN_S // TICK) + 10):
+        ns.sensors.temp += 0.1
+        ns.sensors.fans = (8700, 8600 + (k % 3) * 100)
+        run(ns, 1)
+    assert call_names(ns.ctl)[:2] == ["rewrite_profile", "set_fancurve_pwm"]
