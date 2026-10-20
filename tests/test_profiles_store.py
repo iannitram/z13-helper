@@ -98,8 +98,8 @@ def test_default_profiles_are_builtin_and_valid():
         assert p["builtin"] is True
         profiles.validate(p)
     boondock = next(p for p in defaults if p["name"] == "Boondock")
-    assert boondock["hooks"]["enter"].endswith("boondock on")
-    assert boondock["hooks"]["exit"].endswith("boondock off")
+    assert boondock["hooks"]["enter"].endswith("boondock session-on")
+    assert boondock["hooks"]["exit"].endswith("boondock session-off")
 
 
 def test_builtin_names_follow_ghelper():
@@ -260,7 +260,7 @@ def test_validate_curve_allows_flat_segments():
 def test_apply_by_name_sets_active_and_runs_previous_exit_hook(profiles_env, fake_host):
     profiles.set_active("Boondock")
     profiles.apply_by_name("Balanced", z13ctl="z13ctl")
-    assert fake_host.argvs[0][0] == "bash" and fake_host.argvs[0][-1].endswith("boondock off")
+    assert fake_host.argvs[0][0] == "bash" and fake_host.argvs[0][-1].endswith("boondock session-off")
     assert profiles.active_name() == "Balanced"
 
 
@@ -346,7 +346,7 @@ def test_cli_apply_unknown(profiles_env, cli_host, capsys):
 
 def test_cli_apply_runs_hooks(profiles_env, cli_host):
     profiles.main(["apply", "Boondock"])
-    assert len(bash_calls(cli_host)) == 1 and bash_calls(cli_host)[0].endswith("boondock on")
+    assert len(bash_calls(cli_host)) == 1 and bash_calls(cli_host)[0].endswith("boondock session-on")
 
 
 def test_cli_apply_no_hooks(profiles_env, cli_host):

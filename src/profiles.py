@@ -351,6 +351,23 @@ def _repair_or_seed(create):
     return store
 
 
+def _migrate_boondock_hooks(p):
+    """Stores seeded before the session split saved Boondock's hooks as plain
+    `boondock on` / `boondock off`, which redo the power hardware after the engine
+    set the profile's own. Rewrite exactly those two strings; an edited hook stays."""
+    if p.get("name") != "Boondock" or not p.get("builtin"):
+        return
+    hooks = p.get("hooks")
+    if not isinstance(hooks, dict):
+        return
+    for key, old, new in (("enter", "on", "session-on"), ("exit", "off", "session-off")):
+        cmd = hooks.get(key)
+        if isinstance(cmd, str):
+            parts = cmd.split()
+            if len(parts) == 2 and parts[0].endswith("boondock") and parts[1] == old:
+                hooks[key] = f"{parts[0]} {new}"
+
+
 def load_store(create=True):
     """The store dict; creates the default one on first use.
 
@@ -378,6 +395,7 @@ def load_store(create=True):
     for p in store["profiles"]:
         if "max_fans" not in p:
             p["max_fans"] = bool(p.get("builtin") and shipped.get(p["name"], {}).get("max_fans"))
+        _migrate_boondock_hooks(p)
     return store
 
 
