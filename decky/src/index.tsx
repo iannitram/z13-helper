@@ -18,6 +18,7 @@ import {
   getPowerState,
   PowerState,
 } from "./backend";
+import { cancelPendingCommits } from "./hooks";
 import { TelemetryRow } from "./components/Telemetry";
 import { PowerLimits } from "./components/PowerLimits";
 import { BatteryLimit } from "./components/BatteryLimit";
@@ -79,6 +80,7 @@ function Content() {
             selectedOption={profile}
             onChange={async (o) => {
               const name = o.data as string;
+              cancelPendingCommits(); // a slider edit must not land on the profile we switch to
               setProfileState(name);
               if (appProfiles) await setAppProfile(name);
               else await setProfile(name);

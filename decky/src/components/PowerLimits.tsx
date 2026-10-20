@@ -31,9 +31,11 @@ export function PowerLimits({ state }: { state: PowerState | null }) {
   const safeMax = state?.pl1_safe_max ?? 75;
   const haveProfile = !!state?.active;
 
+  // The profile these controls were showing: sent with every request so a late one is refused.
+  const target = state?.active ?? "";
   const push = async (on: boolean, r: Rails) => {
     setMsg("Applying…");
-    const res = await safely<TdpResult>(setTdp(on, r.pl1, r.pl2, r.pl3));
+    const res = await safely<TdpResult>(setTdp(on, r.pl1, r.pl2, r.pl3, target));
     setMsg(res.message);
     if ("tdp" in res && res.tdp) setRails({ pl1: res.tdp.pl1, pl2: res.tdp.pl2, pl3: res.tdp.pl3 });
     return res;

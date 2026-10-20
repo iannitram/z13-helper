@@ -250,6 +250,36 @@ class StoreTest(unittest.TestCase):
             for p in self._read()["profiles"]:
                 engine.validate(p)
 
+    def test_apply_tdp_for_a_stale_profile_is_rejected(self):
+        """A slider edit aimed at A that lands after B became active must not write B."""
+        self._write(_store("Boondock"))
+        run = fake_host(self)
+        before = self._read()
+        res = m.apply_tdp(True, 75, 75, 75, profile="Balanced")
+        self.assertFalse(res["ok"])
+        self.assertFalse(res["saved"])
+        self.assertTrue(res["stale"])
+        self.assertIn("Balanced", res["message"])
+        self.assertEqual(self._read(), before)
+        self.assertEqual(run.calls, [])
+
+    def test_apply_battery_limit_for_a_stale_profile_is_rejected(self):
+        self._write(_store("Silent"))
+        run = fake_host(self)
+        before = self._read()
+        res = m.apply_battery_limit(60, profile="Balanced")
+        self.assertFalse(res["ok"])
+        self.assertTrue(res["stale"])
+        self.assertEqual(self._read(), before)
+        self.assertEqual(run.calls, [])  # no hardware write either
+
+    def test_targeted_request_for_the_active_profile_is_applied(self):
+        self._write(_store("Balanced"))
+        fake_host(self)
+        self.assertTrue(m.apply_tdp(True, 30, 30, 30, profile="Balanced")["saved"])
+        self.assertEqual(m.apply_battery_limit(60, profile="Balanced")["value"], 60)
+        self.assertEqual(m.active_profile(self._read())["battery_limit"], 60)
+
     def test_apply_battery_limit(self):
         self._write(_store("Silent"))
         run = fake_host(self)

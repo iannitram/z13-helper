@@ -449,8 +449,17 @@ def write_store_atomic(store, path=None):
             os.unlink(tmp)
 
 
-def _set_active_field(**fields):
-    """Read-modify-write the active profile. Returns (name, error-or-None)."""
+def _stale_message(store, profile):
+    """Why a request aimed at `profile` must not run, or None. No target = the active one."""
+    if not profile or not store or store.get("active") == profile:
+        return None
+    return (f"Not applied: the active profile is now {store.get('active') or 'another one'}, "
+            f"not {profile}")
+
+
+def _set_active_field(profile=None, **fields):
+    """Read-modify-write the active profile. Returns (name, error-or-None).
+    With `profile`, refuses (STALE_PREFIX error) unless it is still the active one."""
     # Seed first: it runs z13-profile, which takes the same lock.
     if _ensure_store() is None:
         return None, "profiles.json missing (is z13-profile installed?)"
@@ -459,6 +468,9 @@ def _set_active_field(**fields):
             store = _read_store()   # re-read under the lock: never write an older snapshot
             if store is None:
                 return None, "profiles.json missing (is z13-profile installed?)"
+            stale = _stale_message(store, profile)   # judged on the locked snapshot
+            if stale:
+                return None, stale
             name = update_active_profile(store, **fields)
             write_store_atomic(store)
     except (KeyError, ValueError, OSError) as e:
@@ -668,7 +680,7 @@ def power_state():
     }
 
 
-def apply_tdp(enabled, pl1, pl2, pl3):
+def apply_tdp(enabled, pl1, pl2, pl3, profile=None):
     """Store the active profile's TDP, then push it. Returns a result dict.
 
     ON  -> `z13ctl tdp --set` as deck: the same targeted write the desktop Fans +
@@ -678,7 +690,9 @@ def apply_tdp(enabled, pl1, pl2, pl3):
            what hands the limits back to the firmware (desktop does the same).
     """
     tdp = clamp_tdp(pl1, pl2, pl3, tdp_ranges())
-    name, err = _set_active_field(tdp=tdp if enabled else None)
+    name, err = _set_active_field(profile, tdp=tdp if enabled else None)
+    if err and err.startswith("Not applied:"):
+        return {"ok": False, "saved": False, "stale": True, "message": err}
     if err:
         return {"ok": False, "saved": False, "message": f"Not saved: {err}", "tdp": tdp}
     if enabled:
@@ -694,11 +708,14 @@ def apply_tdp(enabled, pl1, pl2, pl3):
     return {"ok": ok, "saved": True, "message": msg, "tdp": tdp}
 
 
-def apply_battery_limit(value):
+def apply_battery_limit(value, profile=None):
     """Store the active profile's battery_limit, then `z13ctl batterylimit --set` as deck.
     The hardware write still happens if the store can't be written (reported)."""
     v = clamp_battery(value)
-    name, err = _set_active_field(battery_limit=v)
+    name, err = _set_active_field(profile, battery_limit=v)
+    if err and err.startswith("Not applied:"):
+        return {"ok": False, "saved": False, "stale": True, "message": err,
+                "value": v, "profile": ""}
     rc, out = _run([Z13CTL, "batterylimit", "--set", str(v)], as_deck=True)
     ok = rc == 0
     msg = f"Charge limit {v}%" if ok else f"Charge limit failed ({out[-120:] or f'rc={rc}'})"
@@ -978,13 +995,15 @@ class Plugin:
     async def get_power_state(self) -> dict:
         return await asyncio.to_thread(power_state)
 
-    async def set_tdp(self, enabled: bool, pl1: int, pl2: int, pl3: int) -> dict:
+    # `profile` = the profile the user was editing; omitted (older frontend) = the active one.
+    async def set_tdp(self, enabled: bool, pl1: int, pl2: int, pl3: int,
+                      profile: str = "") -> dict:
         async with _lock():
-            return await asyncio.to_thread(apply_tdp, bool(enabled), pl1, pl2, pl3)
+            return await asyncio.to_thread(apply_tdp, bool(enabled), pl1, pl2, pl3, profile or None)
 
-    async def set_battery_limit(self, value: int) -> dict:
+    async def set_battery_limit(self, value: int, profile: str = "") -> dict:
         async with _lock():
-            return await asyncio.to_thread(apply_battery_limit, value)
+            return await asyncio.to_thread(apply_battery_limit, value, profile or None)
 
     async def set_brightness(self, level: str) -> dict:
         async with _lock():
