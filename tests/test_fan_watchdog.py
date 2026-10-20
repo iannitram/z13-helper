@@ -4,7 +4,7 @@ import types
 
 import pytest
 
-from fan_watchdog import FROZEN_S, RETRY_S, STALL_HYSTERESIS_C, STALL_TICKS, FanWatchdog
+from fan_watchdog import FROZEN_S, MAX_RECOVERY_ATTEMPTS, ONE_FAN_ZERO_S, RETRY_S, STALL_HYSTERESIS_C, STALL_TICKS, FanWatchdog
 from sensor_reader import SensorReader
 
 TICK = 1.5   # the app's telemetry period
@@ -173,9 +173,11 @@ def test_rule2_counter_resets_when_a_fan_spins(env):
     assert ns.ctl.calls == []
 
 
-def test_rule2_one_fan_at_zero_is_not_a_stall(env):
+def test_rule2_brief_one_fan_zero_is_not_a_stall(env):
+    # A single fan at 0 is judged by the per-fan rule, which needs ONE_FAN_ZERO_S
+    # after the grace; a short dip does nothing.
     ns = env.make(curve=MAX_CURVE, temp=50.0, fans=(0, 4000))
-    run(ns, 20)
+    run(ns, int(ONE_FAN_ZERO_S // TICK) - 1)
     assert ns.ctl.calls == []
 
 
@@ -230,10 +232,12 @@ def test_no_readable_curve_does_nothing(env):
 # Rule 3: frozen tach
 # ----------------------------------------------------------------------
 
-def jitter(ns, n, frozen=8700, start=6000):
-    """n ticks with fan 1 bit-identical and fan 2 moving."""
+def jitter(ns, n, frozen=8700, start=6000, heat=0.1):
+    """n ticks with fan 1 bit-identical and fan 2 moving, the APU warming
+    (a stopped fan under full demand: the corroboration the rule needs)."""
     out = []
     for k in range(n):
+        ns.sensors.temp += heat
         ns.sensors.fans = (frozen, start + (k % 2) * 100)
         out.extend(run(ns, 1))
     return out
@@ -253,6 +257,7 @@ def test_rule3_frozen_second_fan(env):
     ns = env.make(curve=MAX_CURVE, temp=55.0)
     msgs = []
     for k in range(int(FROZEN_S // TICK) + 2):
+        ns.sensors.temp += 0.1
         ns.sensors.fans = (6000 + (k % 2) * 100, 5100)
         msgs.extend(run(ns, 1))
     assert any(m and m.startswith("Fan 2 reading frozen at 5100") for m in msgs)
@@ -278,10 +283,11 @@ def test_rule3_needs_high_curve_demand(env):
 
 
 def test_rule3_zero_rpm_is_not_frozen(env):
-    # One fan at 0 for ages (other spinning) is not a frozen tach.
+    # One fan at 0 for ages (other spinning) is the per-fan zero rule's case,
+    # never reported as a frozen tach.
     ns = env.make(curve=MAX_CURVE, temp=55.0)
-    jitter(ns, int(FROZEN_S // TICK) * 3, frozen=0)
-    assert ns.ctl.calls == []
+    msgs = jitter(ns, int(FROZEN_S // TICK) * 3, frozen=0)
+    assert not any(m and "frozen" in m for m in msgs)
 
 
 def test_rule3_jittering_fans_never_trigger(env):
@@ -393,3 +399,85 @@ def test_max_fans_flag_is_read_every_tick(env):
     ns.set_max(True)
     run(ns, 1)
     assert call_names(ns.ctl) == ["rewrite_profile", "set_fans_max"]
+
+
+# ----------------------------------------------------------------------
+# One fan stuck at 0 while the other runs (#6); constant RPM needs
+# corroboration (#12)
+# ----------------------------------------------------------------------
+
+def alternate(ns, n, stuck=0, dt=TICK, heat=0.0):
+    """n ticks with fan 1 at `stuck` and fan 2 alternating normally."""
+    out = []
+    for k in range(n):
+        ns.sensors.fans = (stuck, 8000 + (k % 2) * 100)
+        ns.sensors.temp += heat
+        out.extend(run(ns, 1, dt=dt))
+    return out
+
+
+def test_one_fan_stuck_at_zero_at_high_temp_and_duty_recovers(env):
+    ns = env.make(curve=MAX_CURVE, temp=80.0)
+    alternate(ns, 101, dt=2.0)                       # 200 simulated seconds
+    assert call_names(ns.ctl)[:2] == ["rewrite_profile", "set_fancurve_pwm"]
+
+
+def test_steady_rpm_with_stable_temps_and_healthy_partner_is_left_alone(env):
+    ns = env.make(curve=MAX_CURVE, temp=60.0)
+    alternate(ns, int(FROZEN_S // TICK) * 3, stuck=8700)
+    assert ns.ctl.calls == []
+
+
+def test_steady_rpm_with_warming_apu_and_moving_partner_still_recovers(env):
+    ns = env.make(curve=MAX_CURVE, temp=60.0)
+    alternate(ns, int(FROZEN_S // TICK) + 3, stuck=8700, heat=0.1)
+    assert call_names(ns.ctl)[:2] == ["rewrite_profile", "set_fancurve_pwm"]
+
+
+def test_both_fans_flat_out_while_warming_is_not_corroboration(env):
+    # Both tachs constant: a plateau at full speed, not a stopped fan.
+    ns = env.make(curve=MAX_CURVE, temp=60.0, fans=(8700, 8700))
+    for _ in range(int(FROZEN_S // TICK) * 3):
+        ns.sensors.temp += 0.1
+        run(ns, 1)
+    assert ns.ctl.calls == []
+
+
+def test_one_fan_zero_waits_out_the_grace_after_our_own_write(env):
+    ns = env.make(max_fans=True, enabled=False, curve=MAX_CURVE, temp=80.0)
+    run(ns, 1)                                   # rule 1 recovery writes
+    ns.sensors.enabled = True
+    n_before = len(ns.ctl.calls)
+    alternate(ns, int((RETRY_S + ONE_FAN_ZERO_S) // TICK) - 2)
+    assert len(ns.ctl.calls) == n_before         # zero not yet judged
+    alternate(ns, 6)
+    assert len(ns.ctl.calls) == n_before + 2
+
+
+def test_one_fan_zero_is_not_judged_right_after_a_resume(env):
+    ns = env.make(curve=MAX_CURVE, temp=80.0)
+    alternate(ns, int(ONE_FAN_ZERO_S // TICK) - 2)
+    ns.clock.advance(3600)                       # suspended for an hour
+    alternate(ns, int(ONE_FAN_ZERO_S // TICK) - 2)
+    assert ns.ctl.calls == []
+
+
+def test_one_fan_recovery_is_bounded_and_becomes_a_visible_fault(env):
+    ns = env.make(curve=MAX_CURVE, temp=80.0)
+    assert ns.wd.fault is None
+    msgs = alternate(ns, 400)                    # 10 simulated minutes
+    assert call_names(ns.ctl).count("rewrite_profile") == MAX_RECOVERY_ATTEMPTS
+    assert ns.wd.fault and "fan 1" in ns.wd.fault
+    faults = [m for m in msgs if m and m.startswith("Fault:")]
+    assert faults == [ns.wd.fault]               # announced once, not every tick
+    # The fan coming back clears it.
+    ns.sensors.fans = (4000, 4100)
+    run(ns, 1)
+    assert ns.wd.fault is None
+
+
+def test_both_fans_stalled_is_bounded_too(env):
+    ns = env.make(curve=MAX_CURVE, temp=50.0, fans=(0, 0))
+    run(ns, 300)
+    assert call_names(ns.ctl).count("rewrite_profile") == MAX_RECOVERY_ATTEMPTS
+    assert ns.wd.fault and "fan 1 and fan 2" in ns.wd.fault

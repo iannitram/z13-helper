@@ -48,6 +48,22 @@ STALL_HYSTERESIS_C = 3
 #    +-100 almost every tick, so ONE reading bit-identical for this long means
 #    that tach is stale, not the fan steady. Per fan, since one can stall alone.
 FROZEN_S = 90
+#    A constant reading alone is only a suspicion (a real fan at full speed can
+#    hold the exact same RPM for over a minute). It becomes a frozen tach only
+#    when corroborated: the other fan's tach is still moving (the reader works)
+#    and the APU has warmed by STALL_HYSTERESIS_C or more since the reading
+#    stopped changing (the cooling it should be giving is missing). That
+#    margin is the one the stall rule already uses for "meaningfully warmer".
+#
+# 4. One fan at 0. The stall rule needs both fans at 0; a single fan stuck at 0
+#    while its partner runs is the same fault. It counts only after a grace of
+#    RETRY_S following our own writes and any resume (fans legitimately restart
+#    then), and must persist two more RETRY_S windows: ONE_FAN_ZERO_S.
+ONE_FAN_ZERO_S = 2 * RETRY_S
+# Recovery attempts per fan before the fault is declared and left to the user.
+# Each attempt briefly stops the fans and cannot repair a physical failure, so
+# three tries separate a transient firmware glitch from a real fault.
+MAX_RECOVERY_ATTEMPTS = 3
 
 
 class FanWatchdog:
@@ -77,6 +93,15 @@ class FanWatchdog:
         self._last_rpm = [None, None]
         now = clock()
         self._rpm_changed_at = [now, now]
+        self._temp_at_change = [None, None]   # APU temp when each reading last changed
+        self._zero_since = [None, None]       # when each fan started reading 0 under demand
+        self._attempts = [0, 0]               # detection recoveries per fan, until it shows life
+        self._grace_until = float("-inf")     # after our writes / a resume: don't judge yet
+        self._last_tick_at = None
+        self._suspect_logged = [False, False]
+        self._declared = None                 # message for a fault declared this tick
+        self.fault = None                     # unresolved fault text for the UI/Decky, else None
+        self._fault_fans = set()
         self._holding = False   # may_act refused the last due recovery
         self._tick = None       # this tick's readings + events, for the trace
 
@@ -96,6 +121,28 @@ class FanWatchdog:
         self._holding = False
         return True
 
+    def _gate(self, now, fans, why) -> bool:
+        """May a detection recovery for these fans (0-based) be written now?
+        Spent attempts declare the fault instead; a recovery that goes ahead
+        starts the retry gap and a grace for the fans' own restart."""
+        if any(self._attempts[i] >= MAX_RECOVERY_ATTEMPTS for i in fans):
+            new = [i for i in fans if i not in self._fault_fans]
+            if new:
+                self._fault_fans.update(fans)
+                names = " and ".join(f"fan {i + 1}" for i in sorted(self._fault_fans))
+                self.fault = (f"Fault: {names} not recovering after {MAX_RECOVERY_ATTEMPTS} "
+                              f"recovery attempts ({why}); the fans may be failing")
+                self._declared = self.fault
+                self._event(f"FAULT {self.fault}")
+            return False
+        if not self._ready(why):
+            return False
+        self._last_reapply = now
+        self._grace_until = now + RETRY_S
+        for i in fans:
+            self._attempts[i] += 1
+        return True
+
     def _event(self, text):
         self._tick["events"].append(text)
 
@@ -103,7 +150,19 @@ class FanWatchdog:
         """Run one check. Returns a status message when it had to act."""
         now = self._clock()
         self._tick = {"events": []}
+        if self._last_tick_at is not None and now - self._last_tick_at > RETRY_S:
+            # Longer than any tick cadence (2 s shown, 6 s hidden) plus a retry
+            # gap: the machine was suspended. Fans restart and readings repeat
+            # across it, so judge nothing until they have had RETRY_S.
+            self._grace_until = now + RETRY_S
+            self._stall_ticks = 0
+            self._zero_since = [None, None]
+            self._rpm_changed_at = [now, now]
+            self._temp_at_change = [None, None]
+            self._event("RESUME gap in ticks; grace started")
+        self._last_tick_at = now
         msg = self._check(now)
+        self._tick["fault"] = self.fault
         if msg:
             self._event(f"RESULT {msg}")
         if self.trace is not None:
@@ -139,6 +198,7 @@ class FanWatchdog:
             if not self._ready("dropped curve"):
                 return None
             self._last_reapply = now
+            self._grace_until = now + RETRY_S
             self._event("ACT dropped curve with Max Fans on")
             msg = self._recover(True)
             return msg.replace("Fans were stalled at 0 RPM;", "Max Fans re-applied after a profile change;")
@@ -147,6 +207,7 @@ class FanWatchdog:
         #    current temperature, but both fans read 0 RPM.
         if enabled is not True:
             self._stall_ticks = 0
+            self._zero_since = [None, None]
             self._holding = False
             return None
         temp = t["temp"] = self.sensors.get_apu_temp()
@@ -155,40 +216,86 @@ class FanWatchdog:
             # A sensor dropout breaks the "consecutive ticks" chain: two 0-RPM
             # readings minutes apart must not add up to a stall.
             self._stall_ticks = 0
+            self._zero_since = [None, None]
             return None
         # Hysteresis margin: the firmware keeps the fans off until a couple of
         # degrees above the first point once they have stopped.
         expected = t["want"] = self.sensors.expected_fan_pwm(temp - STALL_HYSTERESIS_C)
-        # 3. Frozen tach (see FROZEN_S).
+        demand = expected is not None and expected >= STALL_MIN_PWM
+        # 3. Frozen tach (see FROZEN_S): a constant reading is a suspicion until
+        #    the other fan is still moving and the APU has warmed.
         frozen = None
         for i, rpm in enumerate((fan1, fan2)):
-            if rpm != self._last_rpm[i]:
+            if rpm != self._last_rpm[i] or self._temp_at_change[i] is None:
+                if rpm > 0 and rpm != self._last_rpm[i]:
+                    self._attempts[i] = 0           # alive: forgive earlier attempts
+                    self._clear_fault(i)
                 self._last_rpm[i] = rpm
                 self._rpm_changed_at[i] = now
+                self._temp_at_change[i] = temp
+                self._suspect_logged[i] = False
             elif rpm > 0 and now - self._rpm_changed_at[i] >= FROZEN_S:
-                frozen = (i + 1, rpm)
-        if (frozen and expected is not None and expected >= STALL_MIN_PWM
-                and self._ready("frozen tach")):
-            self._last_reapply = now
+                partner_moving = now - self._rpm_changed_at[1 - i] < FROZEN_S
+                warmed = temp - self._temp_at_change[i] >= STALL_HYSTERESIS_C
+                if partner_moving and warmed:
+                    frozen = (i + 1, rpm)
+                elif demand and not self._suspect_logged[i]:
+                    self._suspect_logged[i] = True
+                    self._event(f"SUSPECT fan {i + 1} reading constant at {rpm} RPM for "
+                                f"{FROZEN_S}s; not corroborated (partner moving: {partner_moving}, "
+                                f"warmed: {warmed})")
+        # 4. Per-fan zero under demand, after the grace.
+        for i, rpm in enumerate((fan1, fan2)):
+            if demand and rpm == 0 and now >= self._grace_until:
+                if self._zero_since[i] is None:
+                    self._zero_since[i] = now
+            else:
+                self._zero_since[i] = None
+        if frozen and demand and self._gate(now, [frozen[0] - 1], "frozen tach"):
             self._rpm_changed_at = [now, now]
+            self._temp_at_change = [None, None]
             self._event(f"ACT frozen tach: fan {frozen[0]} at {frozen[1]} RPM for {FROZEN_S}s")
             return self._recover(max_on).replace(
                 "Fans were stalled at 0 RPM;",
                 f"Fan {frozen[0]} reading frozen at {frozen[1]} RPM for {FROZEN_S}s (stale tach, fan likely stopped);")
-        if expected is not None and expected >= STALL_MIN_PWM and fan1 == 0 and fan2 == 0:
+        if self._declared:
+            return self._pop_declared()
+        if demand and fan1 == 0 and fan2 == 0:
             self._stall_ticks += 1
         else:
             self._stall_ticks = 0
-            if not frozen:
-                self._holding = False
-            return None
         t["stall"] = self._stall_ticks
-        if self._stall_ticks < STALL_TICKS or not self._ready("stall"):
-            return None
-        self._last_reapply = now
-        self._stall_ticks = 0
-        self._event("ACT stall: both fans 0 RPM")
-        return self._recover(max_on)
+        if self._stall_ticks >= STALL_TICKS and self._gate(now, [0, 1], "stall"):
+            self._stall_ticks = 0
+            self._event("ACT stall: both fans 0 RPM")
+            return self._recover(max_on)
+        if self._declared:
+            return self._pop_declared()
+        zero = [i for i in (0, 1) if self._zero_since[i] is not None
+                and now - self._zero_since[i] >= ONE_FAN_ZERO_S]
+        if zero and self._gate(now, zero, "one fan at 0 RPM"):
+            self._zero_since = [None, None]
+            who = " and ".join(str(i + 1) for i in zero)
+            self._event(f"ACT one fan stalled: fan {who} at 0 RPM for {ONE_FAN_ZERO_S:.0f}s")
+            return self._recover(max_on).replace(
+                "Fans were stalled at 0 RPM;",
+                f"Fan {who} stuck at 0 RPM for {ONE_FAN_ZERO_S:.0f}s while the curve asks for cooling;")
+        if self._declared:
+            return self._pop_declared()
+        if not frozen and not self._stall_ticks and not zero:
+            self._holding = False
+        return None
+
+    def _pop_declared(self):
+        msg, self._declared = self._declared, None
+        return msg
+
+    def _clear_fault(self, i):
+        if i in self._fault_fans:
+            self._fault_fans.discard(i)
+            if not self._fault_fans:
+                self.fault = None
+                self._event("FAULT cleared: fan reading alive again")
 
     def _recover(self, max_on: bool) -> str:
         """Rewrite the platform profile (same value) and then the curve."""
@@ -278,7 +385,8 @@ class FanTrace:
                 f" curve={ {True: 'custom', False: 'auto'}.get(enabled, '?') }"
                 f" want={_v(tick.get('want'))} max={'on' if tick.get('max_on') else 'off'}"
                 f" prof={_v(self._extra('get_platform_profile'))}"
-                f" stall={tick.get('stall', 0)} same={same}s")
+                f" stall={tick.get('stall', 0)} same={same}s"
+                + (f" FAULT={tick['fault']!r}" if tick.get("fault") else ""))
 
     def record(self, now, tick, ages):
         text = self.line(tick, ages)
