@@ -30,6 +30,7 @@ export interface PowerState {
 
 export interface ApplyResult {
   ok: boolean;             // hardware write succeeded
+  stale?: boolean;         // rejected: the request's profile is no longer the active one
   saved?: boolean;         // profiles.json updated
   message: string;
 }
@@ -51,10 +52,13 @@ export interface Telemetry {
 
 export const getPowerState = callable<[], PowerState>("get_power_state");
 export const setTdp = callable<
-  [enabled: boolean, pl1: number, pl2: number, pl3: number],
+  [enabled: boolean, pl1: number, pl2: number, pl3: number, profile: string],
   TdpResult
 >("set_tdp");
-export const setBatteryLimit = callable<[value: number], ApplyResult & { value: number }>(
+export const setBatteryLimit = callable<
+  [value: number, profile: string],
+  ApplyResult & { value: number }
+>(
   "set_battery_limit",
 );
 export const setBrightness = callable<[level: BrightnessLevel], BrightnessResult>("set_brightness");
