@@ -224,17 +224,10 @@ def _in_gamemode():
 # Phase 11 helpers (pure where possible; decky/tests/ covers them)
 # ----------------------------------------------------------------------
 
-_RANGES_CACHE = {}
-
-
 def tdp_ranges():
-    """Per-rail (min, max) the kernel accepts, from `z13ctl tdp --get`; 5..93 W if
-    that fails. Read once per plugin run (when the panel is first opened), never polled."""
-    if "r" not in _RANGES_CACHE:
-        rc, out = _run([Z13CTL, "tdp", "--get"], as_deck=True)
-        _RANGES_CACHE["r"] = (power_range.parse_tdp_ranges(out) if rc == 0
-                              else dict(power_range.DEFAULT_RANGES))
-    return _RANGES_CACHE["r"]
+    """Per-rail (min, max) for the interface in use: sysfs existence checks only,
+    no ppt reads and no z13ctl (ROADMAP principle 5)."""
+    return power_range.detect_ranges()
 
 
 def clamp_tdp(pl1, pl2, pl3, ranges=None):

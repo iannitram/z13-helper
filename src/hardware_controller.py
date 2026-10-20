@@ -3,7 +3,6 @@ import re
 import logging
 
 import host
-import power_range
 import profiles
 
 logger = logging.getLogger(__name__)
@@ -170,13 +169,6 @@ class HardwareController:
             if m:
                 result[f"pl{m.group(1)}"] = int(m.group(2))
         return result
-
-    def get_tdp_ranges(self) -> dict:
-        """{pl1,pl2,pl3: (min, max)} the kernel accepts, from `tdp --get`; 5-93 W if unreadable."""
-        try:
-            return power_range.parse_tdp_ranges(self._run_command(["tdp", "--get"]))
-        except RuntimeError:
-            return dict(power_range.DEFAULT_RANGES)
 
     def set_tdp(self, pl1=None, pl2=None, pl3=None, force: bool = False):
         """Apply per-rail TDP overrides. None means leave that rail alone.

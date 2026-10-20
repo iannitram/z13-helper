@@ -26,6 +26,7 @@ for _p in (SRC, TESTS):
 
 import fan_watchdog  # noqa: E402
 import host  # noqa: E402
+import power_range  # noqa: E402
 import sensor_reader  # noqa: E402
 from fake_host import FakeHost  # noqa: E402
 
@@ -86,31 +87,14 @@ def fake_host(test, fail_if=(), out=FAIL_OUT):
 
 
 class TdpRangesTest(unittest.TestCase):
-    ARMOURY = os.path.join(os.path.dirname(HERE), "..", "tests", "fixtures", "tdp_get_armoury.txt")
-
-    def setUp(self):
-        m._RANGES_CACHE.clear()
-        self.addCleanup(m._RANGES_CACHE.clear)
-
-    def _host(self, out, rc=0):
-        fh = FakeHost().fail("tdp --get", rc=rc, out=out)
-        patcher = mock.patch.object(host, "run", fh.run)
-        patcher.start()
-        self.addCleanup(patcher.stop)
-        return fh
-
-    def test_armoury_ranges_are_read_once_and_clamp_per_rail(self):
-        fh = self._host(open(self.ARMOURY).read())
-        r = m.tdp_ranges()
-        self.assertEqual(r["pl1"], (28, 80))
-        m.tdp_ranges()
-        self.assertEqual(sum("tdp" in c.argv for c in fh.calls), 1)
-        self.assertEqual(m.clamp_tdp(20, 30, 40, r),
+    def test_clamp_per_rail_with_armoury_ranges(self):
+        self.assertEqual(m.clamp_tdp(20, 30, 40, power_range.ARMOURY_RANGES),
                          {"pl1": 28, "pl2": 32, "pl3": 45, "force": False})
 
-    def test_failed_read_falls_back_to_5_93(self):
-        self._host("boom", rc=1)
-        self.assertEqual(m.tdp_ranges(), {"pl1": (5, 93), "pl2": (5, 93), "pl3": (5, 93)})
+    def test_tdp_ranges_runs_no_subprocess(self):
+        fh = fake_host(self)
+        self.assertEqual(m.tdp_ranges(), power_range.detect_ranges())
+        self.assertEqual(fh.calls, [])
 
 
 class ClampTdpTest(unittest.TestCase):

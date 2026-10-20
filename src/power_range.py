@@ -1,36 +1,36 @@
 """Per-rail power-limit ranges (PL1/PL2/PL3) as the kernel interface accepts them.
 
 stdlib only; shared with the Decky plugin (installed root-owned into py_modules/).
-`z13ctl tdp --get` prints the range the kernel accepts for each rail: 5-93 W on
-the older asus-nb-wmi interface, PL1 28-80 / PL2 32-92 / PL3 45-93 W on
-asus-armoury. If the output cannot be parsed, DEFAULT_RANGES (5-93 W) apply.
-The profile store keeps validating against that outer envelope; the current
-range only decides what the sliders offer and what the UI flags.
+The ranges are documented constants (z13ctl `tdp --help`): 5-93 W on the older
+asus-nb-wmi interface, PL1 28-80 / PL2 32-92 / PL3 45-93 W on asus-armoury.
+Which interface is in use is decided by `stat` alone: nothing here reads a ppt
+value or runs z13ctl (ROADMAP principle 5: reading the PPT values can hard-lock
+the EC). The profile store keeps validating against the 5-93 W outer envelope;
+the range only decides what the sliders offer and what the UI flags.
 """
 
-import re
+import os
 
 RAILS = ("pl1", "pl2", "pl3")
 DEFAULT_RANGES = {k: (5, 93) for k in RAILS}
+ARMOURY_RANGES = {"pl1": (28, 80), "pl2": (32, 92), "pl3": (45, 93)}
+ARMOURY_DIR = "/sys/class/firmware-attributes/asus-armoury/attributes"
+NBWMI_DIR = "/sys/devices/platform/asus-nb-wmi"
 
-_RE_RAIL = re.compile(r"PL([123])\s+\([^)]+\):\s*(.*)")
-_RE_RANGE = re.compile(r"(\d+)\s*(?:W\s*)?(?:-|–|—|\.\.+|to)\s*(\d+)")
 
+def detect_ranges(armoury_dir=ARMOURY_DIR, nbwmi_dir=NBWMI_DIR):
+    """Per-rail (min, max) for the interface in use, by existence checks only.
 
-def parse_tdp_ranges(text):
-    """{pl1,pl2,pl3: (min, max)} from `tdp --get` output; rails it can't read get 5-93."""
-    out = dict(DEFAULT_RANGES)
-    for line in (text or "").splitlines():
-        m = _RE_RAIL.search(line)
-        if not m:
-            continue
-        found = _RE_RANGE.findall(m.group(2))
-        if not found:
-            continue
-        lo, hi = (int(x) for x in found[-1])
-        if 0 < lo <= hi:
-            out[f"pl{m.group(1)}"] = (lo, hi)
-    return out
+    The armoury tree can exist while its ppt_* files answer ENODEV and z13ctl uses
+    asus-nb-wmi (measured on 6.18), so the asus-nb-wmi ppt files win when present:
+    armoury ranges apply only when armoury has the ppt attribute and asus-nb-wmi
+    does not.
+    """
+    if os.path.exists(os.path.join(nbwmi_dir, "ppt_pl1_spl")):
+        return dict(DEFAULT_RANGES)
+    if os.path.isdir(os.path.join(armoury_dir, "ppt_pl1_spl")):
+        return dict(ARMOURY_RANGES)
+    return dict(DEFAULT_RANGES)
 
 
 def tdp_status(tdp, ranges):

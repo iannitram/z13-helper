@@ -81,8 +81,8 @@ class FansWindow(QWidget):
         self._uv_available = controller.is_undervolt_available()
         self._selected = control.active_name()
         self._loading = False
-        # Read once, not on refresh (ROADMAP principle 5): the per-rail kernel range.
-        self._ranges = controller.get_tdp_ranges()
+        # Per-rail kernel range, from sysfs existence checks (no reads, no z13ctl).
+        self._ranges = power_range.detect_ranges()
         self.resize(675, 560)
         self._build()
         self.control.changed.connect(self.refresh)

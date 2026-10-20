@@ -1,4 +1,0 @@
-PPT limits (asus-nb-wmi):
-  PL1 (sustained):   20 W  (range 5-93 W)
-  PL2 (mid-burst):   30 W  (range 5-93 W)
-  PL3 (short-burst): 40 W  (range 5-93 W)
