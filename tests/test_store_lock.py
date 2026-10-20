@@ -159,3 +159,104 @@ def test_held_lock_times_out_instead_of_hanging(profiles_env, monkeypatch, lock,
     finally:
         release.set()
         t.join(5)
+
+
+# --- load-time repair runs under the store lock -------------------------------
+
+import json
+
+import pytest
+
+
+def _bad_store(profiles_env, kind):
+    """A store that needs repair: one bad entry among good ones, or unparseable."""
+    profiles_env.store.parent.mkdir(parents=True, exist_ok=True)
+    if kind == "bad-entry":
+        good = profiles.default_profiles()
+        body = {"version": 1, "active": "Balanced",
+                "profiles": good + [{"name": "Broken", "base": "nope"}]}
+        profiles_env.store.write_text(json.dumps(body))
+    else:
+        profiles_env.store.write_text("{not json at all")
+
+
+def _backups(profiles_env):
+    return sorted(profiles_env.store.parent.glob("profiles.json.corrupt-*"))
+
+
+def _park_first_read_per_thread(monkeypatch, barrier):
+    """Every thread parks after its first unlocked-or-locked read of the store."""
+    real = profiles._read_json
+    seen = set()
+
+    def parked(path):
+        out = real(path)
+        me = threading.get_ident()
+        if me not in seen:
+            seen.add(me)
+            try:
+                barrier.wait(timeout=0.5)
+            except threading.BrokenBarrierError:
+                pass
+        return out
+
+    monkeypatch.setattr(profiles, "_read_json", parked)
+
+
+@pytest.mark.parametrize("kind", ["bad-entry", "unparseable"])
+def test_concurrent_loaders_repair_a_bad_store_once(profiles_env, monkeypatch, kind):
+    _bad_store(profiles_env, kind)
+    original = profiles_env.store.read_text()
+    _park_first_read_per_thread(monkeypatch, threading.Barrier(2))
+    # Both loaders also reach the backup step together (under the lock the second
+    # one can't get there until the first is done, so this just times out).
+    both_at_backup = threading.Barrier(2)
+    real_aside = profiles._keep_aside
+
+    def aside(copy):
+        try:
+            both_at_backup.wait(timeout=0.5)
+        except threading.BrokenBarrierError:
+            pass
+        return real_aside(copy)
+
+    monkeypatch.setattr(profiles, "_keep_aside", aside)
+
+    _run_together(monkeypatch, profiles.load_store, profiles.load_store)
+
+    backups = _backups(profiles_env)
+    assert len(backups) == 1, backups
+    assert backups[0].read_text() == original
+    assert profiles._sanitize_store(profiles._read_json(profiles_env.store))[1] is False
+
+
+def test_loader_repair_does_not_drop_a_locked_writers_edit(profiles_env, monkeypatch):
+    _bad_store(profiles_env, "bad-entry")
+    parked, release = threading.Event(), threading.Event()
+    real = profiles._read_json
+    loader = {}
+
+    def hook(path):
+        out = real(path)
+        if threading.get_ident() == loader.get("id") and not loader.get("done"):
+            loader["done"] = True
+            parked.set()                      # loader has its (old) snapshot
+            release.wait(5)
+        return out
+
+    monkeypatch.setattr(profiles, "_read_json", hook)
+
+    def run_loader():
+        loader["id"] = threading.get_ident()
+        profiles.load_store()
+
+    t = threading.Thread(target=run_loader)
+    t.start()
+    loader.setdefault("id", None)
+    assert parked.wait(5)
+    profiles.upsert_profile(profiles._profile("Added", "balanced"))   # locked writer
+    release.set()
+    t.join(10)
+
+    store = profiles._read_json(profiles_env.store)
+    assert "Added" in [p["name"] for p in store["profiles"]]
