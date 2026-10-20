@@ -68,12 +68,16 @@ class Report:
     def reset(self):
         self.changed = []
         self.rollback = "not-attempted"
+        self.daemon_after_rollback = None   # "running" | "not-running" once a restore happened
 
     def step(self, what):
         self.changed.append(what)
 
     def as_dict(self):
-        return {"changed": list(self.changed), "rollback": self.rollback}
+        d = {"changed": list(self.changed), "rollback": self.rollback}
+        if self.daemon_after_rollback:
+            d["daemon_after_rollback"] = self.daemon_after_rollback
+        return d
 
 
 REPORT = Report()
@@ -236,6 +240,15 @@ def _rollback_binary(bak):
     REPORT.rollback = "restored-verified" if ok else "restore-failed"
     log("Rollback: previous binary restored and verified (hash matches backup)" if ok
         else "Rollback: FAILED to restore the previous binary")
+    if ok:
+        # The daemon may still be running the new binary or be down: restart it on the old one.
+        try:
+            up = _start_daemon() == 0
+        except Exception as e:  # noqa: BLE001
+            log(f"Rollback: daemon restart raised ({e})")
+            up = False
+        REPORT.daemon_after_rollback = "running" if up else "not-running"
+        log("Rollback: daemon running again" if up else "Rollback: daemon NOT running")
 
 
 def install_z13ctl():

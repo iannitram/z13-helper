@@ -140,4 +140,6 @@ def failure_text(lines, rc):
           "restore-failed": "rollback FAILED — previous binary not restored",
           "not-rolled-back": "not rolled back",
           "not-attempted": "not rolled back" if changed else ""}.get(res.get("rollback"), "not rolled back")
+    if res.get("rollback") == "restored-verified" and res.get("daemon_after_rollback"):
+        rb += ", daemon " + ("running" if res["daemon_after_rollback"] == "running" else "NOT running")
     return f"{head} — {what}" + (f"; {rb}" if rb else "")

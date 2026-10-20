@@ -474,3 +474,19 @@ def test_failure_text_does_not_claim_nothing_changed(paths, monkeypatch, capsys)
     assert "not rolled back" in text and "binary" in text
     # no RESULT line at all (older host script / crash): do not claim nothing changed
     assert "nothing else was changed" not in install_record.failure_text(["FAILED: x"], 1)
+
+
+def test_rollback_restarts_daemon_and_reports_result(paths, monkeypatch, capsys):
+    _install_env(paths, monkeypatch, daemon_rc=3)
+    calls = []
+
+    def start(restart=True):
+        calls.append(paths.z13ctl.read_bytes())    # binary on disk at each call
+        return 3
+    monkeypatch.setattr(installers, "_start_daemon", start)
+    assert installers.main(["install", "z13ctl"]) == 1
+    assert calls == [b"NEW-BINARY", b"OLD-BINARY"]   # restarted after the restore
+    res = installers.REPORT.as_dict()
+    assert res["rollback"] == "restored-verified"
+    assert res["daemon_after_rollback"] == "not-running"
+    assert "daemon NOT running" in logs(capsys)
