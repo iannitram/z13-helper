@@ -381,3 +381,112 @@ def test_decky_installed_version(paths):
     assert installers._decky_installed_version() is None
     paths.decky_version.write_text("v3.1.10\n")
     assert installers._decky_installed_version() == "3.1.10"
+
+
+# ----------------------------------------------------------------------
+# Failure propagation + honest result (#17)
+# ----------------------------------------------------------------------
+
+def test_repair_z13ctl_fails_when_daemon_does_not_start(paths, monkeypatch, capsys):
+    """Everything else healthy, daemon down and `_start_daemon` reports failure."""
+    monkeypatch.setattr(installers, "DRY_RUN", False)
+    monkeypatch.setattr(installers, "_z13ctl_installed_version", lambda path=None: VER)
+    monkeypatch.setattr(installers, "_setup_perms", lambda perms_only=False: None)
+    install_units(paths)
+    monkeypatch.setattr(installers, "_unit_enabled", lambda *a, **k: True)
+    monkeypatch.setattr(subprocess, "run", Systemctl())          # daemon inactive
+    started = []
+    monkeypatch.setattr(installers, "_start_daemon", lambda restart=True: started.append(1) or 3)
+    assert installers.repair_z13ctl() != 0
+    assert started
+    assert "daemon" in logs(capsys).lower()
+
+
+def test_decky_install_fails_when_health_check_fails(paths, monkeypatch):
+    monkeypatch.setattr(installers, "DRY_RUN", False)
+    monkeypatch.setattr(installers, "fetch", lambda url, dest=None, timeout=120: dest)
+    monkeypatch.setattr(installers, "run", lambda argv, **k: (0, ""))
+    monkeypatch.setattr(installers.time, "sleep", lambda s: None)
+    monkeypatch.setattr(installers, "_decky_health", lambda: 3)
+    assert installers.install_decky() != 0
+    monkeypatch.setattr(installers, "_decky_health", lambda: 0)
+    assert installers.install_decky() == 0
+
+
+def _install_env(paths, monkeypatch, old_bytes=b"OLD-BINARY", daemon_rc=0, setup_raises=None):
+    """install_z13ctl with the release, sudo and systemd faked; old binary on disk."""
+    monkeypatch.setattr(installers, "DRY_RUN", False)
+    paths.z13ctl.parent.mkdir(parents=True)
+    paths.z13ctl.write_bytes(old_bytes)
+    new_dir = paths.cache.parent / "extract"
+    (new_dir / "contrib" / "systemd" / "user").mkdir(parents=True)
+    (new_dir / "z13ctl").write_bytes(b"NEW-BINARY")
+    monkeypatch.setattr(installers, "_z13ctl_installed_version", lambda path=None: "1.4.1")
+    monkeypatch.setattr(installers, "fetch", lambda url, dest=None, timeout=120: json.dumps(
+        {"tag_name": f"v{VER}", "published_at": "2026-10-01"}).encode())
+    monkeypatch.setattr(installers, "_fetch_release", lambda tag=None: (VER, str(new_dir)))
+
+    def setup(perms_only=False):
+        if setup_raises:
+            raise RuntimeError(setup_raises)
+    monkeypatch.setattr(installers, "_setup_perms", setup)
+    monkeypatch.setattr(installers, "_install_daemon_units", lambda d: None)
+    monkeypatch.setattr(installers, "_start_daemon", lambda restart=True: daemon_rc)
+    monkeypatch.setattr(installers, "run", lambda argv, **k: (0, ""))
+    monkeypatch.setattr(installers.shutil, "rmtree", lambda *a, **k: None)
+    installers.REPORT.reset()
+
+
+def test_install_setup_failure_restores_verified_backup(paths, monkeypatch, capsys):
+    _install_env(paths, monkeypatch, setup_raises="sudo exited 1")
+    assert installers.main(["install", "z13ctl"]) == 1
+    assert paths.z13ctl.read_bytes() == b"OLD-BINARY"
+    out = logs(capsys)
+    assert "RESULT:" in out
+    res = installers.REPORT.as_dict()
+    assert any("binary" in c for c in res["changed"])
+    assert res["rollback"] == "restored-verified"
+
+
+def test_install_daemon_failure_is_failure_and_rolls_back(paths, monkeypatch, capsys):
+    _install_env(paths, monkeypatch, daemon_rc=3)
+    assert installers.main(["install", "z13ctl"]) == 1
+    assert paths.z13ctl.read_bytes() == b"OLD-BINARY"
+
+
+def test_install_failure_without_previous_binary_says_not_rolled_back(paths, monkeypatch, capsys):
+    _install_env(paths, monkeypatch, setup_raises="boom")
+    paths.z13ctl.unlink()
+    monkeypatch.setattr(installers, "_z13ctl_installed_version", lambda path=None: None)
+    assert installers.main(["install", "z13ctl"]) == 1
+    assert installers.REPORT.as_dict()["rollback"] == "not-rolled-back"
+
+
+def test_failure_text_does_not_claim_nothing_changed(paths, monkeypatch, capsys):
+    import install_record
+    _install_env(paths, monkeypatch, setup_raises="boom")
+    paths.z13ctl.unlink()
+    monkeypatch.setattr(installers, "_z13ctl_installed_version", lambda path=None: None)
+    installers.main(["install", "z13ctl"])
+    lines = logs(capsys).splitlines()
+    text = install_record.failure_text(lines, 1)
+    assert "nothing else was changed" not in text
+    assert "not rolled back" in text and "binary" in text
+    # no RESULT line at all (older host script / crash): do not claim nothing changed
+    assert "nothing else was changed" not in install_record.failure_text(["FAILED: x"], 1)
+
+
+def test_rollback_restarts_daemon_and_reports_result(paths, monkeypatch, capsys):
+    _install_env(paths, monkeypatch, daemon_rc=3)
+    calls = []
+
+    def start(restart=True):
+        calls.append(paths.z13ctl.read_bytes())    # binary on disk at each call
+        return 3
+    monkeypatch.setattr(installers, "_start_daemon", start)
+    assert installers.main(["install", "z13ctl"]) == 1
+    assert calls == [b"NEW-BINARY", b"OLD-BINARY"]   # restarted after the restore
+    res = installers.REPORT.as_dict()
+    assert res["rollback"] == "restored-verified"
+    assert res["daemon_after_rollback"] == "not-running"
+    assert "daemon NOT running" in logs(capsys)

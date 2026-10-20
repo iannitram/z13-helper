@@ -99,7 +99,7 @@ class InstallDialog(QDialog):
             self.status.setText(("✓ " if green else "✗ ") + text)
             self.status.setStyleSheet(f"color: {'#06B48A' if green else TURBO}; font-weight: bold;")
         else:
-            self.status.setText("Done ✓" if rc == 0 else f"Failed (exit {rc}) — nothing else was changed")
+            self.status.setText("Done ✓" if rc == 0 else install_record.failure_text(self._lines[-40:], rc))
         self.btn_close.setEnabled(True)
 
     def closeEvent(self, ev):
