@@ -1,10 +1,14 @@
 """fan_watchdog.FanWatchdog with fake sensors, controller and clock."""
 
+import queue
+import threading
+import time
 import types
 
 import pytest
 
-from fan_watchdog import FROZEN_S, MAX_RECOVERY_ATTEMPTS, ONE_FAN_ZERO_S, RETRY_S, STALL_HYSTERESIS_C, STALL_TICKS, FanWatchdog
+from fan_watchdog import (FAN_RECOVERY_LABEL, FROZEN_S, MAX_RECOVERY_ATTEMPTS, ONE_FAN_ZERO_S, RETRY_S, STALL_HYSTERESIS_C,
+                          STALL_TICKS, FanWatchdog, FanWatchdogRunner)
 from sensor_reader import SensorReader
 
 TICK = 1.5   # the app's telemetry period
@@ -523,3 +527,117 @@ def test_2026_10_09_shape_frozen_at_plateau_with_rising_temps_recovers(env):
         ns.sensors.fans = (8700, 8600 + (k % 3) * 100)
         run(ns, 1)
     assert call_names(ns.ctl)[:2] == ["rewrite_profile", "set_fancurve_pwm"]
+
+
+# Recovery off the UI thread (desktop timer callback)
+# ----------------------------------------------------------------------
+
+class SlowController(FakeController):
+    """Each write takes `delay` seconds, like a z13ctl call that hangs."""
+
+    def __init__(self, delay):
+        super().__init__()
+        self.delay = delay
+
+    def _call(self, name, *args):
+        time.sleep(self.delay)
+        super()._call(name, *args)
+
+
+class OneThreadQueue:
+    """Stand-in for ApplyWorker: one background thread, jobs run in order.
+    done(label, result) is called from the worker thread, like the Qt signal."""
+
+    def __init__(self):
+        self.q = queue.Queue()
+        self.done = []
+        self.submitted = []
+        threading.Thread(target=self._loop, daemon=True).start()
+
+    def submit(self, label, fn):
+        self.submitted.append(label)
+        self.q.put((label, fn))
+
+    def _loop(self):
+        while True:
+            label, fn = self.q.get()
+            self.done.append((label, fn()))
+
+    def wait(self, n, timeout=10):
+        end = time.monotonic() + timeout
+        while len(self.done) < n and time.monotonic() < end:
+            time.sleep(0.01)
+
+
+def test_timer_callback_returns_at_once_while_recovery_runs_on_worker(env):
+    delay = 0.4
+    ns = env.make(max_fans=True, enabled=False)
+    ns.ctl = SlowController(delay)
+    ns.wd.fans = ns.ctl
+    w = OneThreadQueue()
+    runner = FanWatchdogRunner(ns.wd, w.submit)
+    ns.clock.advance(TICK)
+    t0 = time.monotonic()
+    msg = runner.tick()                 # what the dashboard's timer callback does
+    elapsed = time.monotonic() - t0
+    assert elapsed < delay / 4, f"timer callback blocked for {elapsed:.2f}s"
+    assert msg is None and ns.ctl.calls == []   # nothing ran on the caller's thread
+    w.wait(1)
+    assert call_names(ns.ctl) == ["rewrite_profile", "set_fans_max"]
+    label, result = w.done[0]
+    assert label == FAN_RECOVERY_LABEL
+    assert "Max Fans re-applied after a profile change" in result
+    assert runner.on_done(label, result) == result    # shown when the worker finishes
+
+
+def test_second_recovery_not_enqueued_while_one_is_pending(env):
+    ns = env.make(max_fans=True, enabled=False)
+    ns.ctl = SlowController(0.3)
+    ns.wd.fans = ns.ctl
+    w = OneThreadQueue()
+    runner = FanWatchdogRunner(ns.wd, w.submit)
+    ns.clock.advance(TICK)
+    runner.tick()
+    assert runner.pending
+    ns.clock.advance(RETRY_S + 5)       # retry gap long past, recovery still running
+    runner.tick()
+    runner.tick()
+    assert w.submitted == [FAN_RECOVERY_LABEL]
+    w.wait(1)
+    runner.on_done(*w.done[0])
+    assert not runner.pending
+    ns.clock.advance(RETRY_S + 5)       # curve still dropped: a new recovery is due
+    runner.tick()
+    assert w.submitted == [FAN_RECOVERY_LABEL] * 2
+
+
+def test_failed_recovery_result_is_reported_and_clears_pending(env):
+    ns = env.make(max_fans=True, enabled=False, fail_on="set_fans_max")
+    w = OneThreadQueue()
+    runner = FanWatchdogRunner(ns.wd, w.submit)
+    ns.clock.advance(TICK)
+    runner.tick()
+    w.wait(1)
+    assert runner.on_done(*w.done[0]).startswith("Fan recovery failed")
+    assert not runner.pending
+
+
+def test_plain_tick_still_recovers_inline_for_decky(env):
+    ns = env.make(max_fans=True, enabled=False)
+    assert "Max Fans re-applied" in run(ns, 1)[0]
+    assert call_names(ns.ctl) == ["rewrite_profile", "set_fans_max"]
+
+
+def test_queued_recovery_rereads_max_fans_when_it_runs(env):
+    # Decided with Max Fans on; a profile apply queued afterwards turns it off
+    # before the recovery reaches the front of the worker's queue.
+    ns = env.make(max_fans=True, enabled=False)
+    jobs = []
+    runner = FanWatchdogRunner(ns.wd, lambda label, fn: jobs.append(fn))
+    ns.clock.advance(TICK)
+    runner.tick()
+    ns.set_max(False)
+    ns.sensors.enabled = True
+    jobs[0]()
+    assert call_names(ns.ctl) == ["rewrite_profile", "set_fancurve_pwm"]
+    assert "set_fans_max" not in call_names(ns.ctl)
