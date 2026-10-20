@@ -48,6 +48,8 @@ STALL_HYSTERESIS_C = 3
 #    +-100 almost every tick, so ONE reading bit-identical for this long means
 #    that tach is stale, not the fan steady. Per fan, since one can stall alone.
 FROZEN_S = 90
+# Worker-queue label of a recovery run off the UI thread (see FanWatchdogRunner).
+FAN_RECOVERY_LABEL = "Fan recovery"
 
 
 class FanWatchdog:
@@ -79,6 +81,8 @@ class FanWatchdog:
         self._rpm_changed_at = [now, now]
         self._holding = False   # may_act refused the last due recovery
         self._tick = None       # this tick's readings + events, for the trace
+        self._defer = None      # tick(defer=...): hand recoveries to a worker
+        self._inflight = False  # a deferred recovery has not finished yet
 
     def _throttled(self) -> bool:
         return self._clock() - self._last_reapply < RETRY_S
@@ -86,7 +90,7 @@ class FanWatchdog:
     def _ready(self, why: str) -> bool:
         """Past the retry gap and allowed to write. Checked in that order so the
         (possibly costly) may_act check runs only when a recovery is due."""
-        if self._throttled():
+        if self._throttled() or self._inflight:
             return False
         if not self._may_act():
             if not self._holding:
@@ -99,13 +103,21 @@ class FanWatchdog:
     def _event(self, text):
         self._tick["events"].append(text)
 
-    def tick(self) -> str | None:
-        """Run one check. Returns a status message when it had to act."""
+    def tick(self, defer=None) -> str | None:
+        """Run one check. Returns a status message when it had to act.
+
+        defer, when given, is called with a no-argument function that performs
+        the recovery (it blocks on hardware commands) instead of running it
+        here; tick() then returns None for that tick and the caller shows the
+        function's result when the worker finishes. No second recovery is
+        decided until finished() is called."""
         now = self._clock()
+        self._defer = defer
         self._tick = {"events": []}
         msg = self._check(now)
         if msg:
             self._event(f"RESULT {msg}")
+        self._defer = None
         if self.trace is not None:
             try:
                 self.trace.record(now, self._tick, self._ages(now))
@@ -140,8 +152,8 @@ class FanWatchdog:
                 return None
             self._last_reapply = now
             self._event("ACT dropped curve with Max Fans on")
-            msg = self._recover(True)
-            return msg.replace("Fans were stalled at 0 RPM;", "Max Fans re-applied after a profile change;")
+            return self._dispatch(True, lambda msg: msg.replace(
+                "Fans were stalled at 0 RPM;", "Max Fans re-applied after a profile change;"))
 
         # 2. Stalled curve: custom mode claims active, the curve says >0 at the
         #    current temperature, but both fans read 0 RPM.
@@ -172,9 +184,9 @@ class FanWatchdog:
             self._last_reapply = now
             self._rpm_changed_at = [now, now]
             self._event(f"ACT frozen tach: fan {frozen[0]} at {frozen[1]} RPM for {FROZEN_S}s")
-            return self._recover(max_on).replace(
+            return self._dispatch(max_on, lambda msg: msg.replace(
                 "Fans were stalled at 0 RPM;",
-                f"Fan {frozen[0]} reading frozen at {frozen[1]} RPM for {FROZEN_S}s (stale tach, fan likely stopped);")
+                f"Fan {frozen[0]} reading frozen at {frozen[1]} RPM for {FROZEN_S}s (stale tach, fan likely stopped);"))
         if expected is not None and expected >= STALL_MIN_PWM and fan1 == 0 and fan2 == 0:
             self._stall_ticks += 1
         else:
@@ -188,7 +200,20 @@ class FanWatchdog:
         self._last_reapply = now
         self._stall_ticks = 0
         self._event("ACT stall: both fans 0 RPM")
-        return self._recover(max_on)
+        return self._dispatch(max_on)
+
+    def _dispatch(self, max_on: bool, fix=lambda msg: msg) -> str | None:
+        """Act on a decided recovery: inline, or handed to tick()'s defer."""
+        if self._defer is None:
+            return fix(self._recover(max_on))
+        self._inflight = True
+        self._event("QUEUED recovery on the worker")
+        self._defer(lambda: fix(self._recover(max_on)))
+        return None
+
+    def finished(self) -> None:
+        """A deferred recovery completed (or failed): decisions may resume."""
+        self._inflight = False
 
     def _recover(self, max_on: bool) -> str:
         """Rewrite the platform profile (same value) and then the curve."""
@@ -204,6 +229,33 @@ class FanWatchdog:
             return "Fans were stalled at 0 RPM; profile and curve re-applied"
         except Exception as e:  # noqa: BLE001
             return f"Fan recovery failed: {e}"
+
+
+class FanWatchdogRunner:
+    """The desktop's timer callback logic, free of Qt so it can be tested.
+
+    tick() only decides and enqueues; the recovery's hardware commands run on
+    the serialized worker (submit(label, fn), e.g. ApplyWorker.submit). The
+    worker's done(label, result) goes to on_done(), which returns the message
+    to show. At most one recovery is pending at a time."""
+
+    def __init__(self, watchdog, submit):
+        self.watchdog = watchdog
+        self._submit = submit
+
+    @property
+    def pending(self) -> bool:
+        return self.watchdog._inflight
+
+    def tick(self) -> str | None:
+        return self.watchdog.tick(defer=lambda fn: self._submit(FAN_RECOVERY_LABEL, fn))
+
+    def on_done(self, label, result) -> str | None:
+        """None when `label` is not ours (other writes share the worker's signal)."""
+        if label != FAN_RECOVERY_LABEL:
+            return None
+        self.watchdog.finished()
+        return result if isinstance(result, str) else f"Fan recovery failed: {result}"
 
 
 # ----------------------------------------------------------------------

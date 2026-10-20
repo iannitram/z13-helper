@@ -15,6 +15,7 @@ import profiles
 import max_fans_state
 from hardware_controller import HardwareController
 from apply_worker import ApplyWorker
+from fan_watchdog import FAN_RECOVERY_LABEL
 
 
 logger = logging.getLogger("z13.profiles")
@@ -209,6 +210,8 @@ class ProfileControl(QObject):
         self.worker.submit(label, fn)
 
     def _on_done(self, label, result):
+        if label == FAN_RECOVERY_LABEL:   # the fan watchdog shares the worker; not ours
+            return
         if self.pending_name and label == f"Profile → {self.pending_name}":
             self.pending_name = None
         self._pending = max(0, self._pending - 1)
