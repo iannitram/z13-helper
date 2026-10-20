@@ -406,7 +406,10 @@ def test_decky_install_fails_when_health_check_fails(paths, monkeypatch):
     monkeypatch.setattr(installers, "DRY_RUN", False)
     monkeypatch.setattr(installers, "fetch", lambda url, dest=None, timeout=120: dest)
     monkeypatch.setattr(installers, "run", lambda argv, **k: (0, ""))
-    monkeypatch.setattr(installers, "_root_copy", lambda src, name: "/root-owned/" + name)
+    monkeypatch.setattr(installers, "_root_copy", lambda src, name, sha: "/root-owned/" + name)
+    monkeypatch.setattr(installers, "fetch", lambda url, dest=None, timeout=120: json.dumps(
+        {"assets": [{"name": "install_release.sh", "digest": "sha256:" + "a" * 64,
+                     "browser_download_url": "https://x/i.sh"}]}).encode() if dest is None else dest)
     monkeypatch.setattr(installers.time, "sleep", lambda s: None)
     monkeypatch.setattr(installers, "_decky_health", lambda: 3)
     assert installers.install_decky() != 0
@@ -494,108 +497,244 @@ def test_rollback_restarts_daemon_and_reports_result(paths, monkeypatch, capsys)
 
 
 # ----------------------------------------------------------------------
-# root never executes a user-writable file
+# root never executes or extracts a user-writable file
 # ----------------------------------------------------------------------
 
-class SudoRecorder:
-    """Fake `run`: records argv; emulates `sudo -n install [-d|-o root ...] SRC DST`
-    by copying into tmp_path. `corrupt` makes the copy differ from the source."""
+def H(b):
+    return hashlib.sha256(b).hexdigest()
 
-    def __init__(self, corrupt=False):
-        self.calls, self.corrupt = [], corrupt
+
+class SudoRecorder:
+    """Fake `run`: records argv and emulates the sudo install/rm/tar steps inside tmp_path."""
+
+    def __init__(self):
+        self.calls = []
 
     def __call__(self, argv, **kw):
         self.calls.append(list(argv))
-        if argv[:3] == ["sudo", "-n", "install"] and "-d" not in argv:
-            src, dst = argv[-2], argv[-1]
-            os.makedirs(os.path.dirname(dst), exist_ok=True)
-            with open(src, "rb") as f:
-                data = f.read()
-            with open(dst, "wb") as f:
-                f.write(data + (b"X" if self.corrupt else b""))
-        elif argv[:3] == ["sudo", "-n", "install"]:
-            os.makedirs(argv[-1], exist_ok=True)
+        if argv[:3] == ["sudo", "-n", "install"]:
+            if "-d" in argv:
+                os.makedirs(argv[-1], exist_ok=True)
+            else:
+                os.makedirs(os.path.dirname(argv[-1]), exist_ok=True)
+                with open(argv[-2], "rb") as f, open(argv[-1], "wb") as g:
+                    g.write(f.read())
+        elif argv[:3] == ["sudo", "-n", "rm"]:
+            if os.path.exists(argv[-1]):
+                os.remove(argv[-1])
+        elif argv[:3] == ["sudo", "-n", "tar"]:
+            with tarfile.open(argv[argv.index("-xzf") + 1]) as t:
+                t.extract(argv[-1], argv[argv.index("-C") + 1])
         return 0, ""
 
 
-def _exec_targets(calls, tmp_path):
-    """Paths that a recorded sudo call would execute (not just copy)."""
+def _execs(calls):
+    """Paths sudo would execute/extract (not plain copies or systemctl)."""
     out = []
-    for argv in calls:
-        if argv[:2] != ["sudo", "-n"] or argv[2] in ("install", "systemctl", "journalctl", "steamos-update"):
+    for a in calls:
+        if a[:2] != ["sudo", "-n"]:
             continue
-        out.append(argv[2] if argv[2] != "bash" else argv[3])
+        if a[2] == "tar":
+            out.append(a[a.index("-xzf") + 1])
+        elif a[2] == "bash":
+            out.append(a[3])
+        elif a[2].startswith("/"):
+            out.append(a[2])
     return out
 
 
 @pytest.fixture
 def rootdir(paths, tmp_path, monkeypatch):
     monkeypatch.setattr(installers, "ROOT_DIR", str(tmp_path / "rootdir"))
+    installers._TRUST.clear()
     return tmp_path / "rootdir"
 
 
-def test_root_copy_refuses_when_copy_differs(paths, rootdir, monkeypatch, tmp_path):
-    src = tmp_path / "src.sh"
-    src.write_text("echo hi\n")
-    monkeypatch.setattr(installers, "run", SudoRecorder(corrupt=True))
-    with pytest.raises(RuntimeError, match="sha256"):
-        installers._root_copy(str(src), "x.sh")
+def _tarball(tmp_path, body=b"BIN"):
+    tp = tmp_path / "cache" / TAR
+    tp.parent.mkdir(exist_ok=True)
+    src = tmp_path / "z13ctl"
+    src.write_bytes(body)
+    with tarfile.open(tp, "w:gz") as t:
+        t.add(src, arcname="z13ctl")
+    return tp
 
 
-def test_root_copy_returns_root_owned_path_and_installs_as_root(paths, rootdir, monkeypatch, tmp_path):
-    src = tmp_path / "src.sh"
-    src.write_text("echo hi\n")
+def test_root_copy_ok_installs_as_root_and_returns_root_path(paths, rootdir, monkeypatch, tmp_path):
+    src = tmp_path / "s.sh"
+    src.write_bytes(b"echo hi\n")
     rec = SudoRecorder()
     monkeypatch.setattr(installers, "run", rec)
-    dst = installers._root_copy(str(src), "x.sh")
+    dst = installers._root_copy(str(src), "x.sh", "sha256:" + H(b"echo hi\n"))
     assert dst == str(rootdir / "x.sh")
     assert ["sudo", "-n", "install", "-d", "-o", "root", "-g", "root", "-m", "0755", str(rootdir)] in rec.calls
     cp = [c for c in rec.calls if c[:3] == ["sudo", "-n", "install"] and "-d" not in c][0]
     assert cp[3:-2] == ["-o", "root", "-g", "root", "-m", "0755"]
 
 
-def test_setup_perms_executes_only_the_root_owned_copy(paths, rootdir, monkeypatch, tmp_path):
-    paths.z13ctl.parent.mkdir(parents=True)
-    paths.z13ctl.write_bytes(b"BIN")
+def test_root_copy_swapped_file_is_refused_and_copy_removed(paths, rootdir, monkeypatch, tmp_path):
+    """The expected hash is from the release metadata; a swapped file differs from it."""
+    src = tmp_path / "s.sh"
+    src.write_bytes(b"EVIL")
+    monkeypatch.setattr(installers, "run", SudoRecorder())
+    with pytest.raises(RuntimeError, match="sha256 mismatch"):
+        installers._root_copy(str(src), "x.sh", H(b"genuine"))
+    assert not (rootdir / "x.sh").exists()
+
+
+@pytest.mark.parametrize("bad", [None, "", "sha256:", "nothex"])
+def test_root_copy_requires_an_expected_hash(paths, rootdir, monkeypatch, tmp_path, bad):
+    src = tmp_path / "s.sh"
+    src.write_bytes(b"x")
+    rec = SudoRecorder()
+    monkeypatch.setattr(installers, "run", rec)
+    with pytest.raises(RuntimeError, match="no trusted sha256"):
+        installers._root_copy(str(src), "x.sh", bad)
+    assert rec.calls == []
+
+
+def test_setup_perms_extracts_from_root_owned_tarball_only(paths, rootdir, monkeypatch, tmp_path):
+    tp = _tarball(tmp_path)
+    installers._TRUST.update(ver=VER, tar=str(tp), name=TAR, sha=H(tp.read_bytes()))
     rec = SudoRecorder()
     monkeypatch.setattr(installers, "run", rec)
     installers._setup_perms()
-    targets = _exec_targets(rec.calls, tmp_path)
-    assert targets == [str(rootdir / "z13ctl")]
-    for argv in rec.calls:
-        if argv[:3] != ["sudo", "-n", "install"]:
-            assert str(paths.z13ctl) not in argv
+    assert _execs(rec.calls) == [str(rootdir / TAR), str(rootdir / "z13ctl")]
+    tar = [c for c in rec.calls if c[:3] == ["sudo", "-n", "tar"]][0]
+    assert "--no-same-owner" in tar and tar[-1] == "z13ctl" and tar[tar.index("-C") + 1] == str(rootdir)
+    assert (rootdir / "z13ctl").read_bytes() == b"BIN"
+    for a in rec.calls:
+        if a[:3] != ["sudo", "-n", "install"]:
+            assert not any(str(x).startswith((str(tmp_path / "cache"), str(paths.z13ctl))) for x in a)
 
 
-def test_setup_perms_hash_mismatch_never_runs_setup(paths, rootdir, monkeypatch):
-    paths.z13ctl.parent.mkdir(parents=True)
-    paths.z13ctl.write_bytes(b"BIN")
-    rec = SudoRecorder(corrupt=True)
+def test_setup_perms_swapped_tarball_never_extracted_or_run(paths, rootdir, monkeypatch, tmp_path):
+    tp = _tarball(tmp_path)
+    installers._TRUST.update(ver=VER, tar=str(tp), name=TAR, sha=H(b"the real tarball"))
+    rec = SudoRecorder()
     monkeypatch.setattr(installers, "run", rec)
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match="sha256 mismatch"):
         installers._setup_perms()
-    assert not any("setup" in c for c in rec.calls)
+    assert not any(c[2] == "tar" or "setup" in c for c in rec.calls)
 
 
-def test_install_decky_runs_root_owned_copy_not_cache(paths, rootdir, monkeypatch, tmp_path):
+def test_repair_without_download_fetches_matching_release_or_refuses(paths, rootdir, monkeypatch, tmp_path):
+    rec = SudoRecorder()
+    monkeypatch.setattr(installers, "run", rec)
+    monkeypatch.setattr(installers, "_z13ctl_installed_version", lambda path=installers.Z13CTL: VER)
+    tags = []
+
+    def boom(tag=None):
+        tags.append(tag)
+        raise RuntimeError("offline")
+    monkeypatch.setattr(installers, "_fetch_release", boom)
+    with pytest.raises(RuntimeError, match="refusing the sudo step"):
+        installers._setup_perms(perms_only=True)
+    assert tags == [f"v{VER}"]
+    assert rec.calls == []
+
+
+def test_repair_with_release_uses_verified_chain(paths, rootdir, monkeypatch, tmp_path):
+    tp = _tarball(tmp_path)
+    rec = SudoRecorder()
+    monkeypatch.setattr(installers, "run", rec)
+    monkeypatch.setattr(installers, "_z13ctl_installed_version", lambda path=installers.Z13CTL: VER)
+
+    def fr(tag=None):
+        installers._TRUST.update(ver=VER, tar=str(tp), name=TAR, sha=H(tp.read_bytes()))
+        d = tmp_path / "ext"
+        d.mkdir(exist_ok=True)
+        return VER, str(d)
+    monkeypatch.setattr(installers, "_fetch_release", fr)
+    installers._setup_perms(perms_only=True)
+    assert _execs(rec.calls) == [str(rootdir / TAR), str(rootdir / "z13ctl")]
+    assert ["sudo", "-n", str(rootdir / "z13ctl"), "setup", "--perms-only"] in rec.calls
+
+
+def _release_fetch(tmp_path, digest):
+    tb = _tarball(tmp_path).read_bytes()
+    rel = {"tag_name": "v" + VER, "assets": [
+        {"name": TAR, "browser_download_url": "u/t", "digest": digest},
+        {"name": "checksums.txt", "browser_download_url": "u/c"}]}
+
+    def f(url, dest=None, timeout=120):
+        if dest:
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            open(dest, "wb").write(tb)
+            return dest
+        return json.dumps(rel).encode() if "releases" in url else f"{H(tb)}  {TAR}\n".encode()
+    return f, H(tb)
+
+
+def test_fetch_release_records_published_hash_for_root(paths, monkeypatch, tmp_path):
+    installers._TRUST.clear()
+    f, good = _release_fetch(tmp_path, None)
+    monkeypatch.setattr(installers, "fetch", f)
+    monkeypatch.setattr(installers, "_z13ctl_installed_version", lambda path=None: VER)
+    ver, out = installers._fetch_release()
+    assert installers._TRUST["sha"] == good and installers._TRUST["name"] == TAR
+
+
+def test_fetch_release_rejects_digest_disagreeing_with_checksums(paths, monkeypatch, tmp_path):
+    f, good = _release_fetch(tmp_path, "sha256:" + "b" * 64)
+    monkeypatch.setattr(installers, "fetch", f)
+    with pytest.raises(RuntimeError, match="disagrees"):
+        installers._fetch_release()
+
+
+def _decky_rel(digest):
+    a = {"name": "install_release.sh", "browser_download_url": "https://x/i.sh"}
+    if digest:
+        a["digest"] = digest
+    return json.dumps({"assets": [a]}).encode()
+
+
+def test_install_decky_runs_verified_root_copy_not_cache(paths, rootdir, monkeypatch, tmp_path):
     monkeypatch.setattr(installers, "DRY_RUN", False)
+    body = b"#!/bin/bash\n"
 
-    def fake_fetch(url, dest=None, timeout=120):
+    def f(url, dest=None, timeout=120):
+        if dest is None:
+            assert url == installers.DECKY_RELEASE_API
+            return _decky_rel("sha256:" + H(body))
         os.makedirs(os.path.dirname(dest), exist_ok=True)
-        with open(dest, "w") as f:
-            f.write("#!/bin/bash\n")
+        open(dest, "wb").write(body)
         return dest
-    monkeypatch.setattr(installers, "fetch", fake_fetch)
+    monkeypatch.setattr(installers, "fetch", f)
     rec = SudoRecorder()
     monkeypatch.setattr(installers, "run", rec)
     monkeypatch.setattr(installers.time, "sleep", lambda s: None)
     monkeypatch.setattr(installers, "_decky_health", lambda: 0)
-    installers.install_decky()
-    targets = _exec_targets(rec.calls, tmp_path)
-    assert targets == [str(rootdir / "decky_install_release.sh")]
-    assert not any(t.startswith(str(paths.cache)) or t.startswith(str(tmp_path / "bin")) for t in targets)
+    assert installers.install_decky() == 0
+    assert _execs(rec.calls) == [str(rootdir / "decky_install_release.sh")]
 
 
-def test_plans_and_dry_run_mention_root_owned_copy():
+def test_install_decky_missing_digest_refuses(paths, rootdir, monkeypatch):
+    monkeypatch.setattr(installers, "DRY_RUN", False)
+    monkeypatch.setattr(installers, "fetch", lambda url, dest=None, timeout=120: _decky_rel(None))
+    rec = SudoRecorder()
+    monkeypatch.setattr(installers, "run", rec)
+    assert installers.install_decky() != 0
+    assert rec.calls == []
+
+
+def test_install_decky_swapped_script_refused(paths, rootdir, monkeypatch):
+    monkeypatch.setattr(installers, "DRY_RUN", False)
+
+    def f(url, dest=None, timeout=120):
+        if dest is None:
+            return _decky_rel("sha256:" + H(b"genuine"))
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        open(dest, "wb").write(b"swapped")
+        return dest
+    monkeypatch.setattr(installers, "fetch", f)
+    rec = SudoRecorder()
+    monkeypatch.setattr(installers, "run", rec)
+    with pytest.raises(RuntimeError, match="sha256 mismatch"):
+        installers.install_decky()
+    assert not any(c[2] == "bash" for c in rec.calls if c[:2] == ["sudo", "-n"])
+
+
+def test_plans_mention_root_owned_copy():
     assert "root-owned" in installers.plan_z13ctl()
     assert "root-owned" in installers.plan_decky()

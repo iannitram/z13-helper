@@ -267,8 +267,8 @@ Every replaced file is backed up first. The app's **Repair install** button runs
 - An **ASUS ROG Flow Z13 (2025, GZ302EA)**. Other models aren't supported; z13ctl is model-specific.
 - **SteamOS 3.8** (tested on 3.8.28). Other Arch-based distros may work but are untested.
 - The deck user in the `users` group, which z13ctl's device permissions use.
-- **sudo**, for z13ctl setup, Decky and the `/etc` files. Root only runs copies placed in the root-owned
-  `/etc/z13-helper/` (hash-checked after copying), never a file under your home or cache.
+- **sudo**, for z13ctl setup, Decky and the `/etc` files. Root only runs files placed in the root-owned
+  `/etc/z13-helper/` (checked against the release's published hash), never a file under your home or cache.
 - Network access for the first install, which pulls PyQt6 from PyPI into the Flatpak and the Decky
   plugin's build dependencies.
 - **Node.js + pnpm** to build the Decky plugin (for example through `nvm`).
