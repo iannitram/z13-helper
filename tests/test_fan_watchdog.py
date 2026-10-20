@@ -496,3 +496,18 @@ def test_plain_tick_still_recovers_inline_for_decky(env):
     ns = env.make(max_fans=True, enabled=False)
     assert "Max Fans re-applied" in run(ns, 1)[0]
     assert call_names(ns.ctl) == ["rewrite_profile", "set_fans_max"]
+
+
+def test_queued_recovery_rereads_max_fans_when_it_runs(env):
+    # Decided with Max Fans on; a profile apply queued afterwards turns it off
+    # before the recovery reaches the front of the worker's queue.
+    ns = env.make(max_fans=True, enabled=False)
+    jobs = []
+    runner = FanWatchdogRunner(ns.wd, lambda label, fn: jobs.append(fn))
+    ns.clock.advance(TICK)
+    runner.tick()
+    ns.set_max(False)
+    ns.sensors.enabled = True
+    jobs[0]()
+    assert call_names(ns.ctl) == ["rewrite_profile", "set_fancurve_pwm"]
+    assert "set_fans_max" not in call_names(ns.ctl)

@@ -208,12 +208,22 @@ class FanWatchdog:
             return fix(self._recover(max_on))
         self._inflight = True
         self._event("QUEUED recovery on the worker")
-        self._defer(lambda: fix(self._recover(max_on)))
+        # Re-read Max Fans on the worker: a profile apply queued after this
+        # decision may have changed it, and max_on would be stale.
+        self._defer(lambda: fix(self._recover(self._max_fans_on())))
         return None
 
-    def finished(self) -> None:
-        """A deferred recovery completed (or failed): decisions may resume."""
+    def finished(self, msg: str | None = None) -> None:
+        """A deferred recovery completed (or failed): decisions may resume.
+        msg goes to the trace as the RESULT line an inline recovery writes."""
         self._inflight = False
+        if msg and self.trace is not None and self._tick is not None:
+            now = self._clock()
+            try:
+                self.trace.record(now, dict(self._tick, events=[f"RESULT {msg}"]),
+                                  self._ages(now))
+            except Exception:  # noqa: BLE001
+                pass
 
     def _recover(self, max_on: bool) -> str:
         """Rewrite the platform profile (same value) and then the curve."""
@@ -254,8 +264,9 @@ class FanWatchdogRunner:
         """None when `label` is not ours (other writes share the worker's signal)."""
         if label != FAN_RECOVERY_LABEL:
             return None
-        self.watchdog.finished()
-        return result if isinstance(result, str) else f"Fan recovery failed: {result}"
+        msg = result if isinstance(result, str) else f"Fan recovery failed: {result}"
+        self.watchdog.finished(msg)
+        return msg
 
 
 # ----------------------------------------------------------------------
