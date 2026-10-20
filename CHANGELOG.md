@@ -43,6 +43,7 @@ the device but not yet verified on the Z13. Plan and status: `docs/ROADMAP.md`.
   list and apply work.
 
 ### Fixed
+- **The installer no longer runs user-writable code as root.** The `z13ctl` binary and the Decky installer script are copied to a root-owned `/etc/z13-helper/`, checked against the source hash, and only that copy is run with sudo.
 - **The desktop app is running after every switch to Desktop Mode.** Plasma's session restore
   raced the unit, and the unit's ExecStop then killed both copies. The unit now takes over
   (`--resident`), the app opts out of session restore, a side-button press starts a missing app,

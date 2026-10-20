@@ -406,6 +406,7 @@ def test_decky_install_fails_when_health_check_fails(paths, monkeypatch):
     monkeypatch.setattr(installers, "DRY_RUN", False)
     monkeypatch.setattr(installers, "fetch", lambda url, dest=None, timeout=120: dest)
     monkeypatch.setattr(installers, "run", lambda argv, **k: (0, ""))
+    monkeypatch.setattr(installers, "_root_copy", lambda src, name: "/root-owned/" + name)
     monkeypatch.setattr(installers.time, "sleep", lambda s: None)
     monkeypatch.setattr(installers, "_decky_health", lambda: 3)
     assert installers.install_decky() != 0
@@ -490,3 +491,111 @@ def test_rollback_restarts_daemon_and_reports_result(paths, monkeypatch, capsys)
     assert res["rollback"] == "restored-verified"
     assert res["daemon_after_rollback"] == "not-running"
     assert "daemon NOT running" in logs(capsys)
+
+
+# ----------------------------------------------------------------------
+# root never executes a user-writable file
+# ----------------------------------------------------------------------
+
+class SudoRecorder:
+    """Fake `run`: records argv; emulates `sudo -n install [-d|-o root ...] SRC DST`
+    by copying into tmp_path. `corrupt` makes the copy differ from the source."""
+
+    def __init__(self, corrupt=False):
+        self.calls, self.corrupt = [], corrupt
+
+    def __call__(self, argv, **kw):
+        self.calls.append(list(argv))
+        if argv[:3] == ["sudo", "-n", "install"] and "-d" not in argv:
+            src, dst = argv[-2], argv[-1]
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            with open(src, "rb") as f:
+                data = f.read()
+            with open(dst, "wb") as f:
+                f.write(data + (b"X" if self.corrupt else b""))
+        elif argv[:3] == ["sudo", "-n", "install"]:
+            os.makedirs(argv[-1], exist_ok=True)
+        return 0, ""
+
+
+def _exec_targets(calls, tmp_path):
+    """Paths that a recorded sudo call would execute (not just copy)."""
+    out = []
+    for argv in calls:
+        if argv[:2] != ["sudo", "-n"] or argv[2] in ("install", "systemctl", "journalctl", "steamos-update"):
+            continue
+        out.append(argv[2] if argv[2] != "bash" else argv[3])
+    return out
+
+
+@pytest.fixture
+def rootdir(paths, tmp_path, monkeypatch):
+    monkeypatch.setattr(installers, "ROOT_DIR", str(tmp_path / "rootdir"))
+    return tmp_path / "rootdir"
+
+
+def test_root_copy_refuses_when_copy_differs(paths, rootdir, monkeypatch, tmp_path):
+    src = tmp_path / "src.sh"
+    src.write_text("echo hi\n")
+    monkeypatch.setattr(installers, "run", SudoRecorder(corrupt=True))
+    with pytest.raises(RuntimeError, match="sha256"):
+        installers._root_copy(str(src), "x.sh")
+
+
+def test_root_copy_returns_root_owned_path_and_installs_as_root(paths, rootdir, monkeypatch, tmp_path):
+    src = tmp_path / "src.sh"
+    src.write_text("echo hi\n")
+    rec = SudoRecorder()
+    monkeypatch.setattr(installers, "run", rec)
+    dst = installers._root_copy(str(src), "x.sh")
+    assert dst == str(rootdir / "x.sh")
+    assert ["sudo", "-n", "install", "-d", "-o", "root", "-g", "root", "-m", "0755", str(rootdir)] in rec.calls
+    cp = [c for c in rec.calls if c[:3] == ["sudo", "-n", "install"] and "-d" not in c][0]
+    assert cp[3:-2] == ["-o", "root", "-g", "root", "-m", "0755"]
+
+
+def test_setup_perms_executes_only_the_root_owned_copy(paths, rootdir, monkeypatch, tmp_path):
+    paths.z13ctl.parent.mkdir(parents=True)
+    paths.z13ctl.write_bytes(b"BIN")
+    rec = SudoRecorder()
+    monkeypatch.setattr(installers, "run", rec)
+    installers._setup_perms()
+    targets = _exec_targets(rec.calls, tmp_path)
+    assert targets == [str(rootdir / "z13ctl")]
+    for argv in rec.calls:
+        if argv[:3] != ["sudo", "-n", "install"]:
+            assert str(paths.z13ctl) not in argv
+
+
+def test_setup_perms_hash_mismatch_never_runs_setup(paths, rootdir, monkeypatch):
+    paths.z13ctl.parent.mkdir(parents=True)
+    paths.z13ctl.write_bytes(b"BIN")
+    rec = SudoRecorder(corrupt=True)
+    monkeypatch.setattr(installers, "run", rec)
+    with pytest.raises(RuntimeError):
+        installers._setup_perms()
+    assert not any("setup" in c for c in rec.calls)
+
+
+def test_install_decky_runs_root_owned_copy_not_cache(paths, rootdir, monkeypatch, tmp_path):
+    monkeypatch.setattr(installers, "DRY_RUN", False)
+
+    def fake_fetch(url, dest=None, timeout=120):
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        with open(dest, "w") as f:
+            f.write("#!/bin/bash\n")
+        return dest
+    monkeypatch.setattr(installers, "fetch", fake_fetch)
+    rec = SudoRecorder()
+    monkeypatch.setattr(installers, "run", rec)
+    monkeypatch.setattr(installers.time, "sleep", lambda s: None)
+    monkeypatch.setattr(installers, "_decky_health", lambda: 0)
+    installers.install_decky()
+    targets = _exec_targets(rec.calls, tmp_path)
+    assert targets == [str(rootdir / "decky_install_release.sh")]
+    assert not any(t.startswith(str(paths.cache)) or t.startswith(str(tmp_path / "bin")) for t in targets)
+
+
+def test_plans_and_dry_run_mention_root_owned_copy():
+    assert "root-owned" in installers.plan_z13ctl()
+    assert "root-owned" in installers.plan_decky()

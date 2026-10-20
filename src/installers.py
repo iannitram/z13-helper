@@ -48,6 +48,9 @@ DECKY_INSTALLER = "https://github.com/SteamDeckHomebrew/decky-installer/releases
 DECKY_VERSION_FILE = os.path.join(HOME, "homebrew", "services", ".loader.version")
 UDEV_RULES = "/etc/udev/rules.d/99-z13ctl.rules"
 PERMS_UNIT = "/etc/systemd/system/z13ctl-perms.service"
+# Root only ever executes files from here (root-owned dir, root-owned files),
+# never from ~/.local/bin or the download cache, which the user can rewrite.
+ROOT_DIR = "/etc/z13-helper"
 DRY_RUN = os.environ.get("Z13_INSTALL_DRY_RUN") == "1"
 
 
@@ -115,6 +118,22 @@ def sha256(path):
     return h.hexdigest()
 
 
+def _root_copy(src, name):
+    """Copy `src` into the root-owned ROOT_DIR and return the copy's path.
+
+    The source hash is taken before the copy and compared with the copy's hash
+    after it; any difference (the file changed in between) refuses. Root then
+    runs the copy, never `src`."""
+    want = sha256(src)
+    dst = os.path.join(ROOT_DIR, name)
+    run(["sudo", "-n", "install", "-d", "-o", "root", "-g", "root", "-m", "0755", ROOT_DIR])
+    run(["sudo", "-n", "install", "-o", "root", "-g", "root", "-m", "0755", src, dst])
+    got = sha256(dst)
+    if got != want:
+        raise RuntimeError(f"sha256 mismatch after copying {name} to {ROOT_DIR}: {got} != {want}")
+    return dst
+
+
 # ----------------------------------------------------------------------
 # z13ctl
 # ----------------------------------------------------------------------
@@ -135,7 +154,8 @@ def plan_z13ctl():
         "2. Verify the sha256, extract, check `z13ctl --version`\n"
         f"3. Back up {Z13CTL} to z13ctl.bak-<current version>\n"
         "4. Install the new binary to ~/.local/bin/z13ctl\n"
-        "5. sudo z13ctl setup  (udev rules + z13ctl-perms.service; passwordless sudo)\n"
+        f"5. Copy it to a root-owned {ROOT_DIR}/z13ctl (hash-checked), then sudo that copy's `setup`\n"
+        "   (udev rules + z13ctl-perms.service; passwordless sudo)\n"
         "6. Install the daemon user units (z13ctl.socket / z13ctl.service) with --no-button,\n"
         "   enable --now (named profiles, resume re-apply and AC/battery autoswitch need it)\n"
         "7. Restart the resident app so it sees the new backend\n"
@@ -190,7 +210,8 @@ def _fetch_release(tag=None):
 def _setup_perms(perms_only=False):
     """`sudo z13ctl setup`: udev rules + z13ctl-perms.service (z13ctl owns both files).
     perms_only re-grants the sysfs permissions without rewriting the rules."""
-    run(["sudo", "-n", Z13CTL, "setup"] + (["--perms-only"] if perms_only else []), timeout=120)
+    root_bin = _root_copy(Z13CTL, "z13ctl")
+    run(["sudo", "-n", root_bin, "setup"] + (["--perms-only"] if perms_only else []), timeout=120)
     run(["sudo", "-n", "systemctl", "daemon-reload"], check=False)
     run(["sudo", "-n", "systemctl", "enable", "--now", "z13ctl-perms.service"], check=False)
 
@@ -261,7 +282,7 @@ def install_z13ctl():
         log("Already up to date.")
         return 0
     if DRY_RUN:
-        log(f"(dry run) would install z13ctl {ver}, run `sudo z13ctl setup`, install daemon units")
+        log(f"(dry run) would install z13ctl {ver}, copy it to root-owned {ROOT_DIR}, run `sudo z13ctl setup` from there, install daemon units")
         return 0
     ver, tmp = _fetch_release()
 
@@ -318,6 +339,7 @@ def repair_z13ctl():
     rules_ok = os.path.exists(UDEV_RULES) and os.path.exists(PERMS_UNIT) and _unit_enabled("z13ctl-perms.service")
     if DRY_RUN:
         log("(dry run) would run `sudo z13ctl setup" + (" --perms-only`" if rules_ok else "` (rules or perms unit missing)"))
+        log(f"(dry run) the binary is first copied to root-owned {ROOT_DIR} and hash-checked; root runs only that copy")
     else:
         _setup_perms(perms_only=rules_ok)
 
@@ -370,7 +392,7 @@ def plan_decky():
     return (
         "Decky Loader\n"
         f"1. Download the official installer script ({DECKY_INSTALLER})\n"
-        "2. Run it with sudo (it stops plugin_loader, fetches the latest PluginLoader, restarts)\n"
+        f"2. Copy it to a root-owned {ROOT_DIR} (hash-checked) and run that copy with sudo (it stops plugin_loader, fetches the latest PluginLoader, restarts)\n"
         "3. Health check: if a stale loader still holds port 1337, stop/kill/start the unit\n"
         "Plugins (including z13-helper) are kept. Alternative: Decky's own Settings → Update in the QAM."
     )
@@ -407,7 +429,7 @@ def install_decky():
     script = fetch(DECKY_INSTALLER, os.path.join(CACHE, "decky_install_release.sh"))
     log("Downloaded installer script")
     REPORT.step("Decky Loader installer started (may be partially applied)")
-    run(["sudo", "-n", "bash", script], timeout=900)
+    run(["sudo", "-n", "bash", _root_copy(script, "decky_install_release.sh")], timeout=900)
     time.sleep(8)
     healthy = _decky_health() == 0
     log("Decky Loader now: " + (_decky_installed_version() or "?"))
