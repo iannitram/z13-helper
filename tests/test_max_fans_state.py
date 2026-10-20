@@ -49,7 +49,8 @@ def test_save_over_corrupt_file_starts_fresh(state_path):
 def test_save_leaves_no_tmp_files(state_path):
     mfs.save(enabled=True)
     mfs.save(enabled=False)
-    assert [p.name for p in state_path.parent.iterdir()] == ["max-fans.json"]
+    # The stable lock file stays by design; no .tmp does.
+    assert sorted(p.name for p in state_path.parent.iterdir()) == ["max-fans.json", "max-fans.json.lock"]
 
 
 def test_save_is_atomic(state_path, monkeypatch):
