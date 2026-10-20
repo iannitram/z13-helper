@@ -13,7 +13,7 @@
 # `hardware-on` / `hardware-off` are the standalone power half (quiet + 20/30/40 W).
 #
 # DESIGN RULE (learned the hard way 2026-07-01): interactive workloads are NOT
-# touched by default. The dev-VM ("the Shuttle") is left running unless you pass
+# touched by default. The dev-VM is left running unless you pass
 # `--pause-vm`, because you might be working in it.
 #
 # Lives in ~/.local/bin (on /home) so it survives SteamOS atomic updates.
