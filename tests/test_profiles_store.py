@@ -384,3 +384,12 @@ def test_print_results_format_parsed_by_install_check(capsys):
     pat = re.compile(r"\s*(ok|ERR)\s+(.+?)\s{2,}(.*)$")
     rows = [pat.match(line).groups() for line in capsys.readouterr().out.splitlines()]
     assert rows == [("ERR", "brightness (lightbar)", "timed out"), ("ok", "profile", "quiet")]
+
+
+def test_cli_restore_profile_without_limit_falls_back_to_80(profiles_env, cli_host, capsys):
+    # Boondock sets no battery_limit. Login must still write the 80% fallback, since
+    # the 80% unit that used to cover it is retired.
+    profiles.set_active("Boondock")
+    assert profiles.main(["restore"]) == 0
+    assert ["z13ctl", "batterylimit", "--set", "80"] in cli_host.argvs
+    assert "battery limit" in capsys.readouterr().out
