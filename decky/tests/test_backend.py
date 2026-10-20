@@ -26,6 +26,7 @@ for _p in (SRC, TESTS):
 
 import fan_watchdog  # noqa: E402
 import host  # noqa: E402
+import power_range  # noqa: E402
 import sensor_reader  # noqa: E402
 from fake_host import FakeHost  # noqa: E402
 
@@ -83,6 +84,17 @@ def fake_host(test, fail_if=(), out=FAIL_OUT):
     patcher.start()
     test.addCleanup(patcher.stop)
     return fh
+
+
+class TdpRangesTest(unittest.TestCase):
+    def test_clamp_per_rail_with_armoury_ranges(self):
+        self.assertEqual(m.clamp_tdp(20, 30, 40, power_range.ARMOURY_RANGES),
+                         {"pl1": 28, "pl2": 32, "pl3": 45, "force": False})
+
+    def test_tdp_ranges_runs_no_subprocess(self):
+        fh = fake_host(self)
+        self.assertEqual(m.tdp_ranges(), power_range.detect_ranges())
+        self.assertEqual(fh.calls, [])
 
 
 class ClampTdpTest(unittest.TestCase):

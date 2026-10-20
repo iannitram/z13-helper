@@ -23,6 +23,8 @@ export interface PowerState {
   pl3: number;
   pl_min: number;
   pl_max: number;
+  pl_ranges?: { pl1: [number, number]; pl2: [number, number]; pl3: [number, number] };
+  tdp_note?: string;       // stored limits outside the kernel's range: requested vs shown
   pl1_safe_max: number;    // above this z13ctl needs --force
   battery_limit: number;
   brightness: BrightnessLevel | "";
@@ -66,11 +68,15 @@ export function clampTdp(
   v: { pl1: number; pl2: number; pl3: number },
   min: number,
   max: number,
+  ranges?: PowerState["pl_ranges"],
 ): { pl1: number; pl2: number; pl3: number } {
-  const one = (x: number) => Math.max(min, Math.min(max, Math.round(x)));
-  const pl1 = one(v.pl1);
-  const pl2 = Math.max(one(v.pl2), pl1);
-  const pl3 = Math.max(one(v.pl3), pl2);
+  const one = (x: number, k: "pl1" | "pl2" | "pl3") => {
+    const [lo, hi] = ranges?.[k] ?? [min, max];
+    return Math.max(lo, Math.min(hi, Math.round(x)));
+  };
+  const pl1 = one(v.pl1, "pl1");
+  const pl2 = Math.max(one(v.pl2, "pl2"), pl1);
+  const pl3 = Math.max(one(v.pl3, "pl3"), pl2);
   return { pl1, pl2, pl3 };
 }
 

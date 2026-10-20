@@ -16,12 +16,14 @@ from PyQt6.QtWidgets import (
     QPushButton, QInputDialog, QMessageBox, QFrame, QStackedWidget, QSizePolicy,
 )
 
+import power_range
 import profiles
 from theme import ModeTile, Panel, tip, STANDARD, CUSTOM, ACCENT_FOR_BASE, TEXT_DIM
 from fan_curve_widget import FanCurveWidget, DEFAULT_CURVE
 from profile_control import ProfileControl
 
-PL_MIN, PL_MAX = 5, 93           # IsZ1325 cap in G-Helper; z13ctl --force above 75
+PL_MIN, PL_MAX = 5, 93           # IsZ1325 cap in G-Helper: the outer envelope; the live per-rail range
+                                 # is picked by power_range.detect_ranges (sysfs existence checks only). z13ctl --force above 75
 PL1_SAFE_MAX = 75
 # Shown when the profile has no TDP override. Deliberately NOT read live:
 # `z13ctl tdp --get` can go through the asus-armoury ppt_* files, which may
@@ -56,6 +58,11 @@ class _SliderRow(QWidget):
         self.slider.valueChanged.connect(lambda val: self.value.setText(f"{val}{self.suffix}"))
         self.value.setText(f"{self.slider.value()}{suffix}")
 
+    def set_range(self, lo, hi):
+        self.slider.blockSignals(True)
+        self.slider.setRange(lo, hi)
+        self.slider.blockSignals(False)
+
     def set(self, val):
         self.slider.blockSignals(True)
         self.slider.setValue(int(val))
@@ -74,6 +81,8 @@ class FansWindow(QWidget):
         self._uv_available = controller.is_undervolt_available()
         self._selected = control.active_name()
         self._loading = False
+        # Per-rail kernel range, from sysfs existence checks (no reads, no z13ctl).
+        self._ranges = power_range.detect_ranges()
         self.resize(675, 560)
         self._build()
         self.control.changed.connect(self.refresh)
@@ -190,10 +199,16 @@ class FansWindow(QWidget):
         self.spl = _SliderRow("SPL (CPU sustained)", PL_MIN, PL_MAX, "W")
         self.sppt = _SliderRow("sPPT (CPU long boost)", PL_MIN, PL_MAX, "W")
         self.fppt = _SliderRow("fPPT (CPU short boost)", PL_MIN, PL_MAX, "W")
-        for row in (self.spl, self.sppt, self.fppt):
+        for row, k in ((self.spl, "pl1"), (self.sppt, "pl2"), (self.fppt, "pl3")):
+            row.set_range(*self._ranges[k])
             v.addWidget(row)
             row.slider.valueChanged.connect(self._on_tdp_moved)
             row.slider.sliderReleased.connect(self._on_tdp_released)
+        self.power_note = QLabel("")
+        self.power_note.setObjectName("dim")
+        self.power_note.setWordWrap(True)
+        self.power_note.setVisible(False)
+        v.addWidget(self.power_note)
         v.addWidget(tip("sPPT ≥ SPL, fPPT ≥ sPPT. Above 75 W sustained, z13ctl runs the fans "
                         "at full speed (--force)."))
         self.apply_power = QCheckBox("Apply Power Limits")
@@ -260,10 +275,18 @@ class FansWindow(QWidget):
 
             tdp = p.get("tdp")
             self.apply_power.setChecked(bool(tdp))
+            note = ""
             if tdp:
-                self.spl.set(tdp["pl1"]); self.sppt.set(tdp["pl2"]); self.fppt.set(tdp["pl3"])
+                # Show each rail clamped into the kernel's range; the stored values stay as
+                # they are until the user moves a slider (then the shown values are saved).
+                st = power_range.tdp_status(tdp, self._ranges)
+                a = st["accepted"]
+                self.spl.set(a["pl1"]); self.sppt.set(a["pl2"]); self.fppt.set(a["pl3"])
+                note = st["note"]
             else:
                 self.spl.set(DEFAULT_TDP[0]); self.sppt.set(DEFAULT_TDP[1]); self.fppt.set(DEFAULT_TDP[2])
+            self.power_note.setText(note)
+            self.power_note.setVisible(bool(note))
             for row in (self.spl, self.sppt, self.fppt):
                 row.setEnabled(bool(tdp))
 
