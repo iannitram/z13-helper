@@ -159,6 +159,11 @@ def _atomic_write_text(path, text, *, mode=0o644, owner=None):
         raise
 
 
+def _open_dir_nofollow(d):
+    """fd of directory `d`; fails closed (OSError) if it is a symlink or not a directory."""
+    return os.open(d, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+
+
 def _state_path():
     return os.path.join(decky.DECKY_PLUGIN_SETTINGS_DIR, "state.json")
 
@@ -457,12 +462,13 @@ def write_store_atomic(store, path=None):
     d = os.path.dirname(path)
     os.makedirs(d, exist_ok=True)
     owner = None
-    if os.geteuid() == 0:
-        try:
-            st = os.stat(d)
+    dfd = _open_dir_nofollow(d)   # refuses a symlinked or non-directory store dir
+    try:
+        if os.geteuid() == 0:
+            st = os.fstat(dfd)
             owner = (st.st_uid, st.st_gid) if st.st_uid != 0 else (DECK_UID, DECK_GID)
-        except OSError:
-            owner = (DECK_UID, DECK_GID)
+    finally:
+        os.close(dfd)
     _atomic_write_text(path, json.dumps(store, indent=2), owner=owner)   # same layout as src/profiles.py
 
 
@@ -894,9 +900,18 @@ def make_fan_trace(path=None, owner=DECK_IDS):
     path = path or FAN_TRACE
     try:
         d = os.path.dirname(path)
-        if not os.path.isdir(d):
+        try:
+            os.lstat(d)
+            created = False
+        except FileNotFoundError:
             os.makedirs(d)
-            os.chown(d, *owner)
+            created = True
+        dfd = _open_dir_nofollow(d)   # a symlink planted at d is refused, never chowned
+        try:
+            if created:
+                os.fchown(dfd, *owner)
+        finally:
+            os.close(dfd)
         return FanTrace.to_file(path, _sensors, "gamemode", owner=owner)
     except OSError as e:
         decky.logger.error("No fan trace: %s", e)

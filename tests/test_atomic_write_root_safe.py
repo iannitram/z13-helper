@@ -165,3 +165,47 @@ def test_content_round_trips(dmain, tmp_path):
     q = tmp_path / "q.json"
     profiles._write_json(str(q), store)
     assert json.loads(q.read_text()) == store
+
+
+
+def test_symlinked_store_dir_is_refused(dmain, tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real)
+    with pytest.raises(OSError):
+        dmain.write_store_atomic({"active": "A", "profiles": []}, str(link / "profiles.json"))
+    assert list(real.iterdir()) == []
+
+
+def test_store_owner_comes_from_the_dir_fd(dmain, tmp_path, monkeypatch):
+    got = []
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    monkeypatch.setattr(os, "fchown", lambda fd, u, g: got.append((u, g)))
+    monkeypatch.setattr(os, "chown", lambda *a, **k: pytest.fail("path chown"))
+    dmain.write_store_atomic({"active": "A", "profiles": []}, str(tmp_path / "p.json"))
+    assert got == [(os.getuid(), os.getgid())]
+
+
+def test_symlink_at_trace_dir_is_not_chowned(dmain, tmp_path, monkeypatch):
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    (victim / "keep").write_text("x")
+    link = tmp_path / "tracedir"
+    link.symlink_to(victim)
+    monkeypatch.setattr(dmain, "logging_enabled", lambda: True)
+    calls = []
+    monkeypatch.setattr(os, "fchown", lambda *a: calls.append(a))
+    monkeypatch.setattr(os, "chown", lambda *a, **k: calls.append(a))
+    assert dmain.make_fan_trace(str(link / "trace.log"), owner=(1000, 1000)) is None
+    assert calls == []
+    assert [p.name for p in victim.iterdir()] == ["keep"]
+
+
+def test_new_trace_dir_is_chowned_by_fd(dmain, tmp_path, monkeypatch):
+    monkeypatch.setattr(dmain, "logging_enabled", lambda: True)
+    fch, ch = [], []
+    monkeypatch.setattr(os, "fchown", lambda fd, u, g: fch.append((u, g)))
+    monkeypatch.setattr(os, "chown", lambda *a, **k: ch.append(a))
+    dmain.make_fan_trace(str(tmp_path / "new" / "trace.log"), owner=(1000, 1000))
+    assert (tmp_path / "new").is_dir() and ch == [] and (1000, 1000) in fch
