@@ -43,6 +43,7 @@ import json
 import os
 import shutil
 import sys
+import tempfile
 import threading
 import time
 
@@ -249,19 +250,49 @@ def _read_json(path):
         return None
 
 
+def _atomic_write_text(path, text, *, mode=0o644, owner=None):
+    """Replace `path` with `text` without trusting the directory.
+
+    The directory can be writable by the deck user while this runs as root, so the
+    temp file gets an unpredictable name and is created with O_EXCL (mkstemp); mode and
+    owner are set on the open fd, never by path; a symlink at `path` is refused rather
+    than replaced through. The temp file is removed on any failure.
+    `owner` is (uid, gid) or None; it applies only when running as root.
+    Copy of decky/main.py's helper (z13-profile is a single installed file).
+    """
+    d = os.path.dirname(path) or "."
+    try:
+        if stat.S_ISLNK(os.lstat(path).st_mode):
+            raise OSError(errno.ELOOP, "refusing to write through a symlink", path)
+    except FileNotFoundError:
+        pass
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=f".{os.path.basename(path)}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+            f.flush()
+            os.fchmod(f.fileno(), mode)
+            if owner is not None and os.geteuid() == 0:
+                os.fchown(f.fileno(), *owner)
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+
+
 def _write_json(path, data):
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = f"{path}.{os.getpid()}.tmp"
-    with open(tmp, "w") as f:
-        json.dump(data, f, indent=2)
     # Keep the files deck-owned when the Decky backend (root) writes them.
+    owner = None
     if os.geteuid() == 0:
         try:
             st = os.stat(os.path.dirname(path))
-            os.chown(tmp, st.st_uid, st.st_gid)
+            owner = (st.st_uid, st.st_gid)
         except OSError:
             pass
-    os.replace(tmp, path)
+    _atomic_write_text(path, json.dumps(data, indent=2), owner=owner)
 
 
 def _legacy_active():
@@ -584,10 +615,7 @@ def _stamp_rate_limited(stamp, now, skipped_msg):
     except OSError:
         pass
     try:
-        tmp = f"{stamp}.{os.getpid()}.tmp"
-        with open(tmp, "w") as f:
-            f.write(f"{now():.0f}\n")
-        os.replace(tmp, stamp)
+        _atomic_write_text(stamp, f"{now():.0f}\n")
     except OSError:
         pass   # best effort: the unit/daemon itself serialises concurrent starts
     return True, None

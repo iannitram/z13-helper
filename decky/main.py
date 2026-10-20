@@ -19,6 +19,7 @@ import stat
 import errno
 import fcntl
 import threading
+import secrets
 
 import decky  # modern API (NOT decky_plugin)
 
@@ -127,6 +128,108 @@ def _run(args, timeout=15, *, as_deck=False):
     return rc, out
 
 
+_DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+
+
+def _open_dir_chain(d, owner=None):
+    """Open directory `d`, creating missing parts, without following any symlink.
+
+    Runs as root over paths the deck user can rewrite, so every component is opened
+    with O_NOFOLLOW|O_DIRECTORY relative to its parent's fd. A path under the owner's
+    home (from the owner uid's passwd entry) is anchored at that home, which must be
+    a real directory owned by the owner; any other path is walked from "/". A missing
+    component is made with mkdir(dir_fd) and handed to `owner` by fchown on its fd.
+    Raises OSError on a symlink, a non-directory, or a home owned by someone else.
+    Returns an open fd the caller must close.
+    """
+    d = os.path.abspath(d)
+    parts = [p for p in d.split(os.sep) if p]
+    start = "/"
+    anchor_uid = None
+    if owner is not None:
+        try:
+            import pwd
+            home = os.path.abspath(pwd.getpwuid(owner[0]).pw_dir)
+        except (KeyError, ImportError) as e:
+            raise OSError(errno.ENOENT, f"no home directory for uid {owner[0]}") from e
+        hp = [p for p in home.split(os.sep) if p]
+        if hp and parts[:len(hp)] == hp:
+            start, parts, anchor_uid = home, parts[len(hp):], owner[0]
+    fd = os.open(start, _DIR_FLAGS)
+    try:
+        if anchor_uid is not None and os.fstat(fd).st_uid != anchor_uid:
+            raise OSError(errno.EPERM, "home directory is not owned by the target user", d)
+        for name in parts:
+            try:
+                nfd = os.open(name, _DIR_FLAGS, dir_fd=fd)
+            except FileNotFoundError:
+                try:
+                    os.mkdir(name, 0o755, dir_fd=fd)
+                except FileExistsError:
+                    pass
+                nfd = os.open(name, _DIR_FLAGS, dir_fd=fd)
+                if owner is not None and os.geteuid() == 0:
+                    try:
+                        os.fchown(nfd, *owner)
+                    except BaseException:
+                        os.close(nfd)
+                        raise
+            os.close(fd)
+            fd = nfd
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _write_in_dir(dfd, name, text, mode=0o644, owner=None):
+    """Atomically replace `name` inside the directory open at `dfd`.
+
+    The temp file has a random name and is created O_EXCL|O_NOFOLLOW relative to
+    `dfd`; mode and owner are set on its fd; replace and cleanup also go through
+    `dfd`. A symlink at `name` is refused. Owner applies only when running as root.
+    """
+    try:
+        if stat.S_ISLNK(os.lstat(name, dir_fd=dfd).st_mode):
+            raise OSError(errno.ELOOP, "refusing to write through a symlink", name)
+    except FileNotFoundError:
+        pass
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC
+    for _ in range(100):
+        tmp = f".{name}.{secrets.token_hex(8)}.tmp"
+        try:
+            fd = os.open(tmp, flags, 0o600, dir_fd=dfd)
+            break
+        except FileExistsError:
+            continue
+    else:
+        raise OSError(errno.EEXIST, "no free temp name", name)
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+            f.flush()
+            os.fchmod(f.fileno(), mode)
+            if owner is not None and os.geteuid() == 0:
+                os.fchown(f.fileno(), *owner)
+            os.fsync(f.fileno())
+        os.replace(tmp, name, src_dir_fd=dfd, dst_dir_fd=dfd)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp, dir_fd=dfd)
+        raise
+
+
+def _atomic_write_text(path, text, *, mode=0o644, owner=None):
+    """Replace `path` with `text`; every directory on the way is opened no-follow
+    (see _open_dir_chain), the file via _write_in_dir. `owner` is (uid, gid) or None."""
+    path = os.path.abspath(path)
+    dfd = _open_dir_chain(os.path.dirname(path), owner)
+    try:
+        _write_in_dir(dfd, os.path.basename(path), text, mode, owner)
+    finally:
+        os.close(dfd)
+
+
 def _state_path():
     return os.path.join(decky.DECKY_PLUGIN_SETTINGS_DIR, "state.json")
 
@@ -220,7 +323,7 @@ def _file_lock(path):
     fd = None
     lock_path = f"{path}.lock"
     try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        os.close(_open_dir_chain(os.path.dirname(path), (DECK_UID, DECK_GID)))
         fd = _open_lock(lock_path)
         _acquire(fd, lock_path)
     except StoreLockError:
@@ -270,13 +373,7 @@ def _load_max_fans():
 
 def _save_max_fans(state):
     """Write the shared state atomically, owned by deck even if we run as root."""
-    os.makedirs(os.path.dirname(MAX_FANS_STATE), exist_ok=True)
-    tmp = f"{MAX_FANS_STATE}.{os.getpid()}.tmp"
-    with open(tmp, "w") as f:
-        json.dump(state, f)
-    if os.geteuid() == 0:
-        os.chown(tmp, 1000, 1000)
-    os.replace(tmp, MAX_FANS_STATE)
+    _atomic_write_text(MAX_FANS_STATE, json.dumps(state), owner=(DECK_UID, DECK_GID))
 
 
 def _update_max_fans(**changes):
@@ -428,25 +525,15 @@ def write_store_atomic(store, path=None):
     """tmp + rename in the same dir; keep it deck-owned although we run as root."""
     path = path or PROFILES_STORE
     d = os.path.dirname(path)
-    os.makedirs(d, exist_ok=True)
-    tmp = f"{path}.{os.getpid()}.decky.tmp"
+    dfd = _open_dir_chain(d, (DECK_UID, DECK_GID))   # refuses a symlink anywhere on the way
     try:
-        with open(tmp, "w") as f:
-            json.dump(store, f, indent=2)   # same layout as src/profiles.py
-            f.flush()
-            os.fsync(f.fileno())
-        os.chmod(tmp, 0o644)
+        owner = None
         if os.geteuid() == 0:
-            try:
-                st = os.stat(d)
-                uid, gid = (st.st_uid, st.st_gid) if st.st_uid != 0 else (DECK_UID, DECK_GID)
-            except OSError:
-                uid, gid = DECK_UID, DECK_GID
-            os.chown(tmp, uid, gid)
-        os.replace(tmp, path)
+            st = os.fstat(dfd)
+            owner = (st.st_uid, st.st_gid) if st.st_uid != 0 else (DECK_UID, DECK_GID)
+        _write_in_dir(dfd, os.path.basename(path), json.dumps(store, indent=2), 0o644, owner)
     finally:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
+        os.close(dfd)
 
 
 def _stale_message(store, profile):
@@ -527,12 +614,8 @@ def _stamp_rate_limited(stamp, now, skipped_msg):
     except OSError:
         pass
     try:
-        tmp = f"{stamp}.{os.getpid()}.tmp"
-        with open(tmp, "w") as f:
-            f.write(f"{now():.0f}\n")
-        if os.geteuid() == 0:
-            os.chown(tmp, DECK_UID, DECK_GID)   # the deck-side CLI rewrites it too
-        os.replace(tmp, stamp)
+        # deck-owned: the deck-side CLI rewrites it too
+        _atomic_write_text(stamp, f"{now():.0f}\n", owner=(DECK_UID, DECK_GID))
     except OSError:
         pass
     return True, None
@@ -642,11 +725,7 @@ def _save_plugin_state(**changes):
     state = _load_state()
     state.update(changes)
     try:
-        os.makedirs(os.path.dirname(_state_path()), exist_ok=True)
-        tmp = _state_path() + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump(state, f)
-        os.replace(tmp, _state_path())
+        _atomic_write_text(_state_path(), json.dumps(state))
     except OSError as e:
         decky.logger.error("state.json write failed: %s", e)
 
@@ -884,9 +963,7 @@ def make_fan_trace(path=None, owner=DECK_IDS):
     path = path or FAN_TRACE
     try:
         d = os.path.dirname(path)
-        if not os.path.isdir(d):
-            os.makedirs(d)
-            os.chown(d, *owner)
+        os.close(_open_dir_chain(d, owner))   # no symlink on the way; new dirs go to `owner`
         return FanTrace.to_file(path, _sensors, "gamemode", owner=owner)
     except OSError as e:
         decky.logger.error("No fan trace: %s", e)
