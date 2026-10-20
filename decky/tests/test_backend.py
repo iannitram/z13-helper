@@ -249,6 +249,70 @@ class StoreTest(unittest.TestCase):
         self.assertTrue(run.calls[0].as_deck)
 
 
+class FileLockSafetyTest(unittest.TestCase):
+    """The backend runs as root in a deck-writable dir: never follow a planted link."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="z13-lock-")
+        self.store = os.path.join(self.dir, "profiles.json")
+        self.victim = os.path.join(self.dir, "victim")
+        with open(self.victim, "w") as f:
+            f.write("x")
+        os.chmod(self.victim, 0o600)
+
+    def _untouched(self):
+        self.assertEqual(os.stat(self.victim).st_mode & 0o777, 0o600)
+
+    def test_symlinked_lock_is_refused(self):
+        os.symlink(self.victim, self.store + ".lock")
+        with self.assertRaises(m.StoreLockError):
+            with m._file_lock(self.store):
+                pass
+        self._untouched()
+
+    def test_hardlinked_lock_is_refused(self):
+        os.link(self.victim, self.store + ".lock")
+        with self.assertRaises(m.StoreLockError):
+            with m._file_lock(self.store):
+                pass
+        self._untouched()
+
+    def test_held_lock_times_out(self):
+        import threading
+        held, release = threading.Event(), threading.Event()
+
+        def hold():
+            with m._file_lock(self.store):
+                held.set()
+                release.wait(5)
+
+        t = threading.Thread(target=hold)
+        t.start()
+        self.assertTrue(held.wait(5))
+        with mock.patch.object(m, "LOCK_TIMEOUT", 0.2):
+            try:
+                with self.assertRaisesRegex(m.StoreLockError, "timed out"):
+                    with m._file_lock(self.store):
+                        pass
+            finally:
+                release.set()
+                t.join(5)
+
+    def test_lock_file_owned_by_current_user_is_accepted(self):
+        # An unprivileged runner is neither root nor the deck uid.
+        self.assertNotEqual(os.geteuid(), 0)
+        with mock.patch.object(m, "DECK_UID", os.geteuid() + 1):
+            with m._file_lock(self.store):
+                pass
+            with m._file_lock(self.store):   # now it exists: the owner check runs
+                pass
+
+    def test_normal_use_creates_plain_lock_file(self):
+        with m._file_lock(self.store):
+            pass
+        self.assertTrue(os.path.isfile(self.store + ".lock"))
+
+
 class BrightnessTest(unittest.TestCase):
     def test_one_call_per_device(self):
         run = fake_host(self)

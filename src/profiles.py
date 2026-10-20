@@ -35,10 +35,15 @@ CLI:
 """
 
 import argparse
+import contextlib
+import stat
+import errno
+import fcntl
 import json
 import os
 import shutil
 import sys
+import threading
 import time
 
 # Installed as ~/.local/bin/z13-profile, the host seam sits in ~/.local/lib/z13-helper/
@@ -137,6 +142,102 @@ def default_profiles():
 # ----------------------------------------------------------------------
 # Store
 # ----------------------------------------------------------------------
+
+# One stable lock file next to each store, held around a whole read-modify-write
+# (never the JSON itself: os.replace swaps its inode). Re-entrant per thread, and
+# serialises threads and processes alike (flock is per open file). Copies of this
+# helper live in max_fans_state.py and decky/main.py; keep them in step.
+_lock_state = threading.local()
+LOCK_TIMEOUT = 10.0   # seconds to wait for another writer before giving up
+
+
+class StoreLockError(OSError):
+    """The lock file is unsafe to use, or another writer held it too long."""
+
+
+def _open_lock(lock_path):
+    """Open (creating if needed) the lock file without following links.
+
+    The directory is writable by the deck user and the Decky backend runs as root, so
+    a planted symlink or hard link must never be followed, chowned or chmodded. Only a
+    file we just created gets its owner and mode set.
+    """
+    base = os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC
+    created = True
+    try:
+        fd = os.open(lock_path, base | os.O_CREAT | os.O_EXCL, 0o660)
+    except FileExistsError:
+        created = False
+        try:
+            fd = os.open(lock_path, base)
+        except OSError as e:
+            if e.errno == errno.ELOOP:
+                raise StoreLockError(f"{lock_path} is a symlink; refusing") from e
+            raise
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+            raise StoreLockError(f"{lock_path} is not a plain single-link file; refusing")
+        if created:
+            os.fchmod(fd, 0o660)
+        elif st.st_uid not in {0, os.geteuid()}:
+            raise StoreLockError(f"{lock_path} has an unexpected owner; refusing")
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _acquire(fd, lock_path):
+    deadline = time.monotonic() + LOCK_TIMEOUT
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                raise StoreLockError(f"timed out waiting for {lock_path}") from None
+            time.sleep(0.05)
+
+
+@contextlib.contextmanager
+def file_lock(path):
+    held = _lock_state.__dict__.setdefault("held", {})
+    if held.get(path):
+        held[path] += 1
+        try:
+            yield
+        finally:
+            held[path] -= 1
+        return
+    fd = None
+    lock_path = f"{path}.lock"
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        fd = _open_lock(lock_path)
+        _acquire(fd, lock_path)
+    except StoreLockError:
+        if fd is not None:
+            os.close(fd)
+        raise
+    except OSError:
+        if fd is not None:
+            os.close(fd)
+        fd = None   # can't lock (read-only dir?): behave as before, unlocked
+    held[path] = 1
+    try:
+        yield
+    finally:
+        held.pop(path, None)
+        if fd is not None:
+            os.close(fd)   # closing releases the flock
+
+
+def store_lock():
+    """Held around every read-modify-write of profiles.json."""
+    return file_lock(STORE_PATH)
+
+
 
 def _read_json(path):
     try:
@@ -282,9 +383,10 @@ def active_name():
 
 
 def set_active(name):
-    store = load_store()
-    store["active"] = name
-    save_store(store)
+    with store_lock():
+        store = load_store()
+        store["active"] = name
+        save_store(store)
     _mirror_legacy(name)
 
 
@@ -303,33 +405,35 @@ def _mirror_legacy(name):
 def upsert_profile(profile):
     """Add or replace a profile by name; returns the store."""
     validate(profile)
-    store = load_store()
-    for i, p in enumerate(store["profiles"]):
-        if p["name"] == profile["name"]:
-            profile["builtin"] = p.get("builtin", False)
-            store["profiles"][i] = profile
-            break
-    else:
-        profile.setdefault("builtin", False)
-        store["profiles"].append(profile)
-    save_store(store)
+    with store_lock():
+        store = load_store()
+        for i, p in enumerate(store["profiles"]):
+            if p["name"] == profile["name"]:
+                profile["builtin"] = p.get("builtin", False)
+                store["profiles"][i] = profile
+                break
+        else:
+            profile.setdefault("builtin", False)
+            store["profiles"].append(profile)
+        save_store(store)
     return store
 
 
 def delete_profile(name):
-    store = load_store()
-    p = get_profile(name, store)
-    if p is None:
-        raise KeyError(name)
-    if p.get("builtin"):
-        raise ValueError(f"{name} is built in and can't be deleted")
-    store["profiles"] = [q for q in store["profiles"] if q["name"] != name]
-    was_active = store.get("active") == name
-    if was_active:
-        store["active"] = "Balanced"
-    save_store(store)
-    if was_active:
-        _mirror_legacy("Balanced")
+    with store_lock():
+        store = load_store()
+        p = get_profile(name, store)
+        if p is None:
+            raise KeyError(name)
+        if p.get("builtin"):
+            raise ValueError(f"{name} is built in and can't be deleted")
+        store["profiles"] = [q for q in store["profiles"] if q["name"] != name]
+        was_active = store.get("active") == name
+        if was_active:
+            store["active"] = "Balanced"
+        save_store(store)
+        if was_active:
+            _mirror_legacy("Balanced")
     return store
 
 
@@ -518,9 +622,10 @@ def _max_fans_state():
 
 
 def _save_max_fans(**changes):
-    state = _max_fans_state()
-    state.update(changes)
-    _write_json(MAX_FANS_PATH, state)
+    with file_lock(MAX_FANS_PATH):
+        state = _max_fans_state()
+        state.update(changes)
+        _write_json(MAX_FANS_PATH, state)
 
 
 def curve_spec(curve):

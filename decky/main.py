@@ -14,6 +14,11 @@ import json
 import time
 import asyncio
 import sys
+import contextlib
+import stat
+import errno
+import fcntl
+import threading
 
 import decky  # modern API (NOT decky_plugin)
 
@@ -136,6 +141,98 @@ def _shared_config():
         return {}
 
 
+# Copy of profiles.file_lock (this backend can't import src/): one stable lock file
+# next to each shared store, held around the whole read-modify-write, so the desktop
+# app, z13-profile and this backend can't lose each other's updates. The lock file is
+# kept deck-owned because we run as root and the other writers run as deck.
+_lock_state = threading.local()
+LOCK_TIMEOUT = 10.0   # seconds to wait for another writer before giving up
+
+
+class StoreLockError(OSError):
+    """The lock file is unsafe to use, or another writer held it too long."""
+
+
+def _open_lock(lock_path):
+    """Open (creating if needed) the lock file without following links.
+
+    The directory is writable by the deck user and the Decky backend runs as root, so
+    a planted symlink or hard link must never be followed, chowned or chmodded. Only a
+    file we just created gets its owner and mode set.
+    """
+    base = os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC
+    created = True
+    try:
+        fd = os.open(lock_path, base | os.O_CREAT | os.O_EXCL, 0o660)
+    except FileExistsError:
+        created = False
+        try:
+            fd = os.open(lock_path, base)
+        except OSError as e:
+            if e.errno == errno.ELOOP:
+                raise StoreLockError(f"{lock_path} is a symlink; refusing") from e
+            raise
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+            raise StoreLockError(f"{lock_path} is not a plain single-link file; refusing")
+        if created:
+            if os.geteuid() == 0:
+                os.fchown(fd, DECK_UID, DECK_GID)
+            os.fchmod(fd, 0o660)
+        elif st.st_uid not in {0, DECK_UID, os.geteuid()}:
+            raise StoreLockError(f"{lock_path} has an unexpected owner; refusing")
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _acquire(fd, lock_path):
+    deadline = time.monotonic() + LOCK_TIMEOUT
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                raise StoreLockError(f"timed out waiting for {lock_path}") from None
+            time.sleep(0.05)
+
+
+@contextlib.contextmanager
+def _file_lock(path):
+    held = _lock_state.__dict__.setdefault("held", {})
+    if held.get(path):
+        held[path] += 1
+        try:
+            yield
+        finally:
+            held[path] -= 1
+        return
+    fd = None
+    lock_path = f"{path}.lock"
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        fd = _open_lock(lock_path)
+        _acquire(fd, lock_path)
+    except StoreLockError:
+        if fd is not None:
+            os.close(fd)
+        raise
+    except OSError:
+        if fd is not None:
+            os.close(fd)
+        fd = None   # can't lock (read-only dir?): behave as before, unlocked
+    held[path] = 1
+    try:
+        yield
+    finally:
+        held.pop(path, None)
+        if fd is not None:
+            os.close(fd)   # closing releases the flock
+
+
 def _load_max_fans():
     """Shared Max Fans state; seeds it from the legacy stores on first use."""
     try:
@@ -147,13 +244,21 @@ def _load_max_fans():
         pass
     # Same precedence as the desktop app's migration: its config.json first,
     # then this plugin's old private state.json.
-    legacy, old = _shared_config(), _load_state()
-    state = {
-        "enabled": bool(legacy.get("fans_max", old.get("max_fans", False))),
-        "saved_curve": legacy.get("fan_curve_saved") or old.get("saved_curve"),
-    }
-    _save_max_fans(state)
-    return state
+    with _file_lock(MAX_FANS_STATE):
+        try:   # another writer may have seeded it while we waited
+            with open(MAX_FANS_STATE) as f:
+                state = json.load(f)
+            if isinstance(state, dict):
+                return state
+        except (OSError, ValueError):
+            pass
+        legacy, old = _shared_config(), _load_state()
+        state = {
+            "enabled": bool(legacy.get("fans_max", old.get("max_fans", False))),
+            "saved_curve": legacy.get("fan_curve_saved") or old.get("saved_curve"),
+        }
+        _save_max_fans(state)
+        return state
 
 
 def _save_max_fans(state):
@@ -168,9 +273,10 @@ def _save_max_fans(state):
 
 
 def _update_max_fans(**changes):
-    state = _load_max_fans()
-    state.update(changes)
-    _save_max_fans(state)
+    with _file_lock(MAX_FANS_STATE):
+        state = _load_max_fans()
+        state.update(changes)
+        _save_max_fans(state)
 
 
 def _current_curve_pwm():
@@ -329,12 +435,16 @@ def write_store_atomic(store, path=None):
 
 def _set_active_field(**fields):
     """Read-modify-write the active profile. Returns (name, error-or-None)."""
-    store = _ensure_store()
-    if store is None:
+    # Seed first: it runs z13-profile, which takes the same lock.
+    if _ensure_store() is None:
         return None, "profiles.json missing (is z13-profile installed?)"
     try:
-        name = update_active_profile(store, **fields)
-        write_store_atomic(store)
+        with _file_lock(PROFILES_STORE):
+            store = _read_store()   # re-read under the lock: never write an older snapshot
+            if store is None:
+                return None, "profiles.json missing (is z13-profile installed?)"
+            name = update_active_profile(store, **fields)
+            write_store_atomic(store)
     except (KeyError, ValueError, OSError) as e:
         return None, str(e)
     return name, None
