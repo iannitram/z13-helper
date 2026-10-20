@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useRef } from "react";
 import { useQuickAccessVisible } from "@decky/api";
 
+// Every mounted slider's `cancel`, so a profile switch can drop all pending commits at once,
+// synchronously, before the backend (or React) has had a chance to deliver the new state.
+const cancelers = new Set<() => void>();
+export function cancelPendingCommits() {
+  cancelers.forEach((c) => c());
+}
+
 const RELEASE_EVENTS = ["pointerup", "pointercancel", "touchend", "touchcancel", "mouseup"];
 
 /**
@@ -70,6 +77,13 @@ export function useCommitOnRelease<T>(commit: (v: T) => void, settleMs = 700) {
     clear();
     pending.current = null;
   }, []);
+
+  useEffect(() => {
+    cancelers.add(cancel);
+    return () => {
+      cancelers.delete(cancel);
+    };
+  }, [cancel]);
 
   return {
     schedule,

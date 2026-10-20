@@ -15,7 +15,7 @@ export function BatteryLimit({ state }: { state: PowerState | null }) {
 
   const { schedule, cancel, handlers } = useCommitOnRelease<number>(async (v) => {
     setMsg("Applying…");
-    const res = await safely(setBatteryLimit(v));
+    const res = await safely(setBatteryLimit(v, state?.active ?? ""));
     setMsg(res.message);
   });
 
