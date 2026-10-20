@@ -12,6 +12,9 @@ from test_fan_watchdog import FakeSensors
 
 Z = "z13ctl"
 CURVE = [[40, 20], [50, 40], [60, 60], [70, 100], [75, 110], [80, 140], [85, 200], [90, 255]]
+# Profiles store fan curves as [temp, pct 0-100] (load validation, #39, rejects the PWM
+# values above); CURVE stays in 0-255 PWM for the watchdog's sensors.
+PROFILE_CURVE = [[t, round(p * 100 / 255)] for t, p in CURVE]
 
 
 def store_with(profile):
@@ -24,7 +27,7 @@ def store_with(profile):
 def user_profile(**over):
     p = {"name": "Quiet Work", "builtin": False, "base": "quiet",
          "tdp": {"pl1": 18, "pl2": 22, "pl3": 25, "force": False},
-         "fan_curve": [list(pt) for pt in CURVE], "undervolt": -12,
+         "fan_curve": [list(pt) for pt in PROFILE_CURVE], "undervolt": -12,
          "brightness": None, "battery_limit": None, "hooks": {"enter": "", "exit": ""}}
     p.update(over)
     return p
