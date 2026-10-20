@@ -62,8 +62,9 @@ captured from Desktop Mode.
 - ❌ Steam's own TDP and charge-limit controls in the Quick Access Menu don't appear on this model.
   Use the Decky plugin.
 - 🔍 Under investigation: with Max Fans on, a fan running flat out can report exactly the same RPM
-  for over a minute. That can trip the frozen-tach rule when the fan is actually fine, and each
-  recovery briefly stops the fans. The fan trace is collecting evidence.
+  for over a minute. A constant reading is now only a suspicion: the watchdog recovers only when the
+  other fan is still moving and the APU has warmed, and gives up after three attempts per fan,
+  reporting a fault instead. The fan trace is collecting evidence.
 
 ## Roadmap
 
