@@ -160,23 +160,31 @@ def _fetch_kernel(cached):
             "notes": "latest stable", "etag": etag, "error": None}
 
 
-_UPDATE_AVAILABLE = re.compile(r"\bupdates?\s+(?:is\s+)?available\b")
+_UPDATE_AVAILABLE = re.compile(r"(?<!no )\bupdates?\s+(?:is\s+)?available\b")
+
+
+STEAMOS_RC_UPDATE = 0      # steamos-atomupd: update available
+STEAMOS_RC_UP_TO_DATE = 7  # steamos-atomupd: no update (measured on real hardware)
 
 
 def _steamos_outcome(rc, text):
-    """Classify a `steamos-update check` result. The exit code decides first;
-    the text is only read when the command ran successfully."""
+    """Classify a `steamos-update check` result. The exit code decides; the text
+    is only a cross-check, and a text that contradicts the exit code is unknown."""
     low = (text or "").lower()
     first = (text or "").splitlines()[0][:120] if text else ""
-    if rc != 0:
-        if rc == host.RC_NOT_FOUND or "not found" in low or "no such file" in low:
-            return "unavailable", f"steamos-update not found: {first}"
-        return "failed", f"steamos-update check exited {rc}: {first}"
-    if "no update available" in low:
+    says_none = "no update available" in low
+    says_avail = bool(_UPDATE_AVAILABLE.search(low))
+    if rc == STEAMOS_RC_UP_TO_DATE:
+        if says_avail:
+            return "unknown", f"exit 7 but text says update available: {first}"
         return "up-to-date", ""
-    if _UPDATE_AVAILABLE.search(low):
+    if rc == STEAMOS_RC_UPDATE:
+        if says_none:
+            return "unknown", f"exit 0 but text says no update: {first}"
         return "update-available", ""
-    return "unknown", f"unrecognised steamos-update output: {first}"
+    if rc == host.RC_NOT_FOUND or "not found" in low or "no such file" in low:
+        return "unavailable", f"steamos-update not found: {first}"
+    return "failed", f"steamos-update check exited {rc}: {first}"
 
 
 def _fetch_steamos(cached):

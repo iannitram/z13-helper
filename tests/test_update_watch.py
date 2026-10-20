@@ -36,9 +36,15 @@ def test_nonzero_exit_is_reported_as_error(steamos_check):
 
 
 def test_up_to_date_output_is_not_an_error(steamos_check):
-    steamos_check(0, "No update available")
+    steamos_check(7, "up to date")
     item = update_watch._fetch_steamos({})
     assert item["error"] is None
+
+
+def test_exit0_saying_no_update_is_a_contradiction_not_up_to_date(steamos_check):
+    steamos_check(0, "No update available")
+    item = update_watch._fetch_steamos({})
+    assert item["error"], "exit 0 means update available; text saying none must not pass as up-to-date"
 
 
 def test_install_refuses_after_failed_check(monkeypatch, capsys):
@@ -68,3 +74,25 @@ def test_install_still_runs_updater_when_update_available(monkeypatch):
     monkeypatch.setattr(installers, "run", fake_run)
     assert installers.install_steamos() == 0
     assert ["sudo", "-n", "steamos-update"] in calls
+
+
+def test_rc7_no_update_is_up_to_date_not_error(steamos_check):
+    # Measured on real hardware: `steamos-update check` prints "No update available" and exits 7.
+    steamos_check(7, "No update available")
+    item = update_watch._fetch_steamos({})
+    assert item["error"] is None, "exit 7 is the up-to-date code, not a failure"
+    assert item["latest"] != "update available"
+
+
+def test_install_treats_rc7_no_update_as_up_to_date(monkeypatch, capsys):
+    calls = []
+
+    def fake_run(argv, timeout=600, check=True, **kw):
+        calls.append(list(argv))
+        if argv[:2] == ["steamos-update", "check"]:
+            return 7, "No update available"
+        return 0, ""
+
+    monkeypatch.setattr(installers, "run", fake_run)
+    assert installers.install_steamos() == 0
+    assert ["sudo", "-n", "steamos-update"] not in calls
