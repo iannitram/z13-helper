@@ -143,3 +143,20 @@ def test_to_file_writes_and_chowns(tmp_path, monkeypatch):
     assert "fan trace started (gamemode-test" in text and "hello" in text
     assert (str(path), 1000, 1000) in chowned
     assert not trace.log.propagate
+
+
+def test_deferred_recovery_result_is_traced_when_the_worker_finishes(clock):
+    from fan_watchdog import FanWatchdogRunner
+    wd, s, ctl, cap, _ = make(clock, curve=MAX_CURVE, temp=55.0, fans=(0, 0))
+    jobs = []
+    runner = FanWatchdogRunner(wd, lambda label, fn: jobs.append((label, fn)))
+    for _ in range(STALL_TICKS):
+        clock.advance(TICK)
+        runner.tick()
+    assert len(jobs) == 1 and not any("*** RESULT" in l for l in cap.lines)
+    label, fn = jobs[0]
+    clock.advance(1.0)
+    text = runner.on_done(label, fn())
+    results = [l for l in cap.lines if "*** RESULT" in l]
+    assert len(results) == 1 and text in results[0]
+    assert "*** RESULT Fans were stalled" in results[0]    # same text as the inline path
