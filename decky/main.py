@@ -15,6 +15,8 @@ import time
 import asyncio
 import sys
 import contextlib
+import stat
+import errno
 import fcntl
 import threading
 
@@ -144,6 +146,58 @@ def _shared_config():
 # app, z13-profile and this backend can't lose each other's updates. The lock file is
 # kept deck-owned because we run as root and the other writers run as deck.
 _lock_state = threading.local()
+LOCK_TIMEOUT = 10.0   # seconds to wait for another writer before giving up
+
+
+class StoreLockError(OSError):
+    """The lock file is unsafe to use, or another writer held it too long."""
+
+
+def _open_lock(lock_path):
+    """Open (creating if needed) the lock file without following links.
+
+    The directory is writable by the deck user and the Decky backend runs as root, so
+    a planted symlink or hard link must never be followed, chowned or chmodded. Only a
+    file we just created gets its owner and mode set.
+    """
+    base = os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC
+    created = True
+    try:
+        fd = os.open(lock_path, base | os.O_CREAT | os.O_EXCL, 0o660)
+    except FileExistsError:
+        created = False
+        try:
+            fd = os.open(lock_path, base)
+        except OSError as e:
+            if e.errno == errno.ELOOP:
+                raise StoreLockError(f"{lock_path} is a symlink; refusing") from e
+            raise
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+            raise StoreLockError(f"{lock_path} is not a plain single-link file; refusing")
+        if created:
+            if os.geteuid() == 0:
+                os.fchown(fd, DECK_UID, DECK_GID)
+            os.fchmod(fd, 0o660)
+        elif st.st_uid not in {0, DECK_UID}:
+            raise StoreLockError(f"{lock_path} has an unexpected owner; refusing")
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _acquire(fd, lock_path):
+    deadline = time.monotonic() + LOCK_TIMEOUT
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                raise StoreLockError(f"timed out waiting for {lock_path}") from None
+            time.sleep(0.05)
 
 
 @contextlib.contextmanager
@@ -157,28 +211,26 @@ def _file_lock(path):
             held[path] -= 1
         return
     fd = None
+    lock_path = f"{path}.lock"
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        lock_path = f"{path}.lock"
-        fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o666)
-        if os.geteuid() == 0:
-            try:
-                os.fchown(fd, DECK_UID, DECK_GID)
-                os.fchmod(fd, 0o664)
-            except OSError:
-                pass
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        fd = _open_lock(lock_path)
+        _acquire(fd, lock_path)
+    except StoreLockError:
+        if fd is not None:
+            os.close(fd)
+        raise
     except OSError:
         if fd is not None:
             os.close(fd)
-        fd = None   # can't lock: behave as before, unlocked
+        fd = None   # can't lock (read-only dir?): behave as before, unlocked
     held[path] = 1
     try:
         yield
     finally:
         held.pop(path, None)
         if fd is not None:
-            os.close(fd)
+            os.close(fd)   # closing releases the flock
 
 
 def _load_max_fans():

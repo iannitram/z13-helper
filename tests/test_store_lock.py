@@ -90,3 +90,72 @@ def test_lock_is_reentrant_and_not_the_json_file(profiles_env):
             profiles.set_active("Silent")   # takes the lock again, same thread
     assert (profiles_env.store.parent / "profiles.json.lock").exists()
     assert profiles._read_json(profiles_env.store)["active"] == "Silent"
+
+
+# ---- hostile / stuck lock file (the Decky copy runs as root in a deck-writable dir) ----
+
+import os  # noqa: E402
+import stat  # noqa: E402
+
+import pytest  # noqa: E402
+
+REFUSED = (profiles.StoreLockError, max_fans_state.StoreLockError)
+LOCKS = [
+    pytest.param(lambda: profiles.file_lock, lambda env: str(env.store), id="profiles"),
+    pytest.param(lambda: max_fans_state.file_lock, lambda env: str(env.max_fans), id="max_fans_state"),
+]
+
+
+@pytest.mark.parametrize("lock,store", LOCKS)
+def test_symlinked_lock_file_is_refused_and_target_untouched(profiles_env, tmp_path, lock, store):
+    victim = tmp_path / "victim"
+    victim.write_text("root-owned")
+    victim.chmod(0o600)
+    before = os.stat(victim)
+    path = store(profiles_env)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    os.symlink(victim, path + ".lock")
+    with pytest.raises(REFUSED):
+        with lock()(path):
+            pass
+    after = os.stat(victim)
+    assert (after.st_mode, after.st_uid, after.st_gid) == (before.st_mode, before.st_uid, before.st_gid)
+    assert victim.read_text() == "root-owned"
+
+
+@pytest.mark.parametrize("lock,store", LOCKS)
+def test_hardlinked_lock_file_is_refused(profiles_env, tmp_path, lock, store):
+    victim = tmp_path / "victim"
+    victim.write_text("x")
+    victim.chmod(0o600)
+    path = store(profiles_env)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    os.link(victim, path + ".lock")
+    with pytest.raises(REFUSED):
+        with lock()(path):
+            pass
+    assert stat.S_IMODE(os.stat(victim).st_mode) == 0o600
+
+
+@pytest.mark.parametrize("lock,store", LOCKS)
+def test_held_lock_times_out_instead_of_hanging(profiles_env, monkeypatch, lock, store):
+    monkeypatch.setattr(profiles, "LOCK_TIMEOUT", 0.2)
+    monkeypatch.setattr(max_fans_state, "LOCK_TIMEOUT", 0.2)
+    path = store(profiles_env)
+    holder_in, release = threading.Event(), threading.Event()
+
+    def hold():
+        with lock()(path):
+            holder_in.set()
+            release.wait(5)
+
+    t = threading.Thread(target=hold)
+    t.start()
+    assert holder_in.wait(5)
+    try:
+        with pytest.raises(REFUSED, match="timed out"):
+            with lock()(path):
+                pass
+    finally:
+        release.set()
+        t.join(5)
