@@ -2,14 +2,15 @@
 
 `get_profiles()` runs `z13-profile list --json`, whose output holds every
 profile's enter/exit hooks (they may carry tokens or private paths). The
-logging preference is off here, and the subprocess is stubbed; nothing in the
-captured log records may contain the hook text.
+logging preference is off here and the host call is stubbed. Raw command output
+may appear only at DEBUG; the INFO/WARNING records carry name, rc and length.
 """
 
 import asyncio
 import importlib.util
 import json
 import logging
+import os
 import sys
 import types
 from pathlib import Path
@@ -55,14 +56,43 @@ def test_get_profiles_does_not_log_hook_text(main, monkeypatch, caplog):
     result = asyncio.run(main.Plugin().get_profiles())
 
     assert result == {"names": ["Silent", "Turbo"], "active": "Silent"}
-    assert SECRET not in caplog.text
-    assert "/home/x/private" not in caplog.text
     for rec in caplog.records:
+        msg = rec.getMessage()
+        if SECRET in msg or "/home/x/private" in msg:
+            assert rec.levelno == logging.DEBUG, msg               # output: DEBUG only
+
+
+def test_failing_command_output_is_not_logged_at_warning(main, monkeypatch, caplog):
+    caplog.set_level(logging.DEBUG)
+    monkeypatch.setattr(host, "run", lambda *a, **k: (1, _store_with_hook(), False))
+
+    result = asyncio.run(main.Plugin().get_profiles())
+
+    assert result == {"names": [], "active": ""}
+    warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert warnings, "a failing command should leave a WARNING"
+    for rec in warnings:
         assert SECRET not in rec.getMessage()
+    assert any("output_len=" in r.getMessage() for r in warnings)
 
 
 def test_fan_trace_file_is_owner_only(tmp_path):
     from fan_watchdog import FanTrace
     path = tmp_path / "fan-trace-gamemode.log"
     FanTrace.to_file(str(path), name="perm-test")       # owner=None: no chown
+    assert path.stat().st_mode & 0o777 == 0o600
+
+
+def test_fan_trace_is_created_0600_without_chmod(tmp_path, monkeypatch):
+    """No window at the umask mode: the file is 0600 even if chmod never runs."""
+    import fan_watchdog
+    def no_chmod(*a, **k):
+        raise OSError("chmod disabled for this test")
+    monkeypatch.setattr(fan_watchdog.os, "chmod", no_chmod)
+    old = os.umask(0o022)
+    try:
+        path = tmp_path / "created-0600.log"
+        fan_watchdog._OwnedRotatingHandler(str(path), None).close()
+    finally:
+        os.umask(old)
     assert path.stat().st_mode & 0o777 == 0o600

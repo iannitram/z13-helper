@@ -111,11 +111,13 @@ LIGHTBAR_DAEMON_STAMP = "/run/user/1000/z13-lightbar-daemon-restart.stamp"
 def _run(args, timeout=15, *, as_deck=False):
     """host.run, logged. Returns (rc, out)."""
     rc, out, _ = host.run(args, timeout=timeout, as_deck=as_deck)
-    decky.logger.info("cmd %s -> rc=%s", " ".join(args), rc)
-    # Output can hold private config (profile hooks), so it is logged only when the
-    # command failed, and then truncated.
+    # Output can be profile config (hooks may hold tokens or private paths): it goes to
+    # DEBUG only. INFO/WARNING carry just the command name, rc and output length.
+    name = os.path.basename(args[0])
+    decky.logger.info("cmd %s -> rc=%s", name, rc)
     if rc != 0:
-        decky.logger.warning("cmd %s failed, output: %s", " ".join(args), out[:300])
+        decky.logger.warning("cmd %s failed: rc=%s output_len=%d", name, rc, len(out))
+    decky.logger.debug("cmd %s output: %s", name, out)
     return rc, out
 
 

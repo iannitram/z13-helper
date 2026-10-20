@@ -320,9 +320,16 @@ class _OwnedRotatingHandler(logging.handlers.RotatingFileHandler):
         super().__init__(path, **kw)
 
     def _open(self):
+        # Owner-only from the first byte: create it 0600 before the handler opens it
+        # (no window at the umask mode). chmod below covers files that already exist.
+        try:
+            os.close(os.open(self.baseFilename, os.O_CREAT | os.O_WRONLY | os.O_APPEND
+                             | os.O_NOFOLLOW, 0o600))
+        except OSError:
+            pass
         stream = super()._open()
         try:
-            os.chmod(self.baseFilename, 0o600)   # owner-only: a log is private to the user
+            os.chmod(self.baseFilename, 0o600)
         except OSError:
             pass
         if self._owner is not None:
