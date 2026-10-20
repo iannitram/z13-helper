@@ -45,9 +45,13 @@ Z13CTL = os.path.join(HOME, ".local", "bin", "z13ctl")
 USER_UNITS = os.path.join(HOME, ".config", "systemd", "user")
 API = "https://api.github.com/repos"
 DECKY_INSTALLER = "https://github.com/SteamDeckHomebrew/decky-installer/releases/latest/download/install_release.sh"
+DECKY_RELEASE_API = f"{API}/SteamDeckHomebrew/decky-installer/releases/latest"
 DECKY_VERSION_FILE = os.path.join(HOME, "homebrew", "services", ".loader.version")
 UDEV_RULES = "/etc/udev/rules.d/99-z13ctl.rules"
 PERMS_UNIT = "/etc/systemd/system/z13ctl-perms.service"
+# Root only ever executes files from here (root-owned dir, root-owned files),
+# never from ~/.local/bin or the download cache, which the user can rewrite.
+ROOT_DIR = "/etc/z13-helper"
 DRY_RUN = os.environ.get("Z13_INSTALL_DRY_RUN") == "1"
 
 
@@ -115,6 +119,31 @@ def sha256(path):
     return h.hexdigest()
 
 
+def _root_copy(src, name, expected_sha256):
+    """Copy `src` into the root-owned ROOT_DIR and return the copy's path.
+
+    `expected_sha256` must come from a trusted source (the release metadata
+    fetched over HTTPS), never from `src` itself, which the user can rewrite.
+    The hash is taken of the root-owned copy; on a mismatch the copy is removed
+    and this raises. Root then uses the copy, never `src`."""
+    want = (expected_sha256 or "").strip().lower().removeprefix("sha256:")
+    if not re.fullmatch(r"[0-9a-f]{64}", want):
+        raise RuntimeError(f"no trusted sha256 for {name}; refusing to run it as root")
+    dst = os.path.join(ROOT_DIR, name)
+    run(["sudo", "-n", "install", "-d", "-o", "root", "-g", "root", "-m", "0755", ROOT_DIR])
+    run(["sudo", "-n", "install", "-o", "root", "-g", "root", "-m", "0755", src, dst])
+    got = sha256(dst)
+    if got != want:
+        run(["sudo", "-n", "rm", "-f", dst], check=False)
+        raise RuntimeError(f"sha256 mismatch for {name}: got {got}, release says {want}; refusing")
+    return dst
+
+
+# Tarball path + the release's published sha256 for the last release verified in
+# this process (set by _fetch_release); used to give root a checked copy.
+_TRUST = {}
+
+
 # ----------------------------------------------------------------------
 # z13ctl
 # ----------------------------------------------------------------------
@@ -135,7 +164,8 @@ def plan_z13ctl():
         "2. Verify the sha256, extract, check `z13ctl --version`\n"
         f"3. Back up {Z13CTL} to z13ctl.bak-<current version>\n"
         "4. Install the new binary to ~/.local/bin/z13ctl\n"
-        "5. sudo z13ctl setup  (udev rules + z13ctl-perms.service; passwordless sudo)\n"
+        f"5. Copy it to a root-owned {ROOT_DIR}/z13ctl (checked against the release's published hash; root extracts the binary from that copy), then sudo its `setup`\n"
+        "   (udev rules + z13ctl-perms.service; passwordless sudo)\n"
         "6. Install the daemon user units (z13ctl.socket / z13ctl.service) with --no-button,\n"
         "   enable --now (named profiles, resume re-apply and AC/battery autoswitch need it)\n"
         "7. Restart the resident app so it sees the new backend\n"
@@ -162,6 +192,9 @@ def _fetch_release(tag=None):
             expected = parts[0]
     if not expected:
         raise RuntimeError("checksums.txt has no entry for the tarball")
+    digest = next((a.get("digest") for a in rel.get("assets", []) if a["name"] == tar_name), None)
+    if digest and digest.removeprefix("sha256:").lower() != expected.lower():
+        raise RuntimeError(f"release digest {digest} disagrees with checksums.txt {expected}")
     actual = sha256(tar_path)
     if actual != expected:
         raise RuntimeError(f"sha256 mismatch: {actual} != {expected}")
@@ -184,13 +217,39 @@ def _fetch_release(tag=None):
         shutil.rmtree(tmp, ignore_errors=True)   # the caller only cleans up on success
         raise
     log(f"Extracted z13ctl {got}")
+    _TRUST.clear()
+    _TRUST.update(ver=ver, tar=tar_path, name=tar_name, sha=expected)
     return ver, tmp
+
+
+def _root_z13ctl():
+    """A z13ctl binary that only root can have written: the release tarball is
+    copied to ROOT_DIR and checked against the release's published hash, then
+    the binary is extracted from that root-owned tarball by root. If the
+    release can't be verified, refuse rather than run an unchecked file."""
+    ver = _TRUST.get("ver") or _z13ctl_installed_version()
+    if not ver:
+        raise RuntimeError("refusing the sudo step: z13ctl version unknown, cannot verify a release")
+    if _TRUST.get("ver") != ver:
+        try:
+            _, tmp = _fetch_release(f"v{ver}")
+            shutil.rmtree(tmp, ignore_errors=True)
+        except Exception as e:  # noqa: BLE001
+            raise RuntimeError(f"refusing the sudo step: could not verify the v{ver} release ({e})") from e
+    tar_root = _root_copy(_TRUST["tar"], _TRUST["name"], _TRUST["sha"])
+    root_bin = os.path.join(ROOT_DIR, "z13ctl")
+    run(["sudo", "-n", "rm", "-f", root_bin])
+    run(["sudo", "-n", "tar", "-xzf", tar_root, "-C", ROOT_DIR, "--no-same-owner",
+         "--no-same-permissions", "z13ctl"])
+    run(["sudo", "-n", "chmod", "0755", root_bin])
+    return root_bin
 
 
 def _setup_perms(perms_only=False):
     """`sudo z13ctl setup`: udev rules + z13ctl-perms.service (z13ctl owns both files).
     perms_only re-grants the sysfs permissions without rewriting the rules."""
-    run(["sudo", "-n", Z13CTL, "setup"] + (["--perms-only"] if perms_only else []), timeout=120)
+    root_bin = _root_z13ctl()
+    run(["sudo", "-n", root_bin, "setup"] + (["--perms-only"] if perms_only else []), timeout=120)
     run(["sudo", "-n", "systemctl", "daemon-reload"], check=False)
     run(["sudo", "-n", "systemctl", "enable", "--now", "z13ctl-perms.service"], check=False)
 
@@ -261,7 +320,7 @@ def install_z13ctl():
         log("Already up to date.")
         return 0
     if DRY_RUN:
-        log(f"(dry run) would install z13ctl {ver}, run `sudo z13ctl setup`, install daemon units")
+        log(f"(dry run) would install z13ctl {ver}, copy it to root-owned {ROOT_DIR}, run `sudo z13ctl setup` from there, install daemon units")
         return 0
     ver, tmp = _fetch_release()
 
@@ -318,6 +377,7 @@ def repair_z13ctl():
     rules_ok = os.path.exists(UDEV_RULES) and os.path.exists(PERMS_UNIT) and _unit_enabled("z13ctl-perms.service")
     if DRY_RUN:
         log("(dry run) would run `sudo z13ctl setup" + (" --perms-only`" if rules_ok else "` (rules or perms unit missing)"))
+        log(f"(dry run) the binary is first copied to root-owned {ROOT_DIR} and hash-checked; root runs only that copy")
     else:
         _setup_perms(perms_only=rules_ok)
 
@@ -370,7 +430,7 @@ def plan_decky():
     return (
         "Decky Loader\n"
         f"1. Download the official installer script ({DECKY_INSTALLER})\n"
-        "2. Run it with sudo (it stops plugin_loader, fetches the latest PluginLoader, restarts)\n"
+        f"2. Copy it to a root-owned {ROOT_DIR} (checked against the release's published digest) and run that copy with sudo (it stops plugin_loader, fetches the latest PluginLoader, restarts)\n"
         "3. Health check: if a stale loader still holds port 1337, stop/kill/start the unit\n"
         "Plugins (including z13-helper) are kept. Alternative: Decky's own Settings → Update in the QAM."
     )
@@ -404,10 +464,19 @@ def install_decky():
     if DRY_RUN:
         log(f"(dry run) would run the official Decky installer ({DECKY_INSTALLER})")
         return 0
-    script = fetch(DECKY_INSTALLER, os.path.join(CACHE, "decky_install_release.sh"))
+    # The expected hash is the release asset's published digest (HTTPS API),
+    # not anything read back from the downloaded file. No digest -> refuse.
+    rel = json.loads(fetch(DECKY_RELEASE_API))
+    asset = next((a for a in rel.get("assets", []) if a.get("name") == "install_release.sh"), None)
+    digest = (asset or {}).get("digest")
+    if not asset or not digest:
+        log("FAILED: the Decky installer release has no published sha256 digest; not running it as root")
+        return 1
+    script = fetch(asset["browser_download_url"], os.path.join(CACHE, "decky_install_release.sh"))
     log("Downloaded installer script")
+    root_script = _root_copy(script, "decky_install_release.sh", digest)
     REPORT.step("Decky Loader installer started (may be partially applied)")
-    run(["sudo", "-n", "bash", script], timeout=900)
+    run(["sudo", "-n", "bash", root_script], timeout=900)
     time.sleep(8)
     healthy = _decky_health() == 0
     log("Decky Loader now: " + (_decky_installed_version() or "?"))
