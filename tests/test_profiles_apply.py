@@ -84,6 +84,19 @@ def test_null_fields_are_left_alone(profiles_env, fake_host):
     assert results[1] == ("fans", True, "firmware auto")
 
 
+def test_tdp_without_curve_resets_fans_after_tdp(profiles_env, fake_host):
+    """z13ctl's `tdp --set` re-applies the last curve its "custom" profile stored
+    (Boondock came back with Max Fans' 100% curve); the reset after it clears that."""
+    p = bare_profile(base="quiet", tdp={"pl1": 20, "pl2": 30, "pl3": 40, "force": False})
+    results = profiles.apply(p, z13ctl=Z)
+    assert fake_host.argvs == [
+        [Z, "profile", "--set", "quiet"],
+        [Z, "tdp", "--set", "20", "--pl2", "30", "--pl3", "40"],
+        [Z, "fancurve", "--reset"],
+    ]
+    assert ("fans", True, "firmware auto") in results
+
+
 def test_brightness_has_short_timeout(profiles_env, fake_host):
     profiles.apply(bare_profile(brightness="low"), z13ctl=Z)
     seen = [(c.argv[1:3], c.timeout) for c in fake_host.calls]

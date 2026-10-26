@@ -780,10 +780,14 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
         step("fans", [z13ctl, "fancurve", "--set", MAX_FANS_SPEC], "Max Fans stays ON (100%)")
     elif curve:
         step("fans", [z13ctl, "fancurve", "--set", curve_spec(curve)], "custom curve")
-    elif released:
+    elif released or tdp:
         # Leaving a Max Fans profile for one without a curve: hand the fans back
         # explicitly rather than trusting the profile write to drop the 100% curve.
-        step("fans", [z13ctl, "fancurve", "--reset"], "Max Fans OFF, firmware auto")
+        # A TDP without a curve needs it too: `tdp --set` activates z13ctl's
+        # "custom" profile, which re-applies the last curve it stored (Max Fans,
+        # say) -- a reset now, with "custom" active, is what clears it.
+        step("fans", [z13ctl, "fancurve", "--reset"],
+             "Max Fans OFF, firmware auto" if released else "firmware auto")
     else:
         results.append(("fans", True, "firmware auto"))
 
