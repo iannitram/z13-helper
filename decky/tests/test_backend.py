@@ -638,6 +638,28 @@ class DeckyFansTest(unittest.TestCase):
         ])
         self.assertTrue(all(c[0][0] == m.Z13CTL for c in run.calls))
 
+    def test_auto_recovery_commands(self):
+        run = fake_host(self)
+        fans = m.DeckyFans()
+        fans.apply_tdp({"pl1": 20, "pl2": 30, "pl3": 40, "force": False})
+        fans.reset_fancurve()
+        self.assertEqual([c[0][1:] for c in run.calls], [
+            ["tdp", "--set", "20", "--pl2", "30", "--pl3", "40"],
+            ["fancurve", "--reset"],
+        ])
+        self.assertEqual([c.as_deck for c in run.calls], [True, False])
+
+    def test_watchdog_reads_active_tdp_from_store(self):
+        orig = m._read_store
+        tdp = {"pl1": 20, "pl2": 30, "pl3": 40, "force": False}
+        m._read_store = lambda: {"active": "Boondock", "profiles": [{"name": "Boondock", "tdp": tdp}]}
+        try:
+            self.assertEqual(m.make_fan_watchdog(StalledSensors(), m.DeckyFans())._active_tdp(), tdp)
+            m._read_store = lambda: None
+            self.assertIsNone(m.make_fan_watchdog(StalledSensors(), m.DeckyFans())._active_tdp())
+        finally:
+            m._read_store = orig
+
     def test_failure_raises(self):
         fans = (fake_host(self, fail_if=("profile",)) and m.DeckyFans())
         with self.assertRaises(RuntimeError):

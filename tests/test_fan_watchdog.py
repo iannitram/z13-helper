@@ -1,5 +1,6 @@
 """fan_watchdog.FanWatchdog with fake sensors, controller and clock."""
 
+import math
 import queue
 import threading
 import time
@@ -7,7 +8,8 @@ import types
 
 import pytest
 
-from fan_watchdog import (FAN_RECOVERY_LABEL, FROZEN_S, MAX_RECOVERY_ATTEMPTS, ONE_FAN_ZERO_S, RETRY_S, STALL_HYSTERESIS_C,
+from fan_watchdog import (AUTO_RETRY_S, AUTO_STALL_S, AUTO_STALL_TEMP_C, FAN_RECOVERY_LABEL, FROZEN_S,
+                          MAX_RECOVERY_ATTEMPTS, ONE_FAN_ZERO_S, RETRY_S, STALL_HYSTERESIS_C,
                           STALL_TICKS, FanWatchdog, FanWatchdogRunner)
 from sensor_reader import SensorReader
 
@@ -59,6 +61,9 @@ class FakeController:
     def set_fancurve_pwm(self, points):
         self._call("set_fancurve_pwm", points)
 
+    def apply_tdp(self, tdp):
+        self._call("apply_tdp", tdp)
+
     def set_fancurve(self, curve):         # must never be used by the watchdog
         self._call("set_fancurve", curve)
 
@@ -71,18 +76,18 @@ def env(clock):
     """Fake clock, Max Fans flag and may_act gate; build the watchdog with env.make().
     Set ns.allowed = False to have may_act() refuse; ns.asked counts its calls."""
     ns = types.SimpleNamespace(clock=clock, sensors=None, ctl=None, wd=None,
-                               max_on=False, allowed=True, asked=0)
+                               max_on=False, allowed=True, asked=0, tdp=None)
 
     def may_act():
         ns.asked += 1
         return ns.allowed
 
-    def make(max_fans=False, fail_on=None, **sensor_kw):
-        ns.max_on = max_fans
+    def make(max_fans=False, fail_on=None, tdp=None, **sensor_kw):
+        ns.max_on, ns.tdp = max_fans, tdp
         ns.sensors = FakeSensors(**sensor_kw)
         ns.ctl = FakeController(fail_on)
         ns.wd = FanWatchdog(ns.sensors, ns.ctl, max_fans_on=lambda: ns.max_on,
-                            may_act=may_act, clock=clock)
+                            may_act=may_act, active_tdp=lambda: ns.tdp, clock=clock)
         return ns
 
     def set_max(v):
@@ -138,7 +143,8 @@ def test_rule1_throttled_then_retried_after_retry_s(env):
 
 def test_dropped_curve_with_max_fans_off_is_left_alone(env):
     # Max Fans OFF + auto mode = the profile wants firmware auto (or the app will fix it).
-    ns = env.make(max_fans=False, enabled=False, fans=(0, 0))
+    # Idle fans on a cool APU are firmware auto doing its job (rule 5 needs it hot).
+    ns = env.make(max_fans=False, enabled=False, temp=45.0, fans=(0, 0))
     assert run(ns, 10) == [None] * 10
     assert ns.ctl.calls == []
 
@@ -641,3 +647,148 @@ def test_queued_recovery_rereads_max_fans_when_it_runs(env):
     jobs[0]()
     assert call_names(ns.ctl) == ["rewrite_profile", "set_fancurve_pwm"]
     assert "set_fans_max" not in call_names(ns.ctl)
+
+
+# ----------------------------------------------------------------------
+# Rule 5: firmware auto mode, both fans stopped on a hot APU
+# ----------------------------------------------------------------------
+
+BOONDOCK_TDP = {"pl1": 20, "pl2": 30, "pl3": 40, "force": False}
+# The streak starts on the first 0-RPM tick, so it reaches AUTO_STALL_S this many ticks in.
+AUTO_TICKS = math.ceil(AUTO_STALL_S / TICK) + 1
+
+
+def auto(env, **kw):
+    kw.setdefault("temp", 70.0)
+    kw.setdefault("fans", (0, 0))
+    return env.make(max_fans=False, enabled=False, **kw)
+
+
+def test_rule5_auto_stall_rewrites_profile_then_restores_tdp(env):
+    # 2026-10-19: quiet profile, APU 69 -> 75 C, both fans 0 RPM in auto.
+    ns = auto(env, tdp=BOONDOCK_TDP)
+    msgs = run(ns, AUTO_TICKS)
+    assert msgs[:-1] == [None] * (AUTO_TICKS - 1)
+    # tdp --set re-applies z13ctl's stored curve, so the reset comes last.
+    assert ns.ctl.calls == [("rewrite_profile",), ("apply_tdp", BOONDOCK_TDP), ("reset_fancurve",)]
+    assert msgs[-1] == ("Fans stopped in auto mode at 70 °C; profile rewritten, "
+                        "TDP 20/30/40 W re-applied")
+
+
+def test_rule5_without_tdp_only_rewrites_profile(env):
+    ns = auto(env, tdp=None)
+    msgs = run(ns, AUTO_TICKS)
+    assert call_names(ns.ctl) == ["rewrite_profile"]
+    assert msgs[-1] == "Fans stopped in auto mode at 70 °C; profile rewritten"
+
+
+def test_rule5_waits_the_full_auto_stall_s(env):
+    ns = auto(env)
+    run(ns, 1)                              # streak starts here
+    run(ns, 1, dt=AUTO_STALL_S - 0.01)
+    assert ns.ctl.calls == []
+    run(ns, 1, dt=0.02)
+    assert call_names(ns.ctl) == ["rewrite_profile"]
+
+
+@pytest.mark.parametrize("temp", [40.0, 60.0, AUTO_STALL_TEMP_C - 0.1])
+def test_rule5_cool_apu_is_left_alone(env, temp):
+    ns = auto(env, temp=temp)
+    assert run(ns, 100) == [None] * 100
+    assert ns.ctl.calls == []
+
+
+def test_rule5_one_fan_spinning_is_not_a_stall(env):
+    ns = auto(env, fans=(0, 2400))
+    run(ns, 100)
+    assert ns.ctl.calls == []
+
+
+def test_rule5_streak_resets_when_a_fan_spins_or_apu_cools(env):
+    ns = auto(env)
+    for breaker in ({"fans": (2400, 2500)}, {"temp": 50.0}, {"temp": None}, {"fans": (None, 0)}):
+        run(ns, AUTO_TICKS - 1)
+        saved = {k: getattr(ns.sensors, k) for k in breaker}
+        for k, v in breaker.items():
+            setattr(ns.sensors, k, v)
+        run(ns, 1)
+        for k, v in saved.items():
+            setattr(ns.sensors, k, v)
+    assert ns.ctl.calls == []
+
+
+def test_rule5_rate_limited_to_auto_retry_s(env):
+    ns = auto(env, tdp=BOONDOCK_TDP)
+    run(ns, AUTO_TICKS)
+    assert len(ns.ctl.calls) == 3
+    # Still stopped: no second attempt inside AUTO_RETRY_S...
+    n_within = int((AUTO_RETRY_S - 0.01) // TICK)
+    assert run(ns, n_within) == [None] * n_within
+    assert len(ns.ctl.calls) == 3
+    # ...but one after it (the streak kept running meanwhile).
+    run(ns, 2)
+    assert call_names(ns.ctl) == ["rewrite_profile", "apply_tdp", "reset_fancurve"] * 2
+
+
+def test_rule5_respects_may_act_and_acts_once_allowed(env):
+    ns = auto(env)
+    ns.allowed = False
+    assert run(ns, AUTO_TICKS + 10) == [None] * (AUTO_TICKS + 10)
+    assert ns.ctl.calls == []
+    ns.allowed = True
+    run(ns, 1)
+    assert call_names(ns.ctl) == ["rewrite_profile"]
+
+
+def test_rule5_failed_rewrite_skips_tdp(env):
+    ns = auto(env, tdp=BOONDOCK_TDP, fail_on="rewrite_profile")
+    msg = run(ns, AUTO_TICKS)[-1]
+    assert call_names(ns.ctl) == ["rewrite_profile"]
+    assert msg.startswith("Fan recovery failed:")
+
+
+def test_rule5_failed_tdp_is_reported(env):
+    ns = auto(env, tdp=BOONDOCK_TDP, fail_on="apply_tdp")
+    msg = run(ns, AUTO_TICKS)[-1]
+    assert call_names(ns.ctl) == ["rewrite_profile", "apply_tdp"]
+    assert "profile rewritten, but TDP re-apply failed" in msg
+
+
+def test_rule5_unreadable_store_is_reported_not_raised(env):
+    ns = auto(env)
+    def boom():
+        raise OSError("profiles.json unreadable")
+    ns.wd._active_tdp = boom
+    msg = run(ns, AUTO_TICKS)[-1]
+    assert call_names(ns.ctl) == ["rewrite_profile"]
+    assert "TDP re-apply failed: profiles.json unreadable" in msg
+
+
+def test_rule5_never_writes_a_curve_or_reruns_hooks(env):
+    ns = auto(env, tdp=BOONDOCK_TDP)
+    run(ns, AUTO_TICKS + int(AUTO_RETRY_S // TICK) + 2)
+    assert set(call_names(ns.ctl)) == {"rewrite_profile", "apply_tdp", "reset_fancurve"}
+
+
+def test_rule5_does_not_apply_with_max_fans_on(env):
+    # Max Fans ON + auto is rule 1 (re-pin 100%), never the TDP path.
+    ns = env.make(max_fans=True, enabled=False, temp=80.0, fans=(0, 0), tdp=BOONDOCK_TDP)
+    run(ns, AUTO_TICKS)
+    assert "apply_tdp" not in call_names(ns.ctl)
+    assert call_names(ns.ctl)[:2] == ["rewrite_profile", "set_fans_max"]
+
+
+def test_rule5_auto_stall_runs_on_the_worker_when_deferred(env):
+    # The auto-mode recovery blocks on hardware commands like the others, so with
+    # a runner it is queued, not run on the UI thread, and holds off new decisions.
+    ns = auto(env, tdp=BOONDOCK_TDP)
+    jobs = []
+    runner = FanWatchdogRunner(ns.wd, lambda label, fn: jobs.append((label, fn)))
+    for _ in range(AUTO_TICKS + 5):
+        ns.clock.advance(TICK)
+        assert runner.tick() is None
+    assert ns.ctl.calls == []
+    assert len(jobs) == 1 and jobs[0][0] == FAN_RECOVERY_LABEL and runner.pending
+    msg = runner.on_done(FAN_RECOVERY_LABEL, jobs[0][1]())
+    assert ns.ctl.calls == [("rewrite_profile",), ("apply_tdp", BOONDOCK_TDP), ("reset_fancurve",)]
+    assert msg.startswith("Fans stopped in auto mode") and not runner.pending

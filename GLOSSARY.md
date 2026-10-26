@@ -53,6 +53,9 @@ The firmware has switched the fans back to automatic, usually after a platform p
 **Stall**:
 The curve asks for at least half speed, but both fans read 0 RPM for consecutive checks.
 
+**Auto stall**:
+No custom curve (firmware auto, Max Fans off), the APU at 65 °C or more, and both fans at 0 RPM for 20 s. Recovered by a platform profile rewrite, then the active profile's TDP and a curve reset; never by re-running profile hooks.
+
 **Frozen tach**:
 One fan's RPM reading stays exactly the same for 90 s while the curve asks for speed. It means the fan has likely stopped and its reported speed is out of date.
 _Avoid_: stuck fan
