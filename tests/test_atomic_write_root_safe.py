@@ -10,6 +10,8 @@ import importlib.util
 import json
 import logging
 import os
+import pwd
+import re
 import sys
 import types
 from pathlib import Path
@@ -142,7 +144,8 @@ def test_temp_name_is_not_predictable(dmain, tmp_path, monkeypatch):
     for _ in range(3):
         dmain.write_store_atomic({"active": "A", "profiles": []}, str(tmp_path / "p.json"))
     assert len(set(seen)) == 3
-    assert not any(str(os.getpid()) in n for n in seen)
+    assert all(re.fullmatch(r"\.p\.json\.[0-9a-f]{16}\.tmp", n) for n in seen)
+    assert not any(str(os.getpid()) in n.split(".") for n in seen)
 
 
 def test_write_failure_leaves_no_temp(dmain, tmp_path, monkeypatch):
@@ -183,8 +186,13 @@ def test_store_owner_comes_from_the_dir_fd(dmain, tmp_path, monkeypatch):
     monkeypatch.setattr(os, "geteuid", lambda: 0)
     monkeypatch.setattr(os, "fchown", lambda fd, u, g: got.append((u, g)))
     monkeypatch.setattr(os, "chown", lambda *a, **k: pytest.fail("path chown"))
+    monkeypatch.setattr(dmain, "DECK_UID", 4242)
+    monkeypatch.setattr(dmain, "DECK_GID", 4243)
+    monkeypatch.setattr(pwd, "getpwuid", lambda uid: types.SimpleNamespace(pw_dir="/nonexistent-home"))
     dmain.write_store_atomic({"active": "A", "profiles": []}, str(tmp_path / "p.json"))
-    assert got == [(os.getuid(), os.getgid())]
+    st = os.stat(tmp_path)
+    expected = (st.st_uid, st.st_gid) if st.st_uid != 0 else (4242, 4243)
+    assert got == [expected]
 
 
 def test_symlink_at_trace_dir_is_not_chowned(dmain, tmp_path, monkeypatch):
