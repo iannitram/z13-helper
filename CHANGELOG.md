@@ -9,6 +9,12 @@ the device but not yet verified on the Z13. Plan and status: `docs/ROADMAP.md`.
 ## Unreleased
 
 ### Added
+- **`z13-gamemode-report`** (`tooling/z13_gamemode_report.py`, installed to `~/.local/bin`). Reads
+  the last Game Mode session(s) back from local logs: when it ran, games played, the Decky
+  backend's actions, fan-watchdog events, gamescope/Steam/z13 errors and screenshots taken.
+  `--screenshot` saves a PNG of the live Game Mode screen through `gamescopectl`. Read-only apart
+  from that, local only, respects the logging opt-in. Session reports checked against this Z13's
+  logs; `--screenshot` on-device check pending (needs Game Mode).
 - **Logging is opt-in** (ROADMAP §10 0c). A full `./install.sh` asks once "Do you want to enable
   error logging to help with development of the app?" (`--yes` answers yes, `--repair` keeps the
   recorded answer, `--dry-run` shows the question) and records `"logging": true|false` in

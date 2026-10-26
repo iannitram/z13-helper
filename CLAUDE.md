@@ -113,6 +113,13 @@ Mode (not after a deliberate Quit). Note the Decky backend runs as **deck**, not
   Logging is **opt-in**: `"logging": false` in `~/.config/z13-helper/install.json` (asked by
   `install.sh`, toggled in Help → Error log; missing = on) means no files there at all, only the
   in-memory Error log and the journal (`src/install_record.py`, mirrored in `decky/main.py`).
+- **Game Mode (you can't see it):** run `z13-gamemode-report` (`tooling/z13_gamemode_report.py`)
+  instead of asking Ian what happened: last session's window (`gamescope-session.service` in
+  `journalctl --user`), games (Steam's `logs/gameprocess_log.txt`), the Decky backend's lines
+  (`journalctl -u plugin_loader`; Decky writes no `~/homebrew/logs/z13-helper/`), fan-watchdog
+  events from `fan-trace-gamemode.log`, errors and screenshots. `--last N` for more. While Game
+  Mode runs (a `gamescope` process; the report says "RUNNING NOW"), `z13-gamemode-report --screenshot` saves a PNG
+  under `~/.local/state/z13-helper/screenshots/` that you can Read. Read-only apart from that.
 - **Rebuild/install the Flatpak:** `bash flatpak/build.sh` (uses `org.flatpak.Builder` +
   `org.kde.Platform//6.10`; pulls PyQt6 from PyPI, needs network). Then restart the app.
 - **Run for debugging without a rebuild:** the sandbox has PyQt6 under `/app`, so you can run the
