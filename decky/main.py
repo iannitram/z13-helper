@@ -459,7 +459,7 @@ def clamp_tdp(pl1, pl2, pl3, ranges=None):
 
 
 def clamp_battery(value):
-    """Nearest BATTERY_STEP inside BATTERY_MIN..BATTERY_MAX."""
+    """Clamp battery limit to nearest BATTERY_STEP within BATTERY_MIN..BATTERY_MAX range."""
     v = int(round(float(value) / BATTERY_STEP) * BATTERY_STEP)
     return max(BATTERY_MIN, min(BATTERY_MAX, v))
 
