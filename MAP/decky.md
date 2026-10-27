@@ -1,63 +1,68 @@
 status: unreviewed (verifier-passed, qwen3-coder-30b-a3b-instruct, 2026-10-20)
 
-# Script half: decky @ da5d05bd8f3ac2bde4506b23a4a6f7b47563297f
+# Script half: decky @ 0fad07409b5bb3ee54b47fd2a16c711ba7224052
 
 ## Files
-- `decky/main.py` — 1034 lines, blob `2db4c6f63ecfb2a511fb268ba3d1b2ce81c05c6d`
+- `decky/main.py` — 1120 lines, blob `dc6de26c9c35116382dc8e5f429f721f6e16d009`
 - `decky/src/backend.ts` — 94 lines, blob `567adced2a5733ceede29904ea8f2766ed726853`
 - `decky/src/components/BatteryLimit.tsx` — 58 lines, blob `a4f748696a2c4e84bf186cc01eb57b1c8836794a`
 - `decky/src/components/KeyboardBrightness.tsx` — 75 lines, blob `0e214fda4ace9c241f407da33ea2015ecb0e31dd`
 - `decky/src/components/PowerLimits.tsx` — 115 lines, blob `424b12d68e0d7d93b45a0bffd774e41c0a1ec124`
 - `decky/src/components/Telemetry.tsx` — 34 lines, blob `c615b7fe4c4cad057b26cdfcb20796c8a301ae59`
 - `decky/src/hooks.ts` — 112 lines, blob `c1a8ec562e9e225faebf849e972b808449c2ba98`
-- `decky/src/index.tsx` — 109 lines, blob `3cb290d0533e4c1594cd03e3e4f0eca61676c67d`
-- `decky/tests/test_backend.py` — 882 lines, blob `d122f3beafc5325e9688e5df1a1a12b5c3009187`
+- `decky/src/index.tsx` — 132 lines, blob `cf1089c033124326a333cde2316e59b8de0145d4`
+- `decky/src/profileSwitch.ts` — 32 lines, blob `d4c4b3d791d115f15c9c085a205fd1ca7c6bca5d`
+- `decky/tests/test_backend.py` — 904 lines, blob `2014558a86371406c136e47288076ea7a82d31a0`
+- `decky/tests/profileSwitch.test.ts` — 68 lines, blob `e2b3481e82fdb1054fb900645fce08655eff43f5`
 
 ## Public items: `decky/main.py`
-- `decky/main.py::159` class `StoreLockError` — `class StoreLockError(OSError)`
-- `decky/main.py::339` def `tdp_ranges` — `def tdp_ranges()`
-- `decky/main.py::345` def `clamp_tdp` — `def clamp_tdp(pl1, pl2, pl3, ranges=None)`
-- `decky/main.py::364` def `clamp_battery` — `def clamp_battery(value)`
-- `decky/main.py::370` def `tdp_argv` — `def tdp_argv(tdp)`
-- `decky/main.py::400` def `active_profile` — `def active_profile(store)`
-- `decky/main.py::411` def `update_active_profile` — `def update_active_profile(store, **fields)`
-- `decky/main.py::427` def `write_store_atomic` — `def write_store_atomic(store, path=None)`
-- `decky/main.py::495` def `telemetry` — `def telemetry()`
-- `decky/main.py::505` def `lightbar_failure_kind` — `def lightbar_failure_kind(out)`
-- `decky/main.py::515` def `lightbar_timed_out` — `def lightbar_timed_out(out)`
-- `decky/main.py::541` def `restart_lightbar_daemon` — `def restart_lightbar_daemon(*, sleep=time.sleep)`
-- `decky/main.py::552` def `recover_lightbar` — `def recover_lightbar(*, sleep=time.sleep, now=time.time, stamp=None)`
-- `decky/main.py::578` def `recover_lightbar_stale` — `def recover_lightbar_stale(*, sleep=time.sleep, now=time.time, stamp=None)`
-- `decky/main.py::590` def `set_brightness_per_device` — `def set_brightness_per_device(level, recover=None, recover_stale=None)`
-- `decky/main.py::654` def `power_state` — `def power_state()`
-- `decky/main.py::683` def `apply_tdp` — `def apply_tdp(enabled, pl1, pl2, pl3, profile=None)`
-- `decky/main.py::711` def `apply_battery_limit` — `def apply_battery_limit(value, profile=None)`
-- `decky/main.py::727` def `max_fans_off_argv` — `def max_fans_off_argv(state, store)`
-- `decky/main.py::743` def `set_max_fans_blocking` — `def set_max_fans_blocking(enabled)`
-- `decky/main.py::759` class `DeckyFans` — `class DeckyFans`
-- `decky/main.py::771` def `rewrite_profile` — `def rewrite_profile(self)`
-- `decky/main.py::779` def `restore_tdp` — `def restore_tdp(self)`
-- `decky/main.py::788` def `restore_undervolt` — `def restore_undervolt(self)`
-- `decky/main.py::801` def `set_fans_max` — `def set_fans_max(self)`
-- `decky/main.py::804` def `set_fancurve_pwm` — `def set_fancurve_pwm(self, points)`
-- `decky/main.py::829` class `DesktopAppCheck` — `class DesktopAppCheck`
-- `decky/main.py::845` def `check` — `def check(self)`
-- `decky/main.py::869` def `logging_enabled` — `def logging_enabled()`
-- `decky/main.py::878` def `make_fan_trace` — `def make_fan_trace(path=None, owner=DECK_IDS)`
-- `decky/main.py::896` def `make_fan_watchdog` — `def make_fan_watchdog(sensors=None, fans=None, may_act=None, clock=time.monotonic, trace=None)`
-- `decky/main.py::902` def `fan_watchdog_tick` — `async def fan_watchdog_tick(watchdog)`
-- `decky/main.py::930` class `Plugin` — `class Plugin`
-- `decky/main.py::932` def `get_max_fans` — `async def get_max_fans(self) -> bool`
-- `decky/main.py::935` def `set_max_fans` — `async def set_max_fans(self, enabled: bool) -> bool`
-- `decky/main.py::962` def `get_profiles` — `async def get_profiles(self) -> dict`
-- `decky/main.py::975` def `set_app_profile` — `async def set_app_profile(self, name: str) -> bool`
-- `decky/main.py::985` def `get_profile` — `async def get_profile(self) -> str`
-- `decky/main.py::988` def `set_profile` — `async def set_profile(self, profile: str) -> bool`
-- `decky/main.py::995` def `get_power_state` — `async def get_power_state(self) -> dict`
-- `decky/main.py::999` def `set_tdp` — `async def set_tdp(self, enabled: bool, pl1: int, pl2: int, pl3: int,`
-- `decky/main.py::1004` def `set_battery_limit` — `async def set_battery_limit(self, value: int, profile: str = "") -> dict`
-- `decky/main.py::1008` def `set_brightness` — `async def set_brightness(self, level: str) -> dict`
-- `decky/main.py::1015` def `get_telemetry` — `async def get_telemetry(self) -> dict`
+- `decky/main.py::262` class `StoreLockError` — `class StoreLockError(OSError)`
+- `decky/main.py::436` def `tdp_ranges` — `def tdp_ranges()`
+- `decky/main.py::442` def `clamp_tdp` — `def clamp_tdp(pl1, pl2, pl3, ranges=None)`
+- `decky/main.py::452` def `one` — `def one(v, k)`
+- `decky/main.py::461` def `clamp_battery` — `def clamp_battery(value)`
+- `decky/main.py::467` def `tdp_argv` — `def tdp_argv(tdp)`
+- `decky/main.py::497` def `active_profile` — `def active_profile(store)`
+- `decky/main.py::508` def `update_active_profile` — `def update_active_profile(store, **fields)`
+- `decky/main.py::524` def `write_store_atomic` — `def write_store_atomic(store, path=None)`
+- `decky/main.py::582` def `telemetry` — `def telemetry()`
+- `decky/main.py::592` def `lightbar_failure_kind` — `def lightbar_failure_kind(out)`
+- `decky/main.py::602` def `lightbar_timed_out` — `def lightbar_timed_out(out)`
+- `decky/main.py::624` def `restart_lightbar_daemon` — `def restart_lightbar_daemon(*, sleep=time.sleep)`
+- `decky/main.py::635` def `recover_lightbar` — `def recover_lightbar(*, sleep=time.sleep, now=time.time, stamp=None)`
+- `decky/main.py::661` def `recover_lightbar_stale` — `def recover_lightbar_stale(*, sleep=time.sleep, now=time.time, stamp=None)`
+- `decky/main.py::673` def `set_brightness_per_device` — `def set_brightness_per_device(level, recover=None, recover_stale=None)`
+- `decky/main.py::733` def `power_state` — `def power_state()`
+- `decky/main.py::762` def `apply_tdp` — `def apply_tdp(enabled, pl1, pl2, pl3, profile=None)`
+- `decky/main.py::790` def `apply_battery_limit` — `def apply_battery_limit(value, profile=None)`
+- `decky/main.py::806` def `max_fans_off_argv` — `def max_fans_off_argv(state, store)`
+- `decky/main.py::822` def `set_max_fans_blocking` — `def set_max_fans_blocking(enabled)`
+- `decky/main.py::838` class `DeckyFans` — `class DeckyFans`
+- `decky/main.py::850` def `rewrite_profile` — `def rewrite_profile(self)`
+- `decky/main.py::858` def `restore_tdp` — `def restore_tdp(self)`
+- `decky/main.py::867` def `restore_undervolt` — `def restore_undervolt(self)`
+- `decky/main.py::880` def `set_fans_max` — `def set_fans_max(self)`
+- `decky/main.py::883` def `set_fancurve_pwm` — `def set_fancurve_pwm(self, points)`
+- `decky/main.py::886` def `apply_tdp` — `def apply_tdp(self, tdp)`
+- `decky/main.py::890` def `reset_fancurve` — `def reset_fancurve(self)`
+- `decky/main.py::915` class `DesktopAppCheck` — `class DesktopAppCheck`
+- `decky/main.py::931` def `check` — `def check(self)`
+- `decky/main.py::955` def `logging_enabled` — `def logging_enabled()`
+- `decky/main.py::964` def `make_fan_trace` — `def make_fan_trace(path=None, owner=DECK_IDS)`
+- `decky/main.py::980` def `make_fan_watchdog` — `def make_fan_watchdog(sensors=None, fans=None, may_act=None, clock=time.monotonic, trace=None)`
+- `decky/main.py::988` def `fan_watchdog_tick` — `async def fan_watchdog_tick(watchdog)`
+- `decky/main.py::1016` class `Plugin` — `class Plugin`
+- `decky/main.py::1018` def `get_max_fans` — `async def get_max_fans(self) -> bool`
+- `decky/main.py::1021` def `set_max_fans` — `async def set_max_fans(self, enabled: bool) -> bool`
+- `decky/main.py::1048` def `get_profiles` — `async def get_profiles(self) -> dict`
+- `decky/main.py::1061` def `set_app_profile` — `async def set_app_profile(self, name: str) -> bool`
+- `decky/main.py::1071` def `get_profile` — `async def get_profile(self) -> str`
+- `decky/main.py::1074` def `set_profile` — `async def set_profile(self, profile: str) -> bool`
+- `decky/main.py::1081` def `get_power_state` — `async def get_power_state(self) -> dict`
+- `decky/main.py::1085` def `set_tdp` — `async def set_tdp(self, enabled: bool, pl1: int, pl2: int, pl3: int,`
+- `decky/main.py::1090` def `set_battery_limit` — `async def set_battery_limit(self, value: int, profile: str = "") -> dict`
+- `decky/main.py::1094` def `set_brightness` — `async def set_brightness(self, level: str) -> dict`
+- `decky/main.py::1101` def `get_telemetry` — `async def get_telemetry(self) -> dict`
 
 ## Public items: `decky/src/backend.ts`
 - `decky/src/backend.ts::6` const `getMaxFans` — `export const getMaxFans = callable<[], boolean>("get_max_fans");`
@@ -96,6 +101,11 @@ status: unreviewed (verifier-passed, qwen3-coder-30b-a3b-instruct, 2026-10-20)
 - `decky/src/hooks.ts::7` function `cancelPendingCommits` — `export function cancelPendingCommits()`
 - `decky/src/hooks.ts::21` function `useCommitOnRelease` — `export function useCommitOnRelease<T>(commit: (v: T) => void, settleMs = 700)`
 - `decky/src/hooks.ts::102` function `usePollWhileVisible` — `export function usePollWhileVisible(fn: () => void, ms: number)`
+
+## Public items: `decky/src/profileSwitch.ts`
+- `decky/src/profileSwitch.ts::3` interface `SwitchDeps` — `export interface SwitchDeps`
+- `decky/src/profileSwitch.ts::9` interface `SwitchResult` — `export interface SwitchResult`
+- `decky/src/profileSwitch.ts::22` function `switchProfile` — `export async function switchProfile(deps: SwitchDeps, name: string): Promise<SwitchResult>`
 
 ## Public items: `decky/tests/test_backend.py`
 - `decky/tests/test_backend.py::77` def `fake_host` — `def fake_host(test, fail_if=(), out=FAIL_OUT)`
@@ -168,7 +178,9 @@ status: unreviewed (verifier-passed, qwen3-coder-30b-a3b-instruct, 2026-10-20)
 - `decky/src/components/PowerLimits.tsx`: `../backend`, `../hooks`, `@decky/ui`, `react`
 - `decky/src/components/Telemetry.tsx`: `../backend`, `../hooks`, `@decky/ui`, `react`
 - `decky/src/hooks.ts`: `@decky/api`, `react`
-- `decky/src/index.tsx`: `./components/BatteryLimit`, `./components/KeyboardBrightness`, `./components/PowerLimits`, `./components/Telemetry`, `./hooks`, `@decky/api`, `react`, `react-icons/fa`
+- `decky/src/index.tsx`: `./backend`, `./profileSwitch`, `./components/BatteryLimit`, `./components/KeyboardBrightness`, `./components/PowerLimits`, `./components/Telemetry`, `./hooks`, `@decky/api`, `react`, `react-icons/fa`
+- `decky/src/profileSwitch.ts`: (none)
+- `decky/tests/profileSwitch.test.ts`: `../src/profileSwitch.ts`, `node:assert/strict`, `node:test`
 - `decky/tests/test_backend.py`: `asyncio`, `fake_host`, `fan_watchdog`, `host`, `importlib.util`, `json`, `logging`, `os`, `power_range`, `sensor_reader`, `socket`, `sys`, `tempfile`, `threading`, `types`, `unittest`
 
 ## Top callers (rg -w, repo-wide, this unit's own files excluded)
@@ -346,7 +358,9 @@ status: unreviewed (verifier-passed, qwen3-coder-30b-a3b-instruct, 2026-10-20)
 - `decky/src/components/Telemetry.tsx`: preprocessor_if=0, platform_checks=0
 - `decky/src/hooks.ts`: preprocessor_if=0, platform_checks=0
 - `decky/src/index.tsx`: preprocessor_if=0, platform_checks=0
+- `decky/src/profileSwitch.ts`: preprocessor_if=0, platform_checks=0
 - `decky/tests/test_backend.py`: preprocessor_if=0, platform_checks=0
+- `decky/tests/profileSwitch.test.ts`: preprocessor_if=0, platform_checks=0
 ## Purpose
 - `decky/main.py` — main backend logic for Decky plugin including TDP control, battery limits, fan management, and lightbar recovery
 - `decky/src/backend.ts` — TypeScript backend API definitions for Decky plugin communication
@@ -356,7 +370,9 @@ status: unreviewed (verifier-passed, qwen3-coder-30b-a3b-instruct, 2026-10-20)
 - `decky/src/components/Telemetry.tsx` — React component for telemetry display
 - `decky/src/hooks.ts` — React hooks for Decky plugin UI behavior
 - `decky/src/index.tsx` — main Decky plugin entry point and component exports
+- `decky/src/profileSwitch.ts` — pure profile-switch flow: apply, then re-read the active profile and Max Fans (no Decky imports, runs under plain Node)
 - `decky/tests/test_backend.py` — unit tests for backend logic and API behavior
+- `decky/tests/profileSwitch.test.ts` — Node built-in test runner tests for `switchProfile`
 
 ## Data flow
 - Input: TDP values, battery limit, brightness level, profile selection from UI
@@ -365,12 +381,12 @@ status: unreviewed (verifier-passed, qwen3-coder-30b-a3b-instruct, 2026-10-20)
 - Error paths: Handle lightbar recovery failures, stale profile rejection, hardware communication errors, file lock conflicts
 
 ## Gotchas
-- `decky/main.py::339` `tdp_ranges` returns empty list when subprocess fails, not raising exception
-- `decky/main.py::345` `clamp_tdp` uses `ranges=None` default but `tdp_ranges()` returns `[]` not `None`
-- `decky/main.py::541` `restart_lightbar_daemon` uses `time.sleep` with default parameter, not injected
-- `decky/main.py::552` `recover_lightbar` uses `time.sleep` and `time.time` with defaults, not injected
-- `decky/main.py::578` `recover_lightbar_stale` uses `time.sleep` and `time.time` with defaults, not injected
-- `decky/main.py::727` `max_fans_off_argv` returns `[]` when `store` is None, not raising exception
+- `decky/main.py::436` `tdp_ranges` returns empty list when subprocess fails, not raising exception
+- `decky/main.py::442` `clamp_tdp` uses `ranges=None` default but `tdp_ranges()` returns `[]` not `None`
+- `decky/main.py::624` `restart_lightbar_daemon` uses `time.sleep` with default parameter, not injected
+- `decky/main.py::635` `recover_lightbar` uses `time.sleep` and `time.time` with defaults, not injected
+- `decky/main.py::661` `recover_lightbar_stale` uses `time.sleep` and `time.time` with defaults, not injected
+- `decky/main.py::806` `max_fans_off_argv` returns `[]` when `store` is None, not raising exception
 
 ## To change X, edit Y
 - to change TDP range validation, edit `decky/main.py::tdp_ranges`

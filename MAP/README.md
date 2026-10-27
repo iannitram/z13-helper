@@ -1,6 +1,6 @@
 # Code map
 
-The whole repo, one row per module: what it owns, who calls it and which Must it serves (SPEC.md). The Decky plugin's file-level detail is in [`decky.md`](decky.md). Written 2026-10-26 from the tree at main.
+The whole repo, one row per module: what it owns, who calls it and which Must it serves (SPEC.md). The Decky plugin's file-level detail is in [`decky.md`](decky.md). Written 2026-10-26 from the tree at main; refreshed the same night after the merges of #49 (Decky profile switch) and #3 (Game Mode report).
 
 Platforms (R04): Linux only, SteamOS on the GZ302 Z13. Nothing here is meant for Mac or Windows: hardware goes through `z13ctl` (ASUS firmware), and Game Mode is SteamOS's. CI runs the logic tests on `ubuntu-latest`. The device checks are the owner's (verification protocol, `docs/ROADMAP.md` §12).
 
@@ -57,7 +57,7 @@ Both frontends read the same files under `~/.config/z13-helper/` and never cache
 
 ## Game Mode (`decky/`)
 
-`decky/main.py` is the root backend (a copy of the profile, Max Fans and lightbar logic, run as deck for user-session calls). `decky/src/` is the QAM panel (profile switch, power limits, battery limit, keyboard brightness, telemetry). Detail: [`decky.md`](decky.md). Musts: M5, M6, M7 (the "SteamOS updated" line).
+`decky/main.py` is the root backend (a copy of the profile, Max Fans and lightbar logic, run as deck for user-session calls). `decky/src/` is the QAM panel (profile switch, power limits, battery limit, keyboard brightness, telemetry). `decky/src/profileSwitch.ts` (merged, #16) is the pure switch flow behind the Profile dropdown: apply, then re-read the active profile and Max Fans; its tests run under plain Node (`decky/tests/profileSwitch.test.ts`). Detail: [`decky.md`](decky.md). Musts: M5, M6, M7 (the "SteamOS updated" line).
 
 ## Host side and tooling
 
@@ -69,7 +69,9 @@ Both frontends read the same files under `~/.config/z13-helper/` and never cache
 | `tooling/boondock` | the local-LLM stack launcher (cleanup in M8) | M8 |
 | `tooling/z13ctl-install/` | vendored z13ctl tarball (rollback copy) | M6 |
 | `tooling/post-update/` (planned) | post-update recipes: one `check` + `apply` per task | M7 |
-| `tooling/diag/`, `tooling/z13_*.py` | diagnostics and Game Mode reports | M9, M10 |
+| `tooling/diag/`, `tooling/z13_*.py` | diagnostics and Game Mode reports; `tooling/z13_gamemode_report.py` (merged, #3) reads a Game Mode session back from local logs (tests: `tests/test_gamemode_report.py`) | M9, M10 |
+| `tooling/z13-button-watcher`, `tooling/z13_qam.py`, `tooling/z13_cdp.py`, `tooling/spike1_qam_test.py` | the side-button watcher and the QAM/CDP probes used for Game Mode checks | M3, M5 |
+| `tests/`, `decky/tests/` | pytest logic tests in `tests/` (CI, `ubuntu-latest`; `pytest.ini` collects only `tests/`), the Decky backend tests (`decky/tests/test_backend.py`, not collected by CI) and the Node test for `profileSwitch.ts` (run by hand: `node --test decky/tests/profileSwitch.test.ts`; CI does not run it); `tests/README.md` lists the pytest files | all |
 | `flatpak/` | the Flatpak build and launcher | all |
 
 ## Open-source pieces

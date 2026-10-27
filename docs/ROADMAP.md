@@ -28,6 +28,13 @@ Status marks: ✅ shipped · 🔧 in progress · ⏳ planned · 🚧 gated (need
 | App version | **0.4.0** (2026-10-12; `CHANGELOG.md`) |
 | Boondock | ✅ hardware part works (quiet + 20/30/40 W + screen 35 %); service/VM steps are dead code |
 
+### Open bugs and test debt (status 2026-10-26, evening)
+- **#60** `profiles.apply()` raises `NameError` on a profile with no fan curve (open, Easy, locked tests in the issue). **CI on main is red because of it** since 8468eed; every PR's CI stays red until #60 lands, so it goes first.
+- **#16** Decky Profile dropdown showing a state that never applied: ✅ fixed by PR #49 (`decky/src/profileSwitch.ts`), merged 2026-10-26; the on-device check is part of #61.
+- **#58** flaky and environment-dependent tests: partly done, PR #59 (temp-name and store-owner tests) merged 2026-10-26; the Decky root and uid-less failures in `decky/tests/test_backend.py` are still open.
+- **#30** the reported 43 GB memory spike: open (investigation).
+- Also merged 2026-10-26: PR #3, `tooling/z13_gamemode_report.py` (reads a Game Mode session back from local logs).
+
 ### Fixed today (2026-10-09)
 - **Keyboard brightness didn't change.** z13ctl sends each packet to the keyboard *then* the
   lightbar and aborts on the first write error; the lightbar's USB endpoint (`0b05:18c6`, hidraw5)
@@ -239,7 +246,7 @@ controller fix; the kernel comes with SteamOS; G-Helper is Windows).
 Contracts the plugin depends on (don't change silently): `max-fans.json` schema, `profiles.json`
 schema + `z13-profile` CLI, z13ctl output formats parsed by `main.py`.
 - ✅ **Profile dropdown** from `profiles.json` (replaces the raw platform-profile list; falls back to it
-  if the store is missing).
+  if the store is missing). ✅ A failed switch now reverts to the backend's active profile and Max Fans is re-read after every switch (#16, PR #49, 2026-10-26; on-device check pending, #61).
 - ✅ fan-stall watchdog (today).
 - ✅ written, on-device check pending (2026-10-11, branch `claude/decky-parity`): **TDP sliders**
   SPL/sPPT/fPPT 5…93 W (sPPT ≥ SPL, fPPT ≥ sPPT, written on release) + "Apply power limits" →
