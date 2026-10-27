@@ -6,6 +6,10 @@ scripts, `install.sh`, and the Decky plugin (`z13-helper`, was `z13-decky`). Dat
 landed in the repo; "on-device check pending" means it is written and tested off
 the device but not yet verified on the Z13. Plan and status: `docs/ROADMAP.md`.
 
+## Pipeline
+
+- 2026-10-26 Normalized to pipeline v2 at Parked (paused); stage in `PIPELINE.md`; the old CLAUDE.md notes moved into AGENTS.md.
+
 ## Unreleased
 
 ### Added
