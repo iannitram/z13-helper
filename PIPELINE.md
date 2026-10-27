@@ -1,9 +1,9 @@
-Stage: Spec
+Stage: Dev Loop
 Since: 2026-10-26
 Kind: own
-Spec: not yet   Roadmap: docs/ROADMAP.md   Code map: MAP/
+Spec: SPEC.md   Roadmap: docs/ROADMAP.md (1.0 = Phases 7-13 + #23 + #27)   Code map: MAP/README.md (Decky detail: MAP/decky.md)
 Platforms: linux (SteamOS on the ASUS ROG Flow Z13)
-Notes: Un-parked 2026-10-26 by the owner; at Spec until a spec is agreed with the owner (board had it at Prototype / Beta; docs/ROADMAP.md is the plan to start from). Personal control app; writes power limits and fan curves, so read what it does before you run it. Project rules: AGENTS.md "This project".
+Notes: Spec approved 2026-10-26 by the owner. 1.0 issues: #16, #23, #27, #30, #58, #60, #61-#73; after-1.0: #22, #24-#26, #28, #29, #31. Device checks are marked needs-owner-device in each Done-when (only the owner's Z13 can run them). Writes power limits and fan curves: read what it does before you run it. Project rules: AGENTS.md "This project".
 
 Stages: Proposal -> Spec -> Roadmap -> Dev Loop -> Prototype / Beta.
 What each stage means and who moves a project: `PIPELINE.md` in the owner's private pipeline repo.
