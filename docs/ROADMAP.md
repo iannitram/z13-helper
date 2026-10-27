@@ -7,6 +7,8 @@ the maintainer's notes (outside the repo) stay the reference for *how the machin
 
 Status marks: ✅ shipped · 🔧 in progress · ⏳ planned · 🚧 gated (needs a decision or a precondition) · 💤 backlog
 
+**1.0 scope (2026-10-26, [SPEC.md](../SPEC.md)):** Phases 7-13 below, every "on-device check pending" item verified on the Z13, the open bugs, plus issues #23 (one state owner, events) and #27 (reversible post-update repair). Out of 1.0: Phase 14, the Laptop Screen row of Phase 9 (#28) and Steam's own QAM controls in Phase 13 (#29). Code map: [`MAP/README.md`](../MAP/README.md).
+
 ---
 
 ## 1. Where we are (audit, 2026-10-09)
