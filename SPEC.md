@@ -57,3 +57,4 @@ Logic is tested without hardware, with stdlib + pytest only and no PyQt6 import 
 
 - Phase 13's first bullet (Steam's own controls) and issue #29 are the same work. The owner's answer listed #29 as after 1.0, so it stays out of M9. The same goes for the Laptop Screen row of Phase 9, which is #28.
 - Platforms (R04): Linux only, SteamOS on one device. Mac and Windows do not apply: the app drives ASUS firmware through `z13ctl` and SteamOS's Game Mode.
+- Target OS (2026-10-26): the current SteamOS stable, **3.9.5** (kernel 7.2), not 3.8.28. Every Must's on-device check runs on the shipped OS, so the SteamOS 3.9 compatibility work in docs/ROADMAP.md §9c (Phase 12d, #74-#80) is part of 1.0; #81 (hibernation) is not.

@@ -7,11 +7,13 @@ the maintainer's notes (outside the repo) stay the reference for *how the machin
 
 Status marks: ✅ shipped · 🔧 in progress · ⏳ planned · 🚧 gated (needs a decision or a precondition) · 💤 backlog
 
-**1.0 scope (2026-10-26, [SPEC.md](../SPEC.md)):** Phases 7-13 below, every "on-device check pending" item verified on the Z13, the open bugs, plus issues #23 (one state owner, events) and #27 (reversible post-update repair). Out of 1.0: Phase 14, the Laptop Screen row of Phase 9 (#28) and Steam's own QAM controls in Phase 13 (#29). Code map: [`MAP/README.md`](../MAP/README.md).
+**1.0 scope (2026-10-26, [SPEC.md](../SPEC.md)):** Phases 7-13 below, every "on-device check pending" item verified on the Z13, the open bugs, plus issues #23 (one state owner, events) and #27 (reversible post-update repair). Since 2026-10-26 the checks run on SteamOS 3.9.5, so Phase 12d (§9c, #74-#80) is in 1.0 too. Out of 1.0: Phase 14, the Laptop Screen row of Phase 9 (#28) and Steam's own QAM controls in Phase 13 (#29). Code map: [`MAP/README.md`](../MAP/README.md).
 
 ---
 
 ## 1. Where we are (audit, 2026-10-09)
+
+**2026-10-26:** SteamOS **3.9.5** went stable on 2026-10-23 (kernel 6.18 → **7.2**, Plasma 6.7.3); nothing here is verified on it yet. What changed and what to re-check: [§9c Phase 12d](#9c-phase-12d--steamos-39-compatibility--395-stable-2026-10-23).
 
 ### Shipped and working
 | Area | State |
@@ -422,6 +424,32 @@ recipe, its wiki row changes to "Z13-Helper post-update task `<id>`", so the two
 **Done when:** after a real SteamOS update, the tray says so; one tab shows what's broken; ticking
 amdgpu + ROCm and pressing Run fixes both with a single reboot; the health report is green.
 
+## 9c. Phase 12d — SteamOS 3.9 compatibility ⏳ (3.9.5 stable 2026-10-23)
+
+Valve's 3.9.5 post: https://store.steampowered.com/news/app/1675200/view/694275728822244963 (2026-10-23). Valve's page doesn't render to our fetcher, so the item list comes from GamingOnLinux's copy of the notes (2026-10-24), cross-checked with SteamDeckHQ (https://steamdeckhq.com/news/steamos-3-9-update-improves-idle-battery-life/, 2026-10-24) and MIXED (https://mixed-news.com/en/steamos-3-9-stable-steam-deck-idle-power-streaming-fixes/, 2026-10-24). Confidence: **RN** = in the release notes, **U** = user report, **PR** = press, **?** = unknown.
+
+**Nothing in 3.9 replaces us:** the notes add no TDP, charge-limit or fan controls for ASUS or the Z13 (the only third-party items are Legion Go 2 fixes), so Steam's QAM still won't offer them (#29 stays after 1.0).
+
+| Change | Conf. | What it means for us | Issue |
+|---|---|---|---|
+| **Kernel 6.18.50 → Linux 7.2** | RN | Every sysfs path z13ctl writes may have moved or changed. z13ctl 1.4.0 already writes power limits through asus-armoury and 1.4.1 falls back when armoury isn't writable, but **no z13ctl release is tested on 7.2** (still 1.4.2, https://github.com/dahui/z13ctl/releases). 7.2's x86 platform-driver merge has no Z13 change (Phoronix, 2026-06-26, https://www.phoronix.com/news/Linux-7.2-x86-Platform-Drivers); the GZ302EAC went into asus-armoury in the 7.0 cycle. | #74 |
+| asus-nb-wmi writes hung 60 s then EIO on a GZ302EA, kernels 7.0.3–7.0.10 | U | Unknown on 7.2. Our power writes wait up to 120 s, so a hang would freeze a profile apply for two minutes. | #74, #79 |
+| **"Worked around a firmware issue on some ASUS devices causing excessive fan speed upon waking from sleep"** (models not named) | RN | Touches the same resume moment as `z13-fan-resume` and z13ctl's own reconcile. If it writes `platform_profile` or pwm after us, the custom curve is lost. | #74, #80 (#66) |
+| **`steamos-*` scripts and packages renamed `holo-*`**, aliases kept only "where appropriate"; `holo-readonly` exists (https://github.com/ValveSoftware/SteamOS/issues/2955) | RN | We call `steamos-update` (Updates panel, installer); the post-update runner will call `steamos-readonly`. Probe `holo-*` first, fall back. | #76 (#67) |
+| **Steam client 2026-10-13 split the QAM class module**: every Decky plugin broke (`TypeError … reading 'Title'`) until **Decky Loader 3.3.0** (2026-10-18; https://github.com/SteamDeckHomebrew/decky-loader/issues/988, https://github.com/SteamDeckHomebrew/decky-loader/releases) | U (maintainer-closed) | Not a 3.9 change, but it lands at the same time. Our panel title uses `staticClasses.Title`. Decky 3.3.0 is the minimum; 3.3.0 also warns about unvetted plugins, which ours (sideloaded) may trigger. | #77, #78 |
+| **Plasma 6.4.3 → 6.7.3** | RN | Tray (StatusNotifier), autostart and the `org.kde.ScreenBrightness` API could behave differently. | #75 |
+| Wi-Fi default → **wpa_supplicant** (fast reconnect on resume); the preview said new installs only | RN | Resume path changes; our resume hook doesn't touch Wi-Fi, but the resume timing does. | #75 |
+| Frame limiter now works with VRR on; external-display limits fixed | RN | Retest the 48–180 Hz profile with VRR on. | comment on #73 |
+| Preliminary **hibernation** (no Game Mode UI) | RN | Our restore paths only run after suspend. | #81 (after 1.0) |
+| A/B update, `/etc` overlay, Python version, Flatpak runtime, gamescope version | ? | Not mentioned anywhere. Our /etc units, polkit rule and keep-list must be re-checked by hand; `python3 --version` recorded. | #75 |
+| steamos-manager | ? | Valve's gitlab couldn't be read. Watch item: the OpenGamingCollective fork's open PR to auto-switch the platform profile when a TDP is set (https://github.com/OpenGamingCollective/steamos-manager/pull/9) would fight our profile ownership if it ever ships. | comment on #29 |
+
+Not issues (checked, nothing to do): the RDNA1/2 dedicated-GPU resume fix (Strix Halo is an iGPU); HDMI 2.1 FRL (press only, external displays); Android binder back in the kernel (only #71's probe list); the revoked eMudhra certificates; the Deck-only idle-power change.
+
+**Order of work:** #77 and #76 (small, no device) → #79 → the device passes #74 and #75 (with #61) → #78 → #80 if #74 shows a clash. Kernel-major and BUILD_ID triggers for the post-update tab: comments on #70 and #71.
+
+**Done when:** #74 and #75 are green on 3.9.5, #76–#79 are merged, and #80 is merged or closed with measurements.
+
 ## 10. Phase 14 — Feature backlog 💤 (from the 2026-10-09 research, priority order)
 0. ✅ **Crash and error log** (2026-10-12, v0.4.1): `src/app_log.py` + Help → Error log; app log, crash reports and hard-crash recovery under `~/.local/state/z13-helper/`. The diagnostics panel below can grow out of the same window.
 0b. ✅ **Fan trace** (2026-10-15): `fan_watchdog.FanTrace` logs both watchdogs (desktop app, Decky) to `fan-trace-{desktop,gamemode}.log` in the same folder — a sample every 30 s, every tick while a tach looks frozen, the last 2 min + next 1 min around any recovery; Help → Error log → Fan trace. Opened to settle whether today's frozen-tach recoveries at 8700/8800 RPM with Max Fans on are real or false positives.
@@ -445,17 +473,18 @@ amdgpu + ROCm and pressing Run fixes both with a single reboot; the health repor
 ---
 
 ## 11. Upstream watch (what the Updates panel checks, and what to look for)
-Installed/pinned versions as of **2026-10-12**. "Watch for" is what would change our plan.
+Installed/pinned versions as of **2026-10-12**; SteamOS, kernel and Decky rows updated **2026-10-26** for SteamOS 3.9 (§9c). "Watch for" is what would change our plan.
 
 | Component | Repo / source | Installed here | Latest | Watch for |
 |---|---|---|---|---|
-| **z13ctl** (backend) | `dahui/z13ctl` releases | **1.4.2** (daemon `--no-button`; 1.1.6 kept as rollback) | **1.4.2** (2026-10-09) | hard-lock reports after 1.4.x; asus-armoury path on Valve kernels; `subscribe` API changes (§8) |
-| Decky Loader | `SteamDeckHomebrew/decky-loader` | 3.2.10 | 3.2.10 | `@decky/api`/`@decky/ui` breaking changes; `_root` flag policy |
+| **z13ctl** (backend) | `dahui/z13ctl` releases | **1.4.2** (daemon `--no-button`; 1.1.6 kept as rollback) | **1.4.2** (2026-10-09; still the latest 2026-10-26, untested on kernel 7.2) | a release tested on 7.2 / SteamOS 3.9; hard-lock reports after 1.4.x; asus-armoury path on Valve kernels; `subscribe` API changes (§8) |
+| Decky Loader | `SteamDeckHomebrew/decky-loader` | 3.2.10 | **3.3.0** (2026-10-18; **minimum** since the 2026-10-13 Steam client, #77) | `@decky/api`/`@decky/ui` breaking changes; `_root` flag policy; the new unvetted-plugin warning |
 | asusctl | `OpenGamingCollective/asusctl` | not installed (reference) | 6.5.0 | GZ302 Aura/LampArray support; boot-hang race with hid-asus (#718) — reason we don't run asusd |
 | InputPlumber | `ShadowBlip/InputPlumber` | masked | 0.81.0 | a fix for the phantom Xbox Elite controller would let us unmask |
 | G-Helper (UI reference) | `seerge/g-helper` | n/a | latest release | layout changes we might mirror |
-| Linux kernel (Z13 fixes) | kernel.org `releases.json` | **6.18.50-valve2** | stable | **7.0**: hid-asus 64-byte handshake (fixes the `-75` backlight init), unified `asus::kbd_backlight`, GZ302 power-limit table; **7.3**: asus-armoury fan-curve gating |
-| SteamOS | `steamos-update check` | 3.8.28 (20260922.1) | — | kernel bump to 7.x; steamos-manager device profiles |
+| Linux kernel (Z13 fixes) | kernel.org `releases.json` | **6.18.50-valve2** | stable | SteamOS 3.9.5 ships **7.2**. **7.0**: hid-asus 64-byte handshake (fixes the `-75` backlight init), unified `asus::kbd_backlight`, GZ302 power-limit table; **7.3**: asus-armoury fan-curve gating |
+| SteamOS | `holo-update check` (`steamos-update` before 3.9, #76) | 3.8.28 (20260922.1) | **3.9.5** stable (2026-10-23; kernel 7.2) | further `steamos-*` → `holo-*` renames; the ASUS fan-after-wake workaround; steamos-manager device profiles |
+| steamos-manager (OGC fork) | `OpenGamingCollective/steamos-manager` PRs | — | — | PR #9 auto-switches the platform profile when a TDP is set; PR #8 TDP as a strict limit. Either would fight our profile ownership (#23) if it shipped in SteamOS |
 | z13ctl-plus | `LostVector/z13ctl-plus` (commits) | — | — | EPP/boost ideas (§10.9) |
 | z13-tablet-switch | `m4rw3r/z13-tablet-switch` (commits) | — | — | folio attach/detach handling (§10.6) |
 | lightctl | `Xcli0126/lightctl` (commits) | — | — | rear-light packet changes (§10.2) |
@@ -480,6 +509,7 @@ for r in dahui/z13ctl OpenGamingCollective/asusctl SteamDeckHomebrew/decky-loade
 6. Decky: backend log in `~/homebrew/logs/z13-helper/` shows "up"; `sudo ss -ltnp | grep 1337` shows one loader.
 7. Screenshot the new window(s) and compare with the G-Helper spec (§5).
 8. Update the maintainer's notes and `README.md` when user-visible behaviour changed.
+9. After a SteamOS update (first done for 3.9.5, #74 and #75): record `uname -r` and `/etc/os-release`; `ls /sys/class/firmware-attributes/asus-armoury/attributes`; a TDP write and a charge-limit write each return in under 5 s; a custom curve survives three suspend/resume cycles; tray, autostart and the side button (no double-fire) work; `holo-update`/`steamos-update` names recorded; Decky ≥ 3.3.0.
 
 ---
 
