@@ -8,6 +8,7 @@ the device but not yet verified on the Z13. Plan and status: `docs/ROADMAP.md`.
 
 ## Pipeline
 
+- 2026-10-26 Moved from Parked to Spec on the owner's word; needs a spec conversation.
 - 2026-10-26 Normalized to pipeline v2 at Parked (paused); stage in `PIPELINE.md`; the old CLAUDE.md notes moved into AGENTS.md.
 
 ## Unreleased
