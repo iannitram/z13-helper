@@ -1,8 +1,8 @@
 # Code map
 
-The whole repo, one row per module: what it owns, who calls it and which Must it serves (SPEC.md). The Decky plugin's file-level detail is in [`decky.md`](decky.md). Written 2026-10-26 from the tree at main; refreshed the same night after the merges of #49 (Decky profile switch) and #3 (Game Mode report).
+The whole repo, one row per module: what it owns, who calls it and which Must it serves (SPEC.md). The Decky plugin's file-level detail is in [`decky.md`](decky.md). Describes commit: `6ccb861` (2026-10-28). Written 2026-10-26 from the tree at main, refreshed the same night after the merges of #49 (Decky profile switch) and #3 (Game Mode report), and checked against main again on 2026-10-28: no code has changed since, so the file rows below stand; the Decky detail in `decky.md` matches every listed file's blob.
 
-Platforms (R04): Linux only, SteamOS on the GZ302 Z13. Nothing here is meant for Mac or Windows: hardware goes through `z13ctl` (ASUS firmware), and Game Mode is SteamOS's. CI runs the logic tests on `ubuntu-latest`. The device checks are the owner's (verification protocol, `docs/ROADMAP.md` §12).
+Platforms (R04): Linux only, SteamOS on the GZ302 Z13. Nothing here is meant for Mac or Windows: hardware goes through `z13ctl` (ASUS firmware), and Game Mode is SteamOS's. CI (`.github/workflows/tests.yml`, push and pull request, Python 3.12) runs the logic tests on `ubuntu-latest`: `python3 -m pytest` and `python3 -m unittest discover -s decky/tests`. The device checks are the owner's (verification protocol, `docs/ROADMAP.md` §12).
 
 ## How it fits together
 
@@ -71,7 +71,7 @@ Both frontends read the same files under `~/.config/z13-helper/` and never cache
 | `tooling/post-update/` (planned) | post-update recipes: one `check` + `apply` per task | M7 |
 | `tooling/diag/`, `tooling/z13_*.py` | diagnostics and Game Mode reports; `tooling/z13_gamemode_report.py` (merged, #3) reads a Game Mode session back from local logs (tests: `tests/test_gamemode_report.py`) | M9, M10 |
 | `tooling/z13-button-watcher`, `tooling/z13_qam.py`, `tooling/z13_cdp.py`, `tooling/spike1_qam_test.py` | the side-button watcher and the QAM/CDP probes used for Game Mode checks | M3, M5 |
-| `tests/`, `decky/tests/` | pytest logic tests in `tests/` (CI, `ubuntu-latest`; `pytest.ini` collects only `tests/`), the Decky backend tests (`decky/tests/test_backend.py`, not collected by CI) and the Node test for `profileSwitch.ts` (run by hand: `node --test decky/tests/profileSwitch.test.ts`; CI does not run it); `tests/README.md` lists the pytest files | all |
+| `tests/`, `decky/tests/` | pytest logic tests in `tests/` (30 files, CI, `ubuntu-latest`; `pytest.ini` collects only `tests/`), the Decky backend tests (`decky/tests/test_backend.py`, not collected by pytest, but CI runs them with `unittest discover -s decky/tests`) and the Node test for `profileSwitch.ts` (run by hand: `node --test decky/tests/profileSwitch.test.ts`; CI does not run it); `tests/README.md` describes the suite's guard and lists some of the pytest files (not all 30) | all |
 | `flatpak/` | the Flatpak build and launcher | all |
 
 ## Open-source pieces
