@@ -764,6 +764,7 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
     #    A max_fans profile turns it ON when switched to and OFF when left
     #    (only on a real switch: restore/resume keeps whatever the user chose).
     curve = profile.get("fan_curve")
+    tdp = profile.get("tdp")
     released = False
     if previous is None or previous.get("name") != profile["name"]:
         if profile.get("max_fans") and not _max_fans_state().get("enabled"):
@@ -776,7 +777,7 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
         # What Max Fans OFF should go back to: this profile's curve, or none
         # (= firmware auto) -- never the previous profile's leftover curve.
         _save_max_fans(saved_curve=[[int(t), round(int(p) * 255 / 100)] for t, p in curve]
-                       if curve else None)
+                        if curve else None)
         step("fans", [z13ctl, "fancurve", "--set", MAX_FANS_SPEC], "Max Fans stays ON (100%)")
     elif curve:
         step("fans", [z13ctl, "fancurve", "--set", curve_spec(curve)], "custom curve")
