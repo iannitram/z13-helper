@@ -40,6 +40,10 @@ the device but not yet verified on the Z13. Plan and status: `docs/ROADMAP.md`.
   logging. On-device check pending.
 
 ### Changed
+- **SteamOS updater tool names:** check for `holo-update` first, falling back to
+  `steamos-update` on older installs. Both update checks and installs use the
+  same shared helper; Flatpak installer runs carry its matching source to the
+  host. Hardware setup notes show both readonly-tool names. On-device check pending.
 - **One host-command seam** (`src/host.py`) for the desktop app, the `z13-profile` CLI and the
   Decky plugin. It replaces five hand-rolled runners and three `_in_flatpak()` copies, and gives
   every Decky child the deck env (incl. the `LD_LIBRARY_PATH` fix) in one place. `install.sh`

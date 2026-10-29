@@ -24,6 +24,7 @@ the Flatpak, flatpak-spawn reports a missing host binary as rc 1).
 
 import collections
 import os
+import re
 import subprocess
 
 DECK_HOME = "/home/deck"
@@ -87,6 +88,19 @@ def command(argv, *, as_deck=False, mode=None, environ=None):
                f"DBUS_SESSION_BUS_ADDRESS={DECK_BUS}"]
         argv = (["runuser", "-u", "deck", "--"] if mode == "root" else []) + pin + argv
     return argv, deck_env(environ)
+
+
+_HOLO_TOOLS = {}
+
+
+def holo_or_steamos(name: str) -> str:
+    """Pick the installed SteamOS tool name, once per process per tool."""
+    if not re.fullmatch(r"[a-z][a-z0-9-]*", name, flags=re.ASCII):
+        raise ValueError("invalid SteamOS tool name")
+    if name not in _HOLO_TOOLS:
+        found = run(["sh", "-c", "command -v holo-" + name], timeout=5).rc == 0
+        _HOLO_TOOLS[name] = ("holo-" if found else "steamos-") + name
+    return _HOLO_TOOLS[name]
 
 
 def run(argv, timeout=30, *, as_deck=False, input=None):
