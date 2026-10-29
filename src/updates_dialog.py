@@ -19,6 +19,18 @@ from theme import TURBO, TEXT_DIM
 _INSTALLERS_SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "installers.py")
 
 
+def _installer_source():
+    """Ship the matching host helper with the stdin-fed installer."""
+    with open(host.__file__) as f:
+        helper = f.read()
+    with open(_INSTALLERS_SRC) as f:
+        installer = f.read()
+    return ("import sys, types\n"
+            "_host = types.ModuleType('host')\n"
+            "sys.modules['host'] = _host\n"
+            f"exec({helper!r}, _host.__dict__)\n" + installer)
+
+
 def _installer_cmd(action, target):
     """Run installers.py on the host: inside the Flatpak the sandbox has no
     network and no sudo, so the file is fed to the host's python3 on stdin."""
@@ -29,7 +41,7 @@ def _installer_cmd(action, target):
 
 def installer_plan(target):
     cmd, feed = _installer_cmd("plan", target)
-    src = open(_INSTALLERS_SRC).read() if feed else None
+    src = _installer_source() if feed else None
     p = subprocess.run(cmd, input=src, capture_output=True, text=True, timeout=30)
     return (p.stdout or p.stderr).strip()
 
@@ -52,8 +64,7 @@ class InstallThread(QThread):
             p = subprocess.Popen(cmd, stdin=subprocess.PIPE if feed else subprocess.DEVNULL,
                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             if feed:
-                with open(_INSTALLERS_SRC) as f:
-                    p.stdin.write(f.read())
+                p.stdin.write(_installer_source())
                 p.stdin.close()
             for line in p.stdout:
                 self.line.emit(install_record.clean(line.rstrip("\n")))

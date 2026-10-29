@@ -8,8 +8,15 @@ A failed `steamos-update check` must be reported as an error, never as
 import pytest
 
 import installers
+import host
 import update_watch
 from fake_host import FakeHost
+
+
+@pytest.fixture(autouse=True)
+def legacy_updater(monkeypatch):
+    """These check-gate tests exercise the older SteamOS tool name."""
+    monkeypatch.setattr(host, "_HOLO_TOOLS", {"update": "steamos-update"})
 
 
 @pytest.fixture

@@ -13,7 +13,7 @@ What can be installed from here, and how:
              side button) -> enable --now -> sanity `z13ctl status`.
 - decky    : the official Decky Loader installer script (needs sudo), then a
              health check for the stale-loader-holding-:1337 problem.
-- steamos  : `sudo steamos-update` (official updater); a reboot finishes it.
+- steamos  : `sudo holo-update` (or steamos-update on older SteamOS); reboot finishes it.
 Everything else in the panel is reference-only (asusctl/InputPlumber/hhd are
 deliberately not installed here; the kernel comes with SteamOS; G-Helper is
 Windows; the community repos are code to read, not packages).
@@ -38,6 +38,8 @@ import tarfile
 import tempfile
 import time
 import urllib.request
+
+import host
 
 HOME = os.path.expanduser("~")
 CACHE = os.path.join(HOME, ".cache", "z13-helper", "updates")
@@ -512,12 +514,13 @@ def repair_decky():
 # ----------------------------------------------------------------------
 
 def plan_steamos():
-    return ("SteamOS\n1. sudo steamos-update  (the official updater; can take a while)\n"
+    return ("SteamOS\n1. sudo holo-update (or steamos-update on older SteamOS)  (the official updater; can take a while)\n"
             "2. Reboot to finish. Our /etc customisations are on the atomic-update keep list.")
 
 
 def install_steamos():
-    rc, out = run(["steamos-update", "check"], check=False, timeout=120)
+    name = host.holo_or_steamos("update")
+    rc, out = run([name, "check"], check=False, timeout=120)
     low = out.lower()
     # steamos-atomupd: exit 0 = update available, 7 = none. The text is a cross-check only.
     if rc == 7:
@@ -532,8 +535,8 @@ def install_steamos():
     if "no update available" in low:
         log("SteamOS check contradicts itself (exit 0, text says no update); the updater was not run.")
         return 1
-    REPORT.step("steamos-update started (may be partially applied)")
-    run(["sudo", "-n", "steamos-update"], timeout=3600)
+    REPORT.step(f"{name} started (may be partially applied)")
+    run(["sudo", "-n", name], timeout=3600)
     log("SteamOS update staged. Reboot to finish.")
     return 0
 

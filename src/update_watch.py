@@ -68,7 +68,7 @@ SOURCES = [
      "note": "Not installable: SteamOS ships its own kernel (updates arrive via the SteamOS row). Watch for 7.0+: "
              "it fixes the Z13 keyboard-backlight init (-75) and adds the GZ302 power-limit table."},
     {"id": "steamos", "label": "SteamOS", "kind": "steamos", "installed": _steamos_version, "installer": "steamos",
-     "note": "Installable here (sudo steamos-update + reboot). A kernel bump to 7.x changes how brightness and TDP should be done."},
+     "note": "Installable here (sudo holo-update, or steamos-update on older SteamOS, + reboot). A kernel bump to 7.x changes how brightness and TDP should be done."},
     {"id": "asusctl", "label": "asusctl (reference, not installed)", "repo": "OpenGamingCollective/asusctl",
      "kind": "release", "installed": None,
      "note": "Don't run asusd next to z13ctl (GZ302 boot-hang race, gitlab #718)."},
@@ -167,7 +167,7 @@ STEAMOS_RC_UPDATE = 0      # steamos-atomupd: update available
 STEAMOS_RC_UP_TO_DATE = 7  # steamos-atomupd: no update (measured on real hardware)
 
 
-def _steamos_outcome(rc, text):
+def _steamos_outcome(rc, text, name="steamos-update"):
     """Classify a `steamos-update check` result. The exit code decides; the text
     is only a cross-check, and a text that contradicts the exit code is unknown."""
     low = (text or "").lower()
@@ -183,13 +183,14 @@ def _steamos_outcome(rc, text):
             return "unknown", f"exit 0 but text says no update: {first}"
         return "update-available", ""
     if rc == host.RC_NOT_FOUND or "not found" in low or "no such file" in low:
-        return "unavailable", f"steamos-update not found: {first}"
-    return "failed", f"steamos-update check exited {rc}: {first}"
+        return "unavailable", f"{name} not found: {first}"
+    return "failed", f"{name} check exited {rc}: {first}"
 
 
 def _fetch_steamos(cached):
-    res = host.run(["steamos-update", "check"], timeout=90)
-    outcome, msg = _steamos_outcome(res.rc, res.out)
+    name = host.holo_or_steamos("update")
+    res = host.run([name, "check"], timeout=90)
+    outcome, msg = _steamos_outcome(res.rc, res.out, name)
     base = {"published": "", "url": None, "notes": (res.out or "")[:200], "etag": None}
     if outcome in ("failed", "unavailable", "unknown"):
         return dict(base, latest=None, error=msg)

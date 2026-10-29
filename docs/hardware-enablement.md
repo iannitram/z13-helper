@@ -96,7 +96,7 @@ sudo pacman -U z13ctl-*.pkg.tar.zst
 ```
 
 ```bash
-sudo steamos-readonly disable
+sudo holo-readonly disable   # steamos-readonly on SteamOS before 3.9
 ```
 
 Those may become relevant later, but they are not the safest first move on SteamOS.
@@ -1124,7 +1124,7 @@ echo "z13ctl privileged setup and user-local binary removed."
 If you see a read-only filesystem error, do **not** immediately run:
 
 ```bash
-sudo steamos-readonly disable
+sudo holo-readonly disable   # steamos-readonly on SteamOS before 3.9
 ```
 
 Instead, stop here. This means SteamOS is preventing the `/etc` write path we expected.
