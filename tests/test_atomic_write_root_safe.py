@@ -328,7 +328,8 @@ def test_normal_path_creates_dirs_owned_by_owner(dmain, fakehome):
 def test_home_owned_by_someone_else_is_refused(dmain, fakehome, monkeypatch):
     real = os.fstat
     monkeypatch.setattr(os, "fstat", lambda fd: types.SimpleNamespace(
-        st_uid=fakehome.owner[0] + 1, st_mode=real(fd).st_mode, st_gid=0))
+        st_uid=fakehome.owner[0] + 1, st_mode=real(fd).st_mode, st_gid=0,
+        st_size=real(fd).st_size))
     fn, _ = _writers(dmain, fakehome.home, fakehome.owner)["store"]
     with pytest.raises(OSError):
         fn()
