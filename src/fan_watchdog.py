@@ -240,7 +240,8 @@ class FanWatchdog:
             self._grace_until = now + RETRY_S
             self._event("ACT dropped curve with Max Fans on")
             return self._dispatch(True, lambda msg: msg.replace(
-                "Fans were stalled at 0 RPM;", "Max Fans re-applied after a profile change;"))
+                "Fans were stalled at 0 RPM;", "Max Fans re-applied after a profile change;"),
+                cancel_if_max_fans_drop=True)
 
         if enabled is False and not max_on:
             self._stall_ticks = 0
@@ -352,13 +353,23 @@ class FanWatchdog:
                 self.fault = None
                 self._event("FAULT cleared: fan reading alive again")
 
-    def _dispatch(self, max_on: bool, fix=lambda msg: msg) -> str | None:
+    def _dispatch(self, max_on: bool, fix=lambda msg: msg, *,
+                  cancel_if_max_fans_drop=False) -> str | None:
         """Act on a decided recovery: inline, or handed to tick()'s defer."""
         if self._defer is None:
             return fix(self._recover(max_on))
-        # Re-read Max Fans on the worker: a profile apply queued after this
-        # decision may have changed it, and max_on would be stale.
-        return self._defer_run(lambda: fix(self._recover(self._max_fans_on())))
+        def recover():
+            # Re-read Max Fans on the worker: a profile apply queued after this
+            # decision may have changed it, and max_on would be stale. A dropped
+            # curve is only actionable if it is still dropped and Max Fans is
+            # still on; a completed profile apply already handled that change.
+            live_max_on = self._max_fans_on()
+            if cancel_if_max_fans_drop and (not live_max_on or
+                                            self.sensors.custom_fan_curve_enabled() is not False):
+                return "Max Fans recovery skipped; state changed before the worker ran"
+            return fix(self._recover(live_max_on))
+
+        return self._defer_run(recover)
 
     def _defer_run(self, fn) -> None:
         """Hand a decided recovery (no-argument fn returning its message) to
@@ -447,9 +458,16 @@ class FanWatchdog:
 
         try:
             curve = None if max_on else self.sensors.custom_fan_curve_points()
+            if max_on and not self._max_fans_on():
+                return "Max Fans recovery cancelled; Max Fans is off"
             self.fans.rewrite_profile()
             restore("restore_tdp")
             if max_on:
+                # The flag can change while the profile/TDP restoration runs.
+                # Recheck at the last point before the irreversible 100% write.
+                if not self._max_fans_on():
+                    restore("restore_undervolt")
+                    return result("Max Fans recovery cancelled; Max Fans is off")
                 self.fans.set_fans_max()
             elif curve:
                 self.fans.set_fancurve_pwm(curve)

@@ -131,6 +131,32 @@ def test_rule1_reasserts_max_fans_with_profile_rewrite(env):
     assert "Max Fans re-applied after a profile change" in msg
 
 
+@pytest.mark.parametrize("clear_during", ["rewrite_profile", "restore_tdp"])
+def test_max_fans_recovery_cancels_if_flag_turns_off_midflight(env, clear_during):
+    ns = env.make(max_fans=True, enabled=False)
+
+    class ChangingController(FakeController):
+        def rewrite_profile(self):
+            self._call("rewrite_profile")
+            if clear_during == "rewrite_profile":
+                ns.set_max(False)
+
+        def restore_tdp(self):
+            self._call("restore_tdp")
+            if clear_during == "restore_tdp":
+                ns.set_max(False)
+
+    ns.ctl = ChangingController()
+    ns.wd = FanWatchdog(ns.sensors, ns.ctl, max_fans_on=lambda: ns.max_on,
+                        may_act=lambda: True, clock=ns.clock)
+
+    msg = run(ns, 1)[0]
+
+    assert "Max Fans recovery cancelled" in msg
+    assert "set_fans_max" not in call_names(ns.ctl)
+    assert call_names(ns.ctl) == ["rewrite_profile", "restore_tdp"]
+
+
 def test_rule1_throttled_then_retried_after_retry_s(env):
     ns = env.make(max_fans=True, enabled=False)
     run(ns, 1)
@@ -635,8 +661,8 @@ def test_plain_tick_still_recovers_inline_for_decky(env):
 
 
 def test_queued_recovery_rereads_max_fans_when_it_runs(env):
-    # Decided with Max Fans on; a profile apply queued afterwards turns it off
-    # before the recovery reaches the front of the worker's queue.
+    # A dropped-curve recovery is obsolete if the queued profile apply turns
+    # Max Fans off or restores a custom curve before the worker runs.
     ns = env.make(max_fans=True, enabled=False)
     jobs = []
     runner = FanWatchdogRunner(ns.wd, lambda label, fn: jobs.append(fn))
@@ -644,9 +670,30 @@ def test_queued_recovery_rereads_max_fans_when_it_runs(env):
     runner.tick()
     ns.set_max(False)
     ns.sensors.enabled = True
-    jobs[0]()
-    assert call_names(ns.ctl) == ["rewrite_profile", "set_fancurve_pwm"]
+    msg = jobs[0]()
+    runner.on_done(FAN_RECOVERY_LABEL, msg)
+    assert "skipped" in msg
+    assert call_names(ns.ctl) == []
     assert "set_fans_max" not in call_names(ns.ctl)
+
+
+def test_queued_stall_recovery_still_runs_if_max_fans_turns_off(env):
+    # A real zero-RPM stall on the custom curve remains actionable; only the
+    # stale dropped-curve re-pin is canceled when a profile apply supersedes it.
+    ns = env.make(max_fans=True, enabled=True, curve=MAX_CURVE, temp=39.0, fans=(0, 0))
+    jobs = []
+    runner = FanWatchdogRunner(ns.wd, lambda label, fn: jobs.append(fn))
+    for _ in range(STALL_TICKS):
+        ns.clock.advance(TICK)
+        runner.tick()
+    assert len(jobs) == 1
+
+    ns.set_max(False)
+    msg = jobs[0]()
+    runner.on_done(FAN_RECOVERY_LABEL, msg)
+
+    assert msg == "Fans were stalled at 0 RPM; profile and curve re-applied"
+    assert call_names(ns.ctl) == ["rewrite_profile", "set_fancurve_pwm"]
 
 
 # ----------------------------------------------------------------------
