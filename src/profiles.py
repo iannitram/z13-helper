@@ -48,14 +48,14 @@ import tempfile
 import threading
 import time
 
-Z13CTL_WRITE_TIMEOUT_S = 20
-
 # Installed as ~/.local/bin/z13-profile, the host seam sits in ~/.local/lib/z13-helper/
 # (install.sh puts it there). In the Flatpak and the tests it's next to this file.
 _HOST_LIB = os.path.expanduser("~/.local/lib/z13-helper")
 if os.path.isdir(_HOST_LIB) and _HOST_LIB not in sys.path:
     sys.path.append(_HOST_LIB)
 import host  # noqa: E402
+
+Z13CTL_WRITE_TIMEOUT_S = host.Z13CTL_WRITE_TIMEOUT_S
 
 STORE_PATH = os.path.expanduser("~/.config/z13-helper/profiles.json")
 MAX_FANS_PATH = os.path.expanduser("~/.config/z13-helper/max-fans.json")
@@ -807,9 +807,12 @@ def apply_tdp(profile, *, z13ctl=Z13CTL):
             "--pl2", str(tdp["pl2"]), "--pl3", str(tdp["pl3"])]
     if tdp.get("force"):
         argv.append("--force")
-    rc, out, _ = host.run(argv, timeout=Z13CTL_WRITE_TIMEOUT_S)
+    rc, out, timed_out = host.run(argv, timeout=Z13CTL_WRITE_TIMEOUT_S)
     ok = rc == 0
-    return [("tdp", ok, f"{tdp['pl1']}/{tdp['pl2']}/{tdp['pl3']} W" if ok else (out or f"rc={rc}"))]
+    message = (f"{tdp['pl1']}/{tdp['pl2']}/{tdp['pl3']} W" if ok else
+               f"z13ctl write timed out after {Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)"
+               if timed_out else (out or f"rc={rc}"))
+    return [("tdp", ok, message)]
 
 
 def clear_z13ctl_default_custom_tdp(*, z13ctl=Z13CTL):
@@ -862,9 +865,13 @@ def clear_z13ctl_default_custom_tdp(*, z13ctl=Z13CTL):
     if not re.search(r"(?:^|,\s*)\d+W(?:,|$)", custom.group("description")):
         return True, None
 
-    rc, out, _ = host.run([z13ctl, "tdp", "--reset", "--profile", "custom"], timeout=20)
+    rc, out, timed_out = host.run([z13ctl, "tdp", "--reset", "--profile", "custom"],
+                                  timeout=Z13CTL_WRITE_TIMEOUT_S)
     ok = rc == 0
-    result = ("tdp", ok, "cleared saved z13ctl custom TDP" if ok else (out or f"rc={rc}"))
+    message = ("cleared saved z13ctl custom TDP" if ok else
+               f"z13ctl write timed out after {Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)"
+               if timed_out else (out or f"rc={rc}"))
+    result = ("tdp", ok, message)
     return ok, result
 
 
@@ -874,9 +881,12 @@ def apply_undervolt(profile, *, z13ctl=Z13CTL):
     uv = profile.get("undervolt")
     if uv is None:
         return []
-    rc, out, _ = host.run([z13ctl, "undervolt", "--set", str(uv)], timeout=Z13CTL_WRITE_TIMEOUT_S)
+    rc, out, timed_out = host.run([z13ctl, "undervolt", "--set", str(uv)], timeout=Z13CTL_WRITE_TIMEOUT_S)
     if rc == 0:
         return [("undervolt", True, f"{uv}")]
+    if timed_out:
+        return [("undervolt", False,
+                 f"z13ctl write timed out after {Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)")]
     return [("undervolt", False, "unavailable (ryzen_smu not loaded)"
              if "ryzen_smu" in out else out)]
 
@@ -895,10 +905,18 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
     """
     results = []
 
+    timed_out = False
+
     def step(name, argv, ok_msg=None, timeout=Z13CTL_WRITE_TIMEOUT_S):
-        rc, out, _ = host.run(argv, timeout=timeout)
+        nonlocal timed_out
+        rc, out, hit_timeout = host.run(argv, timeout=timeout)
         ok = rc == 0
-        results.append((name, ok, ok_msg if (ok and ok_msg) else (out or f"rc={rc}")))
+        timed_out = hit_timeout
+        message = (ok_msg if ok and ok_msg else
+                   f"z13ctl write timed out after {Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)"
+                   if hit_timeout and os.path.basename(argv[0]) == os.path.basename(z13ctl)
+                   else (out or f"rc={rc}"))
+        results.append((name, ok, message))
         return ok
 
     # 1. Leave the previous profile (e.g. `boondock off` restores the screen).
@@ -927,10 +945,15 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
 
     # 2. Base platform profile.
     base_ok = step("profile", [z13ctl, "profile", "--set", profile["base"]], profile["base"])
+    if timed_out:
+        return results
 
     # 3. TDP (None = whatever the firmware profile dictates, restored by the
     #    profile write above).
     results.extend(apply_tdp(profile, z13ctl=z13ctl))
+    timed_out = any(msg.startswith("z13ctl write timed out after ") for _, _, msg in results)
+    if timed_out:
+        return results
 
     # 4. Fan curve. Max Fans wins while it is ON: keep 100% pinned, but remember
     #    the profile's curve as the one to restore when it's switched OFF.
@@ -951,6 +974,8 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
             cleanup_ok, cleanup_result = clear_z13ctl_default_custom_tdp(z13ctl=z13ctl)
             if cleanup_result:
                 results.append(cleanup_result)
+                if cleanup_result[2].startswith("z13ctl write timed out after "):
+                    return results
     if curve_write_needed and not tdp and not cleanup_ok:
         # The base profile write releases a custom curve. Keep the shared flag
         # from asking the watchdog to re-enable Max Fans (which would write an
@@ -979,9 +1004,14 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
              "Max Fans OFF, firmware auto" if released else "firmware auto")
     else:
         results.append(("fans", True, "firmware auto"))
+    if timed_out:
+        return results
 
     # 5. Undervolt (needs ryzen_smu; absent on stock SteamOS -> reported, not fatal).
     results.extend(apply_undervolt(profile, z13ctl=z13ctl))
+    timed_out = any(msg.startswith("z13ctl write timed out after ") for _, _, msg in results)
+    if timed_out:
+        return results
 
     # 6. Lighting, per device so one stalled hidraw endpoint can't block the other.
     #    The keyboard goes first, so it is set before any lightbar recovery.
@@ -989,8 +1019,11 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
     if br:
         for dev in LIGHTING_DEVICES:
             argv = [z13ctl, "--device", dev, "brightness", br]
-            rc, out, _ = host.run(argv, timeout=30)
-            if rc != 0 and dev == "lightbar":
+            rc, out, hit_timeout = host.run(argv, timeout=Z13CTL_WRITE_TIMEOUT_S)
+            timed_out = hit_timeout
+            if hit_timeout:
+                out = f"z13ctl write timed out after {Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)"
+            if not hit_timeout and rc != 0 and dev == "lightbar":
                 kind = lightbar_failure_kind(out)
                 if kind == "wedged":
                     rec_ok, rec_msg = recover_lightbar()
@@ -1000,14 +1033,20 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
                     rec_ok = None
                 if rec_ok is not None:
                     if rec_ok:
-                        rc, out, _ = host.run(argv, timeout=30)
+                        rc, out, hit_timeout = host.run(argv, timeout=Z13CTL_WRITE_TIMEOUT_S)
+                        timed_out = hit_timeout
+                        if hit_timeout:
+                            out = f"z13ctl write timed out after {Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)"
                         if rc == 0:
                             results.append((f"brightness ({dev})", True, f"{br} (lightbar recovered)"))
                             continue
-                        out = f"{out or f'rc={rc}'} (still failing after a {rec_msg})"
+                        if not hit_timeout:
+                            out = f"{out or f'rc={rc}'} (still failing after a {rec_msg})"
                     else:
                         out = f"{out}; {rec_msg}"
             results.append((f"brightness ({dev})", rc == 0, br if rc == 0 else (out or f"rc={rc}")))
+            if timed_out:
+                return results
 
     # 7. Battery charge limit.
     # A login restore passes login_battery_default=80: a profile that sets no limit
@@ -1018,6 +1057,8 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
         bl, note = login_battery_default, " (fallback: profile sets no limit)"
     if bl is not None:
         step("battery limit", [z13ctl, "batterylimit", "--set", str(bl)], f"{bl}%{note}")
+    if timed_out:
+        return results
 
     # 8. Enter hook.
     if not skip_hooks:

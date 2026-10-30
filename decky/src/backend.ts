@@ -2,15 +2,23 @@ import { callable } from "@decky/api";
 
 // Backend methods (main.py). Names must match the Python method names exactly.
 
-// ---- Max Fans / profiles (unchanged contract) ----
+export interface WriteResult {
+  ok: boolean;
+  message: string;
+}
+
+export const isWriteTimeout = (message: string) =>
+  message.startsWith("z13ctl write timed out after ");
+
+// ---- Max Fans / profiles ----
 export const getMaxFans = callable<[], boolean>("get_max_fans");
-export const setMaxFans = callable<[enabled: boolean], boolean>("set_max_fans");
+export const setMaxFans = callable<[enabled: boolean], WriteResult>("set_max_fans");
 export const getProfile = callable<[], string>("get_profile");
-export const setProfile = callable<[profile: string], boolean>("set_profile");
+export const setProfile = callable<[profile: string], WriteResult>("set_profile");
 // App profiles (Silent / Balanced / Turbo / Boondock / custom…) from the shared
 // profiles.json; falls back to the raw platform profiles if the engine is missing.
 export const getProfiles = callable<[], { names: string[]; active: string }>("get_profiles");
-export const setAppProfile = callable<[name: string], boolean>("set_app_profile");
+export const setAppProfile = callable<[name: string], WriteResult>("set_app_profile");
 
 // ---- Phase 11: power limits / battery / lighting / telemetry ----
 export type BrightnessLevel = "off" | "low" | "medium" | "high";

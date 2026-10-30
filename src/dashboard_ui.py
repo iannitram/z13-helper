@@ -103,7 +103,7 @@ class DashboardUI(QMainWindow):
 
         self.worker = ApplyWorker(self)
         self.control = ProfileControl(controller, self.worker, self)
-        self.control.message.connect(lambda m: self.status_bar.showMessage(m, 8000))
+        self.control.message.connect(self._on_control_message)
         self._log_dialog = None
         self._errors_unseen = 0
         self._last_crash_notice = 0.0
@@ -235,6 +235,12 @@ class DashboardUI(QMainWindow):
         self._tray.setContextMenu(self._tray_menu)
         self._tray.activated.connect(self._on_tray_activated)
         self._tray.show()
+
+    def _on_control_message(self, message):
+        self.status_bar.showMessage(message, 8000)
+        if message.startswith("z13ctl write timed out after ") and self._tray is not None:
+            self._tray.showMessage("Z13-Helper", message,
+                                   QSystemTrayIcon.MessageIcon.Warning, 8000)
 
     def _rebuild_tray_menu(self):
         m = self._tray_menu

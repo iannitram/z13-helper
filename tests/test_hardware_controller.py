@@ -3,7 +3,7 @@
 import pytest
 
 import profiles
-from hardware_controller import HardwareController
+from hardware_controller import HardwareController, Z13CTL_WRITE_TIMEOUT_S
 
 WEDGED = "z13ctl command failed: init packet 1: write /dev/hidraw5: connection timed out"
 STALE = "z13ctl command failed: init packet 1: write /dev/hidraw5: no such device"
@@ -59,7 +59,7 @@ def test_keyboard_first_and_short_timeout(recover):
     c = Fake(lambda a, calls: None)
     assert c.set_brightness("low", devices=("lightbar", "keyboard")) == []
     assert devs(c) == ["keyboard", "lightbar"]
-    assert all(t == 30 for _, t in c.calls)
+    assert all(t == Z13CTL_WRITE_TIMEOUT_S for _, t in c.calls)
     assert recover.seen == []
 
 
@@ -135,11 +135,11 @@ def test_run_command_returns_output(fake_host):
 
 
 def test_run_command_timeout_becomes_runtime_error(fake_host):
-    fake_host.fail("status", rc=124, out="timed out after 7 s", timed_out=True)
+    fake_host.fail("profile --set", rc=124, out="timed out after 20 s", timed_out=True)
     c = HardwareController(z13ctl_path="z13ctl")
-    with pytest.raises(RuntimeError, match="timed out after 7 s"):
-        c._run_command(["status"], quiet=True, timeout=7)
-    assert fake_host.calls[0].timeout == 7
+    with pytest.raises(RuntimeError, match="^z13ctl write timed out after 20 s \\(kernel asus-wmi hang\\?\\)$"):
+        c._run_command(["profile", "--set", "balanced"], quiet=True)
+    assert fake_host.calls[0].timeout == Z13CTL_WRITE_TIMEOUT_S
 
 
 def test_run_command_failure_carries_output(fake_host):

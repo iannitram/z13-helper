@@ -79,6 +79,20 @@ def test_tdp_force_flag(profiles_env, fake_host):
     assert tdp == [[Z, "tdp", "--set", "80", "--pl2", "85", "--pl3", "90", "--force"]]
 
 
+def test_profile_apply_stops_after_timed_out_write(profiles_env, fake_host):
+    fake_host.fail("tdp", rc=124, out="timed out after 20 s", timed_out=True)
+    results = profiles.apply(full_profile(), z13ctl=Z)
+    assert names(results) == ["profile", "tdp"]
+    assert results[-1] == (
+        "tdp", False,
+        "z13ctl write timed out after 20 s (kernel asus-wmi hang?)",
+    )
+    assert fake_host.argvs == [
+        [Z, "profile", "--set", "performance"],
+        [Z, "tdp", "--set", "50", "--pl2", "60", "--pl3", "70"],
+    ]
+
+
 def test_null_fields_are_left_alone(profiles_env, fake_host):
     results = profiles.apply(bare_profile(), z13ctl=Z)
     # Only the platform profile is written; fans report firmware auto without a call.
@@ -473,8 +487,8 @@ def test_tdp_without_curve_resets_fans_after_tdp(profiles_env, fake_host):
 def test_brightness_has_short_timeout(profiles_env, fake_host):
     profiles.apply(bare_profile(brightness="low"), z13ctl=Z)
     seen = [(c.argv[1:3], c.timeout) for c in fake_host.calls]
-    assert (["--device", "keyboard"], 30) in seen
-    assert (["--device", "lightbar"], 30) in seen
+    assert (["--device", "keyboard"], profiles.Z13CTL_WRITE_TIMEOUT_S) in seen
+    assert (["--device", "lightbar"], profiles.Z13CTL_WRITE_TIMEOUT_S) in seen
 
 
 # ----------------------------------------------------------------------

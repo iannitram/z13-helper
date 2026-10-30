@@ -14,7 +14,7 @@ _RE_FAN_HEADER = re.compile(r"Fans:\s+(\d+)\s*RPM,\s*mode:\s*(\w+)")
 
 
 _DEFAULT_Z13CTL = os.path.expanduser("~/.local/bin/z13ctl")
-Z13CTL_WRITE_TIMEOUT_S = 20
+Z13CTL_WRITE_TIMEOUT_S = host.Z13CTL_WRITE_TIMEOUT_S
 
 # z13ctl --device targets for the RGB/brightness commands.
 _LIGHTING_DEVICES = ("keyboard", "lightbar")
@@ -40,7 +40,8 @@ class HardwareController:
         if r.timed_out:
             if not quiet:
                 logger.error(f"Command '{' '.join(cmd)}' timed out after {timeout} s")
-            raise RuntimeError(f"z13ctl command timed out after {timeout} s")
+            raise RuntimeError(
+                f"z13ctl write timed out after {Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)")
         if r.rc == host.RC_NOT_FOUND:
             logger.error(f"z13ctl not found at: {self.z13ctl_path}")
             raise RuntimeError("z13ctl executable not found.")
@@ -143,7 +144,7 @@ class HardwareController:
         for device in devices:
             argv = ["--device", device, "brightness", level]
             try:
-                self._run_command(argv, timeout=30)
+                self._run_command(argv, timeout=Z13CTL_WRITE_TIMEOUT_S)
             except RuntimeError as e:
                 if device == "lightbar":
                     kind = profiles.lightbar_failure_kind(str(e))
@@ -153,7 +154,7 @@ class HardwareController:
                         ok, msg = recover()
                         if ok:
                             try:
-                                self._run_command(argv, timeout=30)
+                                self._run_command(argv, timeout=Z13CTL_WRITE_TIMEOUT_S)
                                 continue
                             except RuntimeError as e2:
                                 e = RuntimeError(f"{e2} (still failing after a {msg})")

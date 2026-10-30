@@ -98,7 +98,9 @@ BRIGHTNESS_LEVELS = ("off", "low", "medium", "high")
 # One z13ctl call per device: z13ctl's default --device all aborts on the first
 # write error, so a wedged lightbar would starve the keyboard (ROADMAP §1, 2026-10-09).
 LIGHTING_DEVICES = ("keyboard", "lightbar")
-LIGHTING_TIMEOUT_S = 30
+Z13CTL_WRITE_TIMEOUT_S = host.Z13CTL_WRITE_TIMEOUT_S
+PROFILE_APPLY_TIMEOUT_S = 180
+LIGHTING_TIMEOUT_S = Z13CTL_WRITE_TIMEOUT_S
 # Wedged-lightbar recovery: copy of src/profiles.py recover_lightbar() (this backend
 # runs as root and can't import src/). Keep the two in step.
 LIGHTBAR_RESET_UNIT = "z13-lightbar-reset.service"
@@ -117,7 +119,9 @@ LIGHTBAR_DAEMON_STAMP = "/run/user/1000/z13-lightbar-daemon-restart.stamp"
 
 def _run(args, timeout=15, *, as_deck=False):
     """host.run, logged. Returns (rc, out)."""
-    rc, out, _ = host.run(args, timeout=timeout, as_deck=as_deck)
+    rc, out, timed_out = host.run(args, timeout=timeout, as_deck=as_deck)
+    if timed_out and os.path.basename(args[0]) == os.path.basename(Z13CTL):
+        out = f"z13ctl write timed out after {Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)"
     # Output can be profile config (hooks may hold tokens or private paths): it goes to
     # DEBUG only. INFO/WARNING carry just the command name, rc and output length.
     name = os.path.basename(args[0])
@@ -126,9 +130,6 @@ def _run(args, timeout=15, *, as_deck=False):
         decky.logger.warning("cmd %s failed: rc=%s output_len=%d", name, rc, len(out))
     decky.logger.debug("cmd %s output: %s", name, out)
     return rc, out
-
-
-Z13CTL_WRITE_TIMEOUT_S = 20
 
 
 _DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
@@ -691,6 +692,9 @@ def set_brightness_per_device(level, recover=None, recover_stale=None):
     for dev in LIGHTING_DEVICES:
         argv = [Z13CTL, "--device", dev, "brightness", level]
         rc, out = _run(argv, timeout=LIGHTING_TIMEOUT_S, as_deck=True)
+        timeout_prefix = "z13ctl write timed out after "
+        if out.startswith(timeout_prefix):
+            return {"ok": False, "failed": [dev], "message": out}
         if rc != 0 and dev == "lightbar":
             kind = lightbar_failure_kind(out)
             if kind == "wedged":
@@ -704,6 +708,8 @@ def set_brightness_per_device(level, recover=None, recover_stale=None):
                     rc, out = _run(argv, timeout=LIGHTING_TIMEOUT_S, as_deck=True)
                     if rc == 0:
                         notes.append("lightbar recovered")
+                    elif out.startswith(timeout_prefix):
+                        return {"ok": False, "failed": [dev], "message": out}
                     else:
                         notes.append("lightbar still wedged after a reset" if kind == "wedged"
                                       else "lightbar still failing after a daemon restart")
@@ -778,14 +784,21 @@ def apply_tdp(enabled, pl1, pl2, pl3, profile=None):
     if err:
         return {"ok": False, "saved": False, "message": f"Not saved: {err}", "tdp": tdp}
     if enabled:
-        rc, out = _run(tdp_argv(tdp), as_deck=True)
+        rc, out = _run(tdp_argv(tdp), timeout=Z13CTL_WRITE_TIMEOUT_S, as_deck=True)
         ok = rc == 0
         msg = (f"{name}: {tdp['pl1']}/{tdp['pl2']}/{tdp['pl3']} W" if ok
+               else out if out.startswith("z13ctl write timed out after ")
                else f"{name}: saved, but z13ctl tdp failed ({out[-120:] or f'rc={rc}'})")
     else:
-        rc, out = _run(Z13_PROFILE + ["apply", name, "--no-hooks"], timeout=Z13CTL_WRITE_TIMEOUT_S, as_deck=True)
+        # This command runs several independently bounded z13ctl writes. Keep a
+        # separate aggregate budget instead of cutting off the profile at 20 s.
+        rc, out = _run(Z13_PROFILE + ["apply", name, "--no-hooks"],
+                       timeout=PROFILE_APPLY_TIMEOUT_S, as_deck=True)
         ok = rc == 0 and "ERR  profile" not in out
+        timeout_message = next((line.strip() for line in out.splitlines()
+                                if line.strip().startswith("z13ctl write timed out after ")), "")
         msg = (f"{name}: power limits back to the firmware" if ok
+               else timeout_message if timeout_message
                else f"{name}: saved, but re-apply failed ({out[-120:] or f'rc={rc}'})")
     return {"ok": ok, "saved": True, "message": msg, "tdp": tdp}
 
@@ -798,9 +811,11 @@ def apply_battery_limit(value, profile=None):
     if err and err.startswith("Not applied:"):
         return {"ok": False, "saved": False, "stale": True, "message": err,
                 "value": v, "profile": ""}
-    rc, out = _run([Z13CTL, "batterylimit", "--set", str(v)], as_deck=True)
+    rc, out = _run([Z13CTL, "batterylimit", "--set", str(v)],
+                   timeout=Z13CTL_WRITE_TIMEOUT_S, as_deck=True)
     ok = rc == 0
-    msg = f"Charge limit {v}%" if ok else f"Charge limit failed ({out[-120:] or f'rc={rc}'})"
+    msg = (f"Charge limit {v}%" if ok else out if out.startswith("z13ctl write timed out after ")
+           else f"Charge limit failed ({out[-120:] or f'rc={rc}'})")
     if err:
         msg += f" (not saved to profile: {err})"
     return {"ok": ok, "saved": err is None, "message": msg, "value": v, "profile": name or ""}
@@ -823,19 +838,20 @@ def max_fans_off_argv(state, store):
 
 
 def set_max_fans_blocking(enabled):
-    """Max Fans ON/OFF (blocking; run it in a thread). Returns True on success."""
+    """Max Fans ON/OFF (blocking; run it in a thread). Returns status + message."""
     if enabled:
         # Snapshot the current custom curve (unless already maxed) so OFF restores it exactly.
         cur = _current_curve_pwm()
         if len(cur) == 8 and not all(pwm >= 255 for _, pwm in cur):
             _update_max_fans(saved_curve=cur)
-        rc, _ = _run([Z13CTL, "fancurve", "--set", MAX_FANS_SPEC])
+        rc, out = _run([Z13CTL, "fancurve", "--set", MAX_FANS_SPEC], timeout=Z13CTL_WRITE_TIMEOUT_S)
     else:
-        rc, _ = _run(max_fans_off_argv(_load_max_fans(), _read_store()))
+        rc, out = _run(max_fans_off_argv(_load_max_fans(), _read_store()), timeout=Z13CTL_WRITE_TIMEOUT_S)
     ok = rc == 0
     if ok:
         _update_max_fans(enabled=enabled)
-    return ok
+    return {"ok": ok, "message": ("Max Fans ON" if enabled else "Max Fans OFF")
+            if ok else out or f"z13ctl fancurve failed (rc={rc})"}
 
 
 class DeckyFans:
@@ -848,6 +864,8 @@ class DeckyFans:
     def _z13ctl(self, *args, as_deck=False):
         rc, out = _run([Z13CTL, *args], timeout=Z13CTL_WRITE_TIMEOUT_S, as_deck=as_deck)
         if rc != 0:
+            if out.startswith("z13ctl write timed out after "):
+                raise RuntimeError(out)
             raise RuntimeError(f"z13ctl {' '.join(args)} failed (rc={rc}): {out}")
 
     def rewrite_profile(self):
@@ -862,8 +880,10 @@ class DeckyFans:
         tdp = (active_profile(_read_store()) or {}).get("tdp")
         if not tdp:
             return None
-        rc, out = _run(tdp_argv(tdp), as_deck=True)
+        rc, out = _run(tdp_argv(tdp), timeout=Z13CTL_WRITE_TIMEOUT_S, as_deck=True)
         if rc != 0:
+            if out.startswith("z13ctl write timed out after "):
+                return out
             return f"TDP not restored ({out[-120:] or f'rc={rc}'})"
         return None  # no readback: reading the PPT values can lock the EC
 
@@ -871,8 +891,11 @@ class DeckyFans:
         uv = (active_profile(_read_store()) or {}).get("undervolt")
         if uv is None:
             return None
-        rc, out = _run([Z13CTL, "undervolt", "--set", str(uv)], as_deck=True)
+        rc, out = _run([Z13CTL, "undervolt", "--set", str(uv)],
+                       timeout=Z13CTL_WRITE_TIMEOUT_S, as_deck=True)
         if rc != 0:
+            if out.startswith("z13ctl write timed out after "):
+                return out
             return f"undervolt not restored ({out[-120:] or f'rc={rc}'})"
         rc, out = _run([Z13CTL, "undervolt", "--get"], as_deck=True)
         m_ = re.search(r"-?\d+", out) if rc == 0 else None
@@ -1021,7 +1044,7 @@ class Plugin:
     async def get_max_fans(self) -> bool:
         return bool(_load_max_fans().get("enabled", False))
 
-    async def set_max_fans(self, enabled: bool) -> bool:
+    async def set_max_fans(self, enabled: bool) -> dict:
         async with _lock():
             return await asyncio.to_thread(set_max_fans_blocking, bool(enabled))
 
@@ -1061,23 +1084,30 @@ class Plugin:
         except (ValueError, KeyError):
             return {"names": [], "active": ""}
 
-    async def set_app_profile(self, name: str) -> bool:
+    async def set_app_profile(self, name: str) -> dict:
         # A full apply takes seconds (longer with a wedged lightbar): keep it off the
         # loader's event loop, and serialised with the other writes.
         async with _lock():
             rc, out = await asyncio.to_thread(
-                lambda: _run(Z13_PROFILE + ["apply", name], 180, as_deck=True))
+                lambda: _run(Z13_PROFILE + ["apply", name], PROFILE_APPLY_TIMEOUT_S, as_deck=True))
+        ok = rc == 0 and "ERR  profile" not in out
+        timeout_message = next((line.strip().split("  ")[-1] for line in out.splitlines()
+                                if "z13ctl write timed out after " in line), "")
+        message = (f"{name} applied" if ok else timeout_message or
+                   f"{name}: profile apply failed ({out[-160:] or f'rc={rc}'})")
         decky.logger.info("profile apply %s -> rc=%s", name, rc)
-        return rc == 0 and "ERR  profile" not in out
+        return {"ok": ok, "message": message}
 
     # ---- Performance profile ----
     async def get_profile(self) -> str:
         return await asyncio.to_thread(_current_platform_profile)
 
-    async def set_profile(self, profile: str) -> bool:
+    async def set_profile(self, profile: str) -> dict:
         async with _lock():
-            rc, _ = await asyncio.to_thread(_run, [Z13CTL, "profile", "--set", profile])
-        return rc == 0
+            rc, out = await asyncio.to_thread(
+                _run, [Z13CTL, "profile", "--set", profile], Z13CTL_WRITE_TIMEOUT_S)
+        return {"ok": rc == 0, "message": out or (f"{profile} applied" if rc == 0 else
+                f"z13ctl profile failed (rc={rc})")}
 
     # ---- Power limits / battery / lighting / telemetry (Phase 11) ----
     # Blocking work runs in a thread so the fan watchdog keeps ticking meanwhile.
