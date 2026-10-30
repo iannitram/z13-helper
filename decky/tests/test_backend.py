@@ -5,6 +5,7 @@ Run from the repo root:  python3 -m unittest discover -s decky/tests -v
 
 import asyncio
 import importlib.util
+import io
 import json
 import logging
 import os
@@ -12,6 +13,7 @@ import sys
 import tempfile
 import types
 import unittest
+from contextlib import redirect_stdout
 from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -28,6 +30,7 @@ import fan_watchdog  # noqa: E402
 import host  # noqa: E402
 import power_range  # noqa: E402
 import sensor_reader  # noqa: E402
+import profiles  # noqa: E402
 from fake_host import FakeHost  # noqa: E402
 
 _SETTINGS = tempfile.mkdtemp(prefix="z13-helper-settings-")
@@ -69,6 +72,15 @@ def _store(active="Balanced"):
         prof("Boondock", "quiet", tdp={"pl1": 20, "pl2": 30, "pl3": 40, "force": False},
              hooks={"enter": "boondock on", "exit": "boondock off"}),
     ]}
+
+
+def _formatted_profile_timeout():
+    stream = io.StringIO()
+    with redirect_stdout(stream):
+        profiles._print_results([
+            ("fans", False, "z13ctl write timed out after 20 s (kernel asus-wmi hang?)")
+        ])
+    return stream.getvalue()
 
 
 FAIL_OUT = "write /dev/hidraw5: connection timed out"
@@ -216,12 +228,48 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(argv[-3:], ["apply", "Boondock", "--no-hooks"])
         self.assertGreaterEqual(timeout, 60)
 
+    def test_apply_tdp_off_preserves_formatted_profile_timeout(self):
+        self._write(_store("Boondock"))
+        run = fake_host(self)
+        output = _formatted_profile_timeout()
+        run.fail("z13-profile", rc=1, out=output)
+        result = m.apply_tdp(False, 20, 30, 40)
+        self.assertEqual(result["message"],
+                         "z13ctl write timed out after 20 s (kernel asus-wmi hang?)")
+
+    def test_set_app_profile_preserves_formatted_profile_timeout(self):
+        run = fake_host(self)
+        output = _formatted_profile_timeout()
+        run.fail("z13-profile", rc=1, out=output)
+        result = asyncio.run(m.Plugin().set_app_profile("Boondock"))
+        self.assertEqual(result["message"],
+                         "z13ctl write timed out after 20 s (kernel asus-wmi hang?)")
+
     def test_apply_tdp_hw_failure_still_saved(self):
         self._write(_store("Balanced"))
         fake_host(self, fail_if=("tdp",))
         res = m.apply_tdp(True, 20, 30, 40)
         self.assertFalse(res["ok"])
         self.assertTrue(res["saved"])
+
+    def test_apply_tdp_timeout_is_clear_and_bounded(self):
+        self._write(_store("Balanced"))
+        run = fake_host(self)
+        run.fail("tdp", rc=124, out="timed out after 20 s", timed_out=True)
+        res = m.apply_tdp(True, 20, 30, 40)
+        self.assertFalse(res["ok"])
+        self.assertTrue(res["saved"])
+        self.assertIn("z13ctl write timed out after 20 s (kernel asus-wmi hang?)", res["message"])
+        self.assertEqual(run.calls[0].timeout, m.Z13CTL_WRITE_TIMEOUT_S)
+
+    def test_apply_battery_limit_timeout_is_clear_and_bounded(self):
+        self._write(_store("Balanced"))
+        run = fake_host(self)
+        run.fail("batterylimit", rc=124, out="timed out after 20 s", timed_out=True)
+        res = m.apply_battery_limit(80)
+        self.assertFalse(res["ok"])
+        self.assertIn("z13ctl write timed out after 20 s (kernel asus-wmi hang?)", res["message"])
+        self.assertEqual(run.calls[0].timeout, m.Z13CTL_WRITE_TIMEOUT_S)
 
     def test_apply_tdp_no_store_touches_nothing(self):
         run = fake_host(self)
@@ -385,6 +433,17 @@ class BrightnessTest(unittest.TestCase):
         run = fake_host(self)
         self.assertFalse(m.set_brightness_per_device("max")["ok"])
         self.assertEqual(run.calls, [])
+
+    def test_timed_out_lightbar_write_is_reported_without_recovery(self):
+        run = fake_host(self)
+        run.fail("--device lightbar", rc=124, out="timed out after 20 s", timed_out=True)
+        recoveries = []
+        result = m.set_brightness_per_device(
+            "low", recover=lambda: recoveries.append("reset") or (True, "recovered"))
+        self.assertEqual(result["message"],
+                         "z13ctl write timed out after 20 s (kernel asus-wmi hang?)")
+        self.assertEqual(len(run.calls), 2)  # keyboard, then timed out lightbar
+        self.assertEqual(recoveries, [])
 
 
 class LightbarRecoveryTest(unittest.TestCase):
@@ -554,12 +613,29 @@ class MaxFansOffTest(unittest.TestCase):
         m._read_store = lambda path=None: _store("Silent")
         try:
             run = fake_host(self, fail_if=("fancurve",))
-            self.assertFalse(m.set_max_fans_blocking(False))
+            result = m.set_max_fans_blocking(False)
+            self.assertFalse(result["ok"])
             self.assertEqual(saved, {})
             run = fake_host(self)
-            self.assertTrue(m.set_max_fans_blocking(False))
+            self.assertTrue(m.set_max_fans_blocking(False)["ok"])
             self.assertEqual(run.calls[0][0][-2:], ["fancurve", "--reset"])
             self.assertEqual(saved, {"enabled": False})
+        finally:
+            m._load_max_fans, m._update_max_fans, m._read_store = orig
+
+    def test_timed_out_off_returns_exact_error_without_state_change(self):
+        saved = {}
+        orig = (m._load_max_fans, m._update_max_fans, m._read_store)
+        m._load_max_fans = lambda: {"enabled": True, "saved_curve": None}
+        m._update_max_fans = lambda **kw: saved.update(kw)
+        m._read_store = lambda path=None: _store("Silent")
+        try:
+            run = fake_host(self)
+            run.fail("fancurve", rc=124, out="timed out after 20 s", timed_out=True)
+            result = m.set_max_fans_blocking(False)
+            self.assertEqual(result["message"],
+                             "z13ctl write timed out after 20 s (kernel asus-wmi hang?)")
+            self.assertEqual(saved, {})
         finally:
             m._load_max_fans, m._update_max_fans, m._read_store = orig
 
