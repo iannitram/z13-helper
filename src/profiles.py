@@ -1066,23 +1066,14 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
     if timed_out:
         return results
 
-    # 6. Battery charge limit.
-    # A login restore passes login_battery_default=80: a profile that sets no limit
-    # (e.g. Boondock) then gets the 80% fallback, as the retired 80% unit used to give.
-    bl = profile.get("battery_limit")
-    note = ""
-    if bl is None and login_battery_default is not None:
-        bl, note = login_battery_default, " (fallback: profile sets no limit)"
-    if bl is not None:
-        step("battery limit", [z13ctl, "batterylimit", "--set", str(bl)], f"{bl}%{note}")
-
-    # 7. Lighting is last among hardware writes. Each device is independent so a
+    # 6. Lighting follows the repository's documented profile binding order.
+    # Each device is independent so a
     #    stalled endpoint cannot block the other. A mode apply carries brightness
     #    because z13ctl otherwise defaults it to high.
     lighting = profile.get("lighting") or {}
     br = profile.get("brightness")
     # Set unmodified devices' brightness first; profile mode/colour changes follow
-    # as the final lighting writes.
+    # as the final lighting writes for each device.
     for dev in LIGHTING_DEVICES:
         setting = lighting.get(dev)
         if br and not setting:
@@ -1130,6 +1121,18 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
                             else (out or f"rc={rc}")))
             if timed_out:
                 return results
+
+    # 7. Battery charge limit.
+    # A login restore passes login_battery_default=80: a profile that sets no limit
+    # (e.g. Boondock) then gets the 80% fallback, as the retired 80% unit used to give.
+    bl = profile.get("battery_limit")
+    note = ""
+    if bl is None and login_battery_default is not None:
+        bl, note = login_battery_default, " (fallback: profile sets no limit)"
+    if bl is not None:
+        step("battery limit", [z13ctl, "batterylimit", "--set", str(bl)], f"{bl}%{note}")
+        if timed_out:
+            return results
 
     # 8. Enter hook.
     if not skip_hooks:
