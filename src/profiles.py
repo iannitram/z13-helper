@@ -72,11 +72,17 @@ MAX_FAN_TEMPS = (20, 30, 40, 50, 60, 70, 80, 90)   # from 20 C: fans idle below 
 MAX_FANS_SPEC = ",".join(f"{t}:100%" for t in MAX_FAN_TEMPS)
 
 # Curves carried over from the z13-max / z13-balanced host scripts (the
-# "hardware-longevity" curves: factory auto tops out at 40% @ 76 °C).
-TURBO_CURVE = [[40, 50], [50, 75], [60, 90], [70, 100],
-                     [75, 100], [80, 100], [85, 100], [90, 100]]
-BALANCED_CURVE = [[40, 20], [50, 35], [60, 55], [70, 75],
-                  [75, 90], [80, 100], [85, 100], [90, 100]]
+# "hardware-longevity" curves; factory auto tops out at 40% @ 76 °C). The
+# explicit 20 C anchor keeps the first PWM plateau defined below 40 C; the
+# redundant 85 C plateau point is removed to retain z13ctl's eight-point limit.
+LEGACY_TURBO_CURVE = [[40, 50], [50, 75], [60, 90], [70, 100],
+                      [75, 100], [80, 100], [85, 100], [90, 100]]
+LEGACY_BALANCED_CURVE = [[40, 20], [50, 35], [60, 55], [70, 75],
+                         [75, 90], [80, 100], [85, 100], [90, 100]]
+TURBO_CURVE = [[20, 50], [40, 50], [50, 75], [60, 90],
+               [70, 100], [75, 100], [80, 100], [90, 100]]
+BALANCED_CURVE = [[20, 20], [40, 20], [50, 35], [60, 55],
+                  [70, 75], [75, 90], [80, 100], [90, 100]]
 
 # Built-in names follow G-Helper (Silent / Balanced / Turbo); z13ctl's bases
 # are quiet / balanced / performance.
@@ -321,6 +327,92 @@ def _migrate_boondock_hooks(p):
                 hooks[key] = f"{parts[0]} {new}"
 
 
+def _migrate_builtin_fan_curve(p):
+    """Add the cold-temperature anchor to an unedited shipped built-in curve.
+
+    Exact matching protects user changes, including edited built-in curves and
+    custom profiles that happen to use the same points.
+    """
+    if p.get("builtin") is not True:
+        return False
+    migration = {
+        "Turbo": ("performance", LEGACY_TURBO_CURVE, TURBO_CURVE),
+        "Balanced": ("balanced", LEGACY_BALANCED_CURVE, BALANCED_CURVE),
+    }.get(p.get("name"))
+    if migration is None:
+        return False
+    base, old_curve, new_curve = migration
+    if p.get("base") != base or p.get("fan_curve") != old_curve:
+        return False
+    p["fan_curve"] = [point[:] for point in new_curve]
+    return True
+
+
+def _max_fans_curve_migration(store):
+    if not isinstance(store, dict) or not isinstance(store.get("profiles"), list):
+        return None
+    active_name = store.get("active")
+    active = next((p for p in store["profiles"]
+                   if isinstance(p, dict) and p.get("name") == active_name), None)
+    if active is None or active.get("builtin") is not True:
+        return None
+    migration = {
+        "Turbo": ("performance", LEGACY_TURBO_CURVE, TURBO_CURVE),
+        "Balanced": ("balanced", LEGACY_BALANCED_CURVE, BALANCED_CURVE),
+    }.get(active_name)
+    if migration is None:
+        return None
+    base, old_curve, new_curve = migration
+    if active.get("base") != base or active.get("fan_curve") != new_curve:
+        return None
+    return old_curve, new_curve
+
+
+def _migrate_enabled_max_fans_snapshot(store):
+    """Update an enabled snapshot only when it is the active built-in's old curve.
+
+    Profile-store lock is acquired before the Max Fans lock, matching apply's
+    store-to-snapshot lock order. Re-read both files while locked so a profile
+    edit or toggle racing startup is not overwritten.
+    """
+    migration = _max_fans_curve_migration(store)
+    if migration is None:
+        return
+    old_curve, new_curve = migration
+    old_snapshot = [[int(temp), round(int(pwm) * 255 / 100)]
+                    for temp, pwm in old_curve]
+    state = _read_json(MAX_FANS_PATH)
+    if not isinstance(state, dict) or state.get("enabled") is not True \
+            or state.get("saved_curve") != old_snapshot:
+        return
+
+    with store_lock():
+        # The active profile may have changed since the fast-path reads above.
+        current_migration = _max_fans_curve_migration(_read_json(STORE_PATH))
+        if current_migration is None:
+            return
+        old_curve, new_curve = current_migration
+        old_snapshot = [[int(temp), round(int(pwm) * 255 / 100)]
+                        for temp, pwm in old_curve]
+        new_snapshot = [[int(temp), round(int(pwm) * 255 / 100)]
+                        for temp, pwm in new_curve]
+        with file_lock(MAX_FANS_PATH):
+            state = _read_json(MAX_FANS_PATH)
+            if not isinstance(state, dict) or state.get("enabled") is not True \
+                    or state.get("saved_curve") != old_snapshot:
+                return
+            stamp = (f"{time.strftime('%Y%m%d-%H%M%S')}-"
+                     f"{time.time_ns() // 1000 % 1_000_000:06d}-{os.getpid()}")
+            backup = f"{MAX_FANS_PATH}.before-idle-curve-{stamp}"
+            suffix = 0
+            while os.path.exists(backup):
+                suffix += 1
+                backup = f"{MAX_FANS_PATH}.before-idle-curve-{stamp}-{suffix}"
+            shutil.copy2(MAX_FANS_PATH, backup)
+            state["saved_curve"] = new_snapshot
+            _write_json(MAX_FANS_PATH, state)
+
+
 def _loaded_profile_ok(p):
     """True when a profile read from disk is safe to hand to the rest of the app.
 
@@ -351,13 +443,15 @@ def _sanitize_store(store):
     if not isinstance(store, dict) or not isinstance(store.get("profiles"), list):
         return None, True
     good, seen = [], set()
+    curve_migrated = False
     for p in store["profiles"]:
         if _loaded_profile_ok(p) and p["name"] not in seen:
             seen.add(p["name"])
+            curve_migrated = _migrate_builtin_fan_curve(p) or curve_migrated
             good.append(p)
     if not good:
         return None, True
-    changed = len(good) != len(store["profiles"])
+    changed = len(good) != len(store["profiles"]) or curve_migrated
     active = store.get("active")
     if not isinstance(active, str) or active not in seen:
         active = "Balanced" if "Balanced" in seen else good[0]["name"]
@@ -429,6 +523,8 @@ def load_store(create=True):
         if "max_fans" not in p:
             p["max_fans"] = bool(p.get("builtin") and shipped.get(p["name"], {}).get("max_fans"))
         _migrate_boondock_hooks(p)
+    if create:
+        _migrate_enabled_max_fans_snapshot(store)
     return store
 
 
