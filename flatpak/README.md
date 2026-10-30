@@ -57,17 +57,17 @@ It also appears in the KDE app launcher under *System / Hardware Settings*.
 | `--share=ipc` `--socket=wayland` `--socket=fallback-x11` `--device=dri` | Standard Qt GUI |
 | `--talk-name=org.freedesktop.Notifications` | Tray notifications |
 | `--talk-name=org.kde.StatusNotifierWatcher` | Tray icon on Plasma |
-| `--system-talk-name=org.shadowblip.InputPlumber` | Side-button D-Bus signals + setting `InterceptMode` / `SetTargetDevices` |
+| `--system-talk-name=org.shadowblip.InputPlumber` | Legacy side-button D-Bus fallback on systems where InputPlumber owns the button |
 | `--filesystem=/sys:ro` | Direct hwmon reads (`SensorReader` walks `/sys/class/hwmon/`) |
 | `--filesystem=xdg-config/z13-helper:create` | Persisted config at `~/.var/app/io.github.iannitram.Z13Helper/config/z13-helper/` (XDG-compliant inside the sandbox) |
-| `--talk-name=org.freedesktop.Flatpak` `--filesystem=~/.local/bin:ro` | `flatpak-spawn --host z13ctl …` — the host binary needs to be reachable from inside the sandbox |
+| `--talk-name=org.freedesktop.Flatpak` `--filesystem=~/.local/bin:ro` | `flatpak-spawn --host` for z13ctl and the host-side evdev reader; exposes the host CLI path |
 
 ## How the sandbox reaches host hardware
 
-`z13ctl` lives on the host because it touches asus-wmi sysfs, hidraw RGB
-devices, ryzen_smu MSRs, ACPI power_supply, and asus-armoury firmware
-attributes — none of which are accessible from a sandbox no matter what
-permissions you grant.
+`z13ctl` lives on the host because its control writes use host interfaces such as
+asus-wmi, hidraw RGB devices, ryzen_smu MSRs, ACPI power_supply, and asus-armoury
+firmware attributes. The app reads hwmon sensors directly through the read-only
+`/sys` grant, but does not write control interfaces from the sandbox.
 
 The trick: `flatpak-spawn --host` runs a command on the host with the host's
 permissions, returning stdout/stderr to the sandboxed caller. The
@@ -76,8 +76,15 @@ permissions, returning stdout/stderr to the sandboxed caller. The
 invocation. From the host's perspective it's the same as running `z13ctl` in
 a terminal.
 
-System D-Bus access (for InputPlumber) goes through Flatpak's
-`xdg-dbus-proxy`, filtered by the `--system-talk-name` rule.
+The side-button reader normally runs on the host through `flatpak-spawn --host` and
+reads evdev directly. System D-Bus access for the legacy InputPlumber fallback goes
+through Flatpak's `xdg-dbus-proxy`, filtered by the `--system-talk-name` rule.
+
+Power-limit slider bounds come from the active kernel interface's per-rail
+`min_value`/`max_value` metadata. The app probes this metadata on the host because
+Flatpak's `os.access` view of sysfs write permissions is not reliable. It never
+reads the live Armoury `current_value` nodes; if the metadata probe is unavailable,
+the UI uses the legacy 5–93 W range.
 
 ## Caveats
 

@@ -2,7 +2,7 @@
 
 Everything you need to work here is in this repo. The full pipeline and rules (`PIPELINE.md`, `RULES.md`, `RUBRIC.md`, `roles/`) live in the owner's private pipeline repo; this is the short copy.
 
-1. **Find the stage** in `PIPELINE.md`. The spec is `SPEC.md`, the plan `ROADMAP.md`, the code map `docs/code-map.md`.
+1. **Find the stage** in `PIPELINE.md`. The spec is `SPEC.md`, the plan `docs/ROADMAP.md`, the code map `MAP/README.md` (Decky detail: `MAP/decky.md`).
 2. **Work from an issue.** Take one that is not `in-progress` and not blocked; add `in-progress` before you start. Its body is your brief; an Easy issue has a "Qwen brief" section with the expected results and the code map snippet.
 3. **Your own platform's issues first.** Mac, Windows and Linux all matter: say which you built on.
 4. **Check that it builds**, then open the PR. CI and a review by another satellite with another model do the rest.
@@ -14,6 +14,10 @@ Everything you need to work here is in this repo. The full pipeline and rules (`
 ## This project
 
 Cold-start orientation for Claude Code working in this repo. Read this first.
+
+**Current repair release: 0.5.1 (2026-10-30).** See [`docs/releases/0.5.1.md`](docs/releases/0.5.1.md)
+for PR dependencies, automated checks, device evidence and remaining verification. Desktop,
+Decky package and Flatpak AppStream versions must agree. This release does not complete the 1.0 spec.
 
 **Renamed 2026-10-15 (v0.5.0):** Z13 Controller → **Z13-Helper** (after G-Helper). Flatpak
 `io.github.z13.Controller` → `io.github.iannitram.Z13Helper`, `z13-controller.service` →
@@ -73,15 +77,23 @@ decky/                             ← Game Mode QAM plugin (installs to ~/homeb
 ## Fans: what the firmware actually does (learned 2026-10-09, cost a day)
 
 - Every curve **change** stops the fans ~5–10 s while the firmware re-ramps. Normal.
-- Below the curve's **first point** the fans idle (with hysteresis) — so Max Fans' curve starts at 20 °C.
+- Low-temperature behaviour varies: Max Fans and the built-in Balanced/Turbo curves start at 20 °C.
+  Exact legacy built-ins and matching enabled restore snapshots migrate with backups. Cached
+  curve-enabled readback does not prove physical fan response on kernel 7.2.
 - The firmware can ignore a bare curve write (fans at 0 RPM, curve "enabled"); only **platform-profile
   rewrite + curve** reliably recovers. All watchdog recovery uses that.
 - **The tach can lie:** a stopped fan can keep reporting its last RPM (left fan, 8700, frozen). Healthy
-  readings jitter every tick; one fan's reading unchanged 90 s ⇒ re-assert. Logic: `src/fan_watchdog.py`, the
+  readings alone are insufficient: recovery needs corroborating fan movement and rising temperature,
+  with bounded attempts. Logic: `src/fan_watchdog.py`, the
   only copy: Decky imports it from its `py_modules/` (installed root-owned by `install.sh`; see
   `docs/adr/0001-decky-imports-root-owned-copies.md`). Domain terms: `GLOSSARY.md`.
 - `z13ctl profile --get` says `custom` under 1.4.2; read the firmware profile from
   `/sys/firmware/acpi/platform_profile`.
+- Profile apply holds shared Max Fans enforcement off during hardware writes and publishes it on
+  only after the intended full-speed curve succeeds. Queued recovery rechecks current intent.
+  App profiles and z13ctl named profiles remain separate (#23); fan-only applies probe and safely
+  clear stale backend default-`custom` TDP before activating curves. Range discovery uses host-side
+  permission checks and range metadata, never live Armoury `current_value` reads.
 
 ## The side-button issue (the headline bug)
 

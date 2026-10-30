@@ -1,82 +1,87 @@
 # Code map
 
-The whole repo, one row per module: what it owns, who calls it and which Must it serves (SPEC.md). The Decky plugin's file-level detail is in [`decky.md`](decky.md). Describes commit: `6ccb861` (2026-10-28). Written 2026-10-26 from the tree at main, refreshed the same night after the merges of #49 (Decky profile switch) and #3 (Game Mode report), and checked against main again on 2026-10-28: no code has changed since, so the file rows below stand; the Decky detail in `decky.md` matches every listed file's blob.
+This map describes the functional source tree at `8c857cd` (2026-10-30), with the 0.5.1 release metadata and documentation revision. It is a map of this checkout, not a claim that every change has merged. Current review status: PRs #89, #92, #93, #95 and #97 are open; #97 is stacked on #93. Device verification remains separate from automated tests; the [release record](../docs/releases/0.5.1.md) records which Desktop checks have passed and which Game Mode, resume and cold-boot checks remain pending. The Decky flow has its own map in [`decky.md`](decky.md).
 
-Platforms (R04): Linux only, SteamOS on the GZ302 Z13. Nothing here is meant for Mac or Windows: hardware goes through `z13ctl` (ASUS firmware), and Game Mode is SteamOS's. CI (`.github/workflows/tests.yml`, push and pull request, Python 3.12) runs the logic tests on `ubuntu-latest`: `python3 -m pytest` and `python3 -m unittest discover -s decky/tests`. The device checks are the owner's (verification protocol, `docs/ROADMAP.md` §12).
-
-## How it fits together
+## System connections
 
 ```mermaid
 flowchart TD
     Main[main.py] --> Dash[src/dashboard_ui.py]
     Dash --> PC[src/profile_control.py]
     Dash --> FW[src/fans_window.py]
-    Dash --> UD[src/updates_dialog.py]
-    FW --> PC
-    PC --> AW[src/apply_worker.py]
+    PC --> Worker[src/apply_worker.py]
     PC --> Prof[src/profiles.py]
     PC --> HC[src/hardware_controller.py]
-    PC --> MF[src/max_fans_state.py]
-    PC --> Watch[src/fan_watchdog.py]
-    HC --> Host[src/host.py]
-    Prof --> Host
-    Host --> Z[z13ctl CLI / daemon]
-    UD --> UW[src/update_watch.py]
-    UD --> IR[src/install_record.py]
-    UD --> Inst[src/installers.py]
-    Decky[decky/main.py + decky/src] --> Store[(~/.config/z13-helper: config.json, profiles.json, max-fans.json)]
-    Prof --> Store
-    MF --> Store
-    Decky -->|runuser deck: z13-profile| Prof
-    Install[install.sh + tooling/install_check.py] --> Pack[packaging/host: systemd, udev, polkit, asusd]
+    Prof --> Host[src/host.py]
+    HC --> Host
+    Host -->|Flatpak: flatpak-spawn --host| CLI[z13ctl CLI / daemon]
+    Prof -->|z13-profile host CLI| CLI
+    PC -->|reads/writes| ProfileStore[(profiles.json)]
+    PC -->|reads/writes| MaxStore[(max-fans.json)]
+    Watch[src/fan_watchdog.py] -->|reads sensors and shared intent| MaxStore
+    Watch -->|queued recovery through worker| HC
+    Sensors[src/sensor_reader.py] -->|hwmon reads only| HW[Kernel hwmon]
+    PowerRange[src/power_range.py] -->|range metadata only| Armoury[Armoury attributes]
+    PowerRange -->|Flatpak metadata probe via host.py| Host
+
+    DeckyUI[decky/src React panel] --> Callable[decky/src/backend.ts]
+    Callable --> Backend[decky/main.py backend, runs as deck]
+    Backend -->|profile apply as deck| Prof
+    Backend -->|host.run| CLI
+    Backend -->|reads/writes| ProfileStore
+    Backend -->|reads/writes| MaxStore
+    Install[install.sh / tooling/install_check.py] --> Copies[host CLI and Decky py_modules copies]
 ```
 
-Both frontends read the same files under `~/.config/z13-helper/` and never cache them (principle 3). All hardware writes leave through `src/host.py` to `z13ctl` (principle 1).
+The desktop Flatpak and Decky are two frontends to the same profile and Max Fans files under `~/.config/z13-helper/`. They read those files when needed; transient UI state such as a pending profile selection and watchdog counters remain in memory. The z13ctl daemon has its own persisted custom-profile state under `~/.local/state/z13ctl/`, separate from the app's profile store. The profile engine explicitly applies or resets z13ctl curves and clears stale custom TDP state when required; the two stores are not interchangeable.
 
-## Desktop app (`main.py`, `src/`)
+`src/host.py` selects its execution mode once per process. Flatpak calls use `flatpak-spawn --host`; the host `z13-profile` CLI runs directly as the invoking user; Decky runs as the `deck` user with that session's runtime environment. `runuser -u deck` is used only for a root process that explicitly requests `as_deck=True`, not for every Decky command. The Decky plugin includes root-owned copies of shared Python helpers under `py_modules/`; the backend itself runs as `deck`.
 
-| Module | Owns | Called by | Musts |
-|---|---|---|---|
-| `main.py` | entry point: logging, single instance, install record | Flatpak `launch.sh` | all |
-| `src/dashboard_ui.py` | main window (G-Helper Settings form): tiles, profile dropdown, lighting, battery, footer | `main.py` | M1, M3, M4 |
-| `src/fans_window.py`, `src/fan_curve_widget.py` | Fans + Power window, the 8-point curve editor, PL1/PL2/PL3 sliders | `dashboard_ui` | M1, M2 |
-| `src/profile_control.py` | profile store + live pushes shared by both windows | `dashboard_ui`, `fans_window` | M1, M2, M6 |
-| `src/profiles.py` | named profiles, the write order (principle 4), `z13-profile` CLI, lightbar recovery | `profile_control`, `tooling/profiles/*`, Decky (as deck) | M1, M6, M8, M10 |
-| `src/apply_worker.py` | one background thread that runs hardware writes in order | `profile_control` | M1, M6 |
-| `src/hardware_controller.py` | brightness, battery, TDP and curve calls through `host` | `profile_control`, `dashboard_ui` | M1, M8 |
-| `src/host.py` | the one way to run a host command (Flatpak-spawn aware) | `hardware_controller`, `profiles`, `update_watch`, `installers` | all |
-| `src/max_fans_state.py` | Max Fans file shared with Decky (locking, atomic writes) | `profile_control`, Decky copy | M2 |
-| `src/fan_watchdog.py` | keeps the asked-for curve running (fan-stall and curve-drop recovery) | `profile_control` | M2, M6 (curve-drop branch retires once the daemon re-applies), M10 (#30) |
-| `src/sensor_reader.py`, `src/power_range.py` | temperatures, fan RPM, per-rail limit ranges (read only) | `dashboard_ui`, `fans_window` | M1 |
-| `src/screen_brightness.py` | built-in display backlight | `dashboard_ui` | M3 |
-| `src/evdev_listener.py` | Armoury Crate side button | `dashboard_ui` | M3 |
-| `src/update_watch.py`, `src/updates_dialog.py` | upstream watch + Updates window | `dashboard_ui` | M4, M7 |
-| `src/install_record.py`, `src/installers.py` | what `install.sh` recorded; Repair and Install/Update buttons | `updates_dialog` | M4, M7 |
-| `src/app_log.py`, `src/log_dialog.py` | crash and error log, Help -> Error log | everything | all |
-| `src/config_manager.py`, `src/single_instance.py`, `src/theme.py` | settings file, single-instance guard, G-Helper look | `main.py`, windows | all |
+## Desktop app and shared engine
 
-## Game Mode (`decky/`)
+| Module | Responsibility and connections |
+|---|---|
+| `main.py` | Process entry point, logging, single-instance guard and Qt application. |
+| `src/dashboard_ui.py` | Main window, profile picker, Max Fans control, telemetry and tray behavior; opens Fans + Power. |
+| `src/fans_window.py`, `src/fan_curve_widget.py` | TDP/PL1-PL3 and Curve Optimizer controls, fan curve editor, and range-aware power sliders. |
+| `src/profile_control.py` | Shared profile model for both desktop windows; persists edits and dispatches live field updates through `ApplyWorker`. |
+| `src/apply_worker.py` | Serial background queue for desktop hardware work, including profile applies and watchdog recovery. |
+| `src/profiles.py` | Profile schema and JSON store, built-ins and migrations, `z13-profile` CLI, ordered profile apply, and lightbar recovery. Used by the app and installed host CLI; Decky invokes that same CLI for app-profile changes. |
+| `src/max_fans_state.py` | Shared Max Fans intent and saved-curve snapshot in `max-fans.json`, with inter-process locking and atomic writes. |
+| `src/fan_watchdog.py` | Shared Desktop/Game Mode recovery rules. In the desktop app, recoveries use the worker queue; stale dropped-curve recoveries are canceled if the queued profile operation has already changed Max Fans intent or restored a curve. |
+| `src/sensor_reader.py` | Read-only hwmon temperatures, fan RPM, custom-curve mode and points. It does not write hardware. |
+| `src/power_range.py` | Determines per-rail slider bounds from kernel min/max metadata and z13ctl's backend selection rules. It never reads a live PPT `current_value`. |
+| `src/hardware_controller.py` | z13ctl command wrappers for profile, fan, power, battery, lighting and Curve Optimizer operations. |
+| `src/host.py` | Shared command seam for Flatpak, host, and Decky contexts. |
+| `src/config_manager.py`, `src/install_record.py`, `src/single_instance.py`, `src/theme.py` | App preferences, install metadata/logging choice, one-process coordination and styling. |
+| `src/update_watch.py`, `src/updates_dialog.py`, `src/installers.py` | Upstream checks, updates/repair UI and installation actions. |
+| `src/screen_brightness.py`, `src/evdev_listener.py` | Built-in display brightness and the Desktop Mode side-button reader. |
 
-`decky/main.py` is the root backend (a copy of the profile, Max Fans and lightbar logic, run as deck for user-session calls). `decky/src/` is the QAM panel (profile switch, power limits, battery limit, keyboard brightness, telemetry). `decky/src/profileSwitch.ts` (merged, #16) is the pure switch flow behind the Profile dropdown: apply, then re-read the active profile and Max Fans; its tests run under plain Node (`decky/tests/profileSwitch.test.ts`). Detail: [`decky.md`](decky.md). Musts: M5, M6, M7 (the "SteamOS updated" line).
+### Profile apply and Max Fans ordering
 
-## Host side and tooling
+Profile state has two related but distinct pieces: `profiles.json` describes each profile's requested curve, while `max-fans.json` records the current Max Fans toggle and the curve to restore when it is turned off. When an apply begins with Max Fans enabled, it temporarily publishes the shared flag as off so the watchdog cannot pin the old 100% curve over the transition. It then writes the base platform profile, applies power settings, and writes the selected curve (or the 100% curve). For a Max Fans target, the flag becomes on only after the 100% curve command succeeds. If the base profile changed but power cleanup or curve application fails, the flag remains off; if the base command itself fails, the prior enabled intent is preserved. The shared recovery code also rechecks intent before reapplying a dropped curve and before the final 100% write.
 
-| Path | Owns | Musts |
-|---|---|---|
-| `install.sh`, `tooling/install_check.py` | install, `--repair`, `verify`; keep-list registration | M4, M7 |
-| `packaging/host/` | systemd units (fan resume, lightbar reset, z13ctl perms, button watcher, profile restore), udev, polkit, asusd | M1, M2, M8 |
-| `tooling/profiles/` | `z13-max/balanced/cool` thin wrappers, `z13-restore-profile` | M1 |
-| `tooling/boondock` | the local-LLM stack launcher (cleanup in M8) | M8 |
-| `tooling/z13ctl-install/` | vendored z13ctl tarball (rollback copy) | M6 |
-| `tooling/post-update/` (planned) | post-update recipes: one `check` + `apply` per task | M7 |
-| `tooling/diag/`, `tooling/z13_*.py` | diagnostics and Game Mode reports; `tooling/z13_gamemode_report.py` (merged, #3) reads a Game Mode session back from local logs (tests: `tests/test_gamemode_report.py`) | M9, M10 |
-| `tooling/z13-button-watcher`, `tooling/z13_qam.py`, `tooling/z13_cdp.py`, `tooling/spike1_qam_test.py` | the side-button watcher and the QAM/CDP probes used for Game Mode checks | M3, M5 |
-| `tests/`, `decky/tests/` | pytest logic tests in `tests/` (30 files, CI, `ubuntu-latest`; `pytest.ini` collects only `tests/`), the Decky backend tests (`decky/tests/test_backend.py`, not collected by pytest, but CI runs them with `unittest discover -s decky/tests`) and the Node test for `profileSwitch.ts` (run by hand: `node --test decky/tests/profileSwitch.test.ts`; CI does not run it); `tests/README.md` describes the suite's guard and lists some of the pytest files (not all 30) | all |
-| `flatpak/` | the Flatpak build and launcher | all |
+The built-in Balanced and Turbo curve migration only changes a profile when name, built-in marker, base profile and full old curve all match. An edited or custom profile is preserved. If Max Fans is enabled and its saved raw-PWM snapshot exactly matches the active built-in's old curve, the matching snapshot is migrated too; unrelated, absent, disabled or `null` snapshots remain as they were. Curve points from 40 °C upward preserve the old interpolation; a duplicate low-temperature anchor defines the first plateau below 40 °C. This is a mitigation for the observed low-temperature behavior, not a proven firmware root cause.
 
-## Open-source pieces
+## Power-range selection and safety
 
-- [`z13ctl`](https://github.com/dahui/z13ctl): the only hardware writer. Named profiles and its event socket are M6's base.
-- [Decky Loader](https://github.com/SteamDeckHomebrew/decky-loader): Game Mode host for the plugin.
-- [G-Helper](https://github.com/seerge/g-helper): the layout and behaviour reference (Phase 9).
-- steamos-manager remotes: the route for Steam's own controls, which is #29 and comes after 1.0.
+`power_range.detect_ranges()` mirrors z13ctl 1.4.2 backend selection: Armoury is selected when PL1's `current_value` node exists, is writable from the host, and has sane positive min/max metadata. It reads only `min_value` and `max_value` for each available rail (`ppt_pl1_spl`, `ppt_pl2_sppt`, `ppt_pl3_fppt`); it never reads the value stored in `current_value`. If called inside Flatpak, a stdlib-only probe runs through `host.run()` on the host because sandbox permission checks on sysfs can falsely report that Armoury is not writable. Per-rail missing or malformed metadata uses the broad 5–93 W UI fallback because the slider API requires a bound for every rail. The legacy `asus-nb-wmi` path uses that same 5–93 W bound.
+
+The desktop Fans + Power window and Decky `power_state()` display stored profile overrides clamped for the selected kernel range without rewriting the saved profile. A profile value outside that range produces a note; moving a slider saves the shown values. With no profile override, frontends show an explicit unset/default state rather than implying that fallback slider numbers are active hardware limits. z13ctl remains the hardware writer. Avoid polling Armoury `current_value` for telemetry or UI display: the EC access can hang on affected resume paths.
+
+## Decky/Game Mode
+
+`decky/main.py` exposes callable methods to the QAM panel and imports shared `fan_watchdog.py`, `sensor_reader.py`, `host.py` and `power_range.py` from the plugin's installed `py_modules/` copies. It serializes its writes with an asyncio lock and runs blocking host work in threads. In Game Mode it runs the shared fan watchdog; in Desktop Mode it stands down while the resident PyQt app owns that watchdog. App-profile selection invokes the installed `z13-profile` CLI, which is the same engine used by the desktop app. Direct performance-profile, TDP, charge-limit, brightness and telemetry calls remain separate Decky API methods. See [`decky.md`](decky.md) for the flow and persisted state details.
+
+## Host installation, tests and references
+
+| Path | Responsibility |
+|---|---|
+| `install.sh`, `tooling/install_check.py` | Manifest-driven host install/repair and verification. The install copies `src/profiles.py` as `z13-profile`, `src/host.py` beside it, and shared helpers into Decky's `py_modules/`. |
+| `packaging/host/` | Reference systemd, polkit and udev files; the z13ctl setup owns its permissions unit and udev rule. |
+| `tooling/profiles/`, `tooling/boondock` | Compatibility wrappers and Boondock's hardware/session commands. Built-in profile hooks use its session-only commands. |
+| `tooling/diag/`, `tooling/z13_*.py` | Read-only or explicitly invoked diagnostics and Game Mode reporting. |
+| `tests/`, `decky/tests/` | Pytest logic tests, Decky `unittest` tests, and the separate Node test for `profileSwitch.ts`. CI runs pytest and Decky unittest; it does not run the Node test. |
+| `flatpak/` | Flatpak manifest, runtime setup and build script. |
+
+`z13ctl` is the sole hardware command backend. Decky Loader provides the Game Mode QAM surface; G-Helper informs the desktop layout and interaction model. The device verification checklist is in [`docs/ROADMAP.md`](../docs/ROADMAP.md); automated tests do not replace pending on-device checks.

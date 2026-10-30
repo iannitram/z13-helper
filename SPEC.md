@@ -6,6 +6,12 @@
 
 A Must or a Won't changed after approval sends the line above back to "not yet".
 
+**Implementation status, 2026-10-30:** 0.5.1 repairs fan/power regressions; it is not 1.0 sign-off.
+The approved Musts and Won'ts below are unchanged. #60 is fixed via PR #83, while #58 is partly
+resolved. Current evidence, review dependencies and outstanding device checks are recorded in
+[`docs/releases/0.5.1.md`](docs/releases/0.5.1.md). In particular, #23 and #27 remain unfinished;
+non-zero/cached RPM or curve-enabled state alone is insufficient evidence of fan response.
+
 ## Musts
 
 "On the Z13" in a check means the owner's device, so the check is marked `needs-owner-device`. Logic checks run in CI (`python3 -m pytest`, `python3 -m unittest discover -s decky/tests`).

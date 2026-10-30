@@ -1,3 +1,5 @@
+> **Historical manual, not current setup instructions.** This Part 2 records an early manual z13ctl setup and predates the integrated Z13-Helper app, the current profile engine, and z13ctl 1.4.2. Its “current” claims and step-by-step commands describe the environment at the time it was written. For current install and repair steps, use the repository [`README.md`](../README.md), [`docs/ROADMAP.md`](ROADMAP.md), and the app's live hardware-range detection. Do not treat old range assumptions or install commands below as current.
+
 Below is **Manual Part 2**. This continues from Part 1 and focuses on **Z13 hardware enablement, ASUS/Linux control tooling, and safe profile switching**. This section follows your pasted requirement that hardware/software support claims must be verified before manual instructions are written.
 
 * * *
@@ -50,7 +52,7 @@ That restraint is deliberate. First we make the hardware-control layer work. The
 
 ## 1.1 Device-specific tooling
 
-The best currently verified tool for this specific machine appears to be `z13ctl`, not generic ASUS tooling. `z13ctl` is written specifically for the **2025 ASUS ROG Flow Z13** and documents control for RGB lighting, performance profiles, battery charge limit, fan curves, TDP, CPU undervolting, and display settings. Its documentation says it uses ASUS HID through Linux `hidraw`, and standard `asus-wmi` / `asus-armoury` sysfs interfaces for system settings. (GitHub) `z13ctl` currently documents the 2025 Flow Z13 USB IDs as `0b05:18c6` and `0b05:1a30`, and it provides an explicit `--dry-run` setup path. That matters because we can preview the privileged changes before applying them. (Jeff Hagadorn) The latest GitHub release page I found shows `z13ctl` **v1.1.6**, dated April 6, 2026, with fixes related to permission persistence for boot sound and screen overdrive. That is recent enough to take seriously, but it is still a community tool, not ASUS official software. (GitHub)
+At the time this manual was drafted, the latest release checked was `z13ctl` v1.1.6. That version reference and its setup guidance are historical; the current app install uses z13ctl 1.4.2. Current slider bounds are detected from each kernel rail's metadata on the host (with a legacy range fallback), not assumed from the manual's examples. `z13ctl` remains a community tool, not ASUS official software.
 
 ## 1.2 Generic ASUS Linux tooling
 

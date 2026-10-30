@@ -9,7 +9,7 @@ The PyQt tray app, run as a Flatpak in Desktop Mode.
 _Avoid_: dashboard, GUI, controller app
 
 **Decky plugin**:
-The Game Mode Quick Access Menu plugin. Its backend runs as root on the host.
+The Game Mode Quick Access Menu plugin. Its backend currently runs as the `deck` user on the host; shared Python modules are installed as root-owned files.
 _Avoid_: QAM plugin, decky backend
 
 **Frontend**:
@@ -32,15 +32,15 @@ _Avoid_: power profile, firmware profile
 ## Fans
 
 **Fan curve**:
-Eight temperature→speed points the firmware follows. Below the first point the fans idle.
+Eight temperature→speed points requested from the firmware. The reported custom-curve-enabled bit describes the selected mode; it does not prove the fans physically follow the curve.
 _Avoid_: fan profile
 
 **Max Fans**:
-A user toggle that pins the fan curve at 100% from 20 °C. Turning it off restores the curve that was running before.
+A user toggle that requests a 100% curve from 20 °C. Turning it off restores the saved custom curve, or returns to firmware auto when the saved curve is explicitly empty. The shared flag is suspended during profile applies, and stale watchdog recoveries are canceled when Max Fans turns off.
 _Avoid_: full fans, turbo fans
 
 **Fan watchdog**:
-The periodic check that the fan curve the user asked for is actually running, and the trigger for fan recovery when it isn't.
+The periodic check for signs that the requested fan mode or fan response has been lost, and the trigger for fan recovery. Mode bits and tach readings are evidence, not direct proof of physical fan motion.
 _Avoid_: Max Fans enforcer, fan monitor
 
 **Fan recovery**:
@@ -57,7 +57,7 @@ The curve asks for at least half speed, but both fans read 0 RPM for consecutive
 No custom curve (firmware auto, Max Fans off), the APU at 65 °C or more, and both fans at 0 RPM for 20 s. Recovered by a platform profile rewrite, then the active profile's TDP and a curve reset; never by re-running profile hooks.
 
 **Frozen tach**:
-One fan's RPM reading stays exactly the same for 90 s while the curve asks for speed. It means the fan has likely stopped and its reported speed is out of date.
+One fan's RPM reading stays exactly the same for 90 s while the curve asks for speed. This stale reading was observed on the device and is used as a likely-stall signal; it does not by itself prove the fan has stopped.
 _Avoid_: stuck fan
 
 ## Lighting

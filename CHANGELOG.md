@@ -16,6 +16,55 @@ the device but not yet verified on the Z13. Plan and status: `docs/ROADMAP.md`.
 
 ## Unreleased
 
+No changes queued after the 0.5.1 repair release.
+
+## 0.5.1 — 2026-10-30
+
+### Fixed
+- **Power ranges match the backend.** Armoury takes precedence when z13ctl can
+  use it, even when legacy nodes coexist. Flatpak probes host permissions and
+  per-rail range metadata; it never opens live `current_value` files. Power
+  controls without a stored override show **Not set** in both frontends
+  (PRs #89, #92; issue #90).
+- **Fan-only profiles no longer revive stale power limits.** After selecting
+  the platform profile, the engine capability-probes the daemon and clears an
+  inactive default `custom` profile's old TDP before activating its curve.
+  Failed cleanup blocks curve activation and leaves Max Fans enforcement off after a successful base switch
+  (PR #93; issue #91).
+- **Built-in curves cover idle temperatures.** Untouched Turbo and Balanced
+  curves gain a 20°C anchor while retaining their mathematical response from
+  40°C upward. Exact matching protects edited/custom profiles; matching enabled
+  Max Fans restore snapshots migrate too. Both original files are backed up;
+  read-only loads do not write (PR #95; issue #94).
+- **Stale Max Fans recovery is canceled around profile switches.** The shared
+  enforcement flag is suspended during apply and ON is published only after a
+  successful 100% curve write. Queued and in-flight recoveries recheck intent;
+  actual stall recovery remains enabled (PR #97, stacked on #93; issue #96).
+- The earlier no-curve profile `NameError` and wrong-owner test fixture fixes
+  are included from main (PR #83 / issue #60 and the #58 fixture repair).
+
+### Release identity and documentation
+- Desktop, Decky package and Flatpak AppStream metadata now agree on **0.5.1**.
+- Current code maps, connection diagrams, component manuals and verification
+  status describe the repair snapshot. Historical releases and phase plans
+  retain their original dates and versions.
+
+### Verification and limits
+- Functional repair snapshot `8c857cd`: **679 pytest tests**, **80 backend
+  tests**, five frontend tests, Decky build and **58 installer checks** passed
+  on SteamOS 3.9.5 / kernel 7.2, GZ302EA. All five functional PR CI runs passed.
+- Installed desktop-handler ON→OFF→ON checks reduced reported fan speeds from
+  about 8,700–8,800 to 5,600–6,000 RPM within 15 seconds, holding through one
+  minute. Two resident-app CLI Turbo→Balanced→Turbo checks produced about
+  3,800–4,200 RPM in Balanced and restored full speed in Turbo, without the
+  conflicting watchdog writes. Turbo reported 70/86/86 W configured limits;
+  these are not workload power measurements.
+- The curve change is a measured mitigation, not a proven firmware/kernel
+  diagnosis. Suspend/resume, cold boot, interactive Game Mode and load/soak
+  checks remain open in #86. This release does not claim 1.0 completion.
+
+The entries below were previously under Unreleased and are included in 0.5.1.
+
 ### Added
 - **`z13-gamemode-report`** (`tooling/z13_gamemode_report.py`, installed to `~/.local/bin`). Reads
   the last Game Mode session(s) back from local logs: when it ran, games played, the Decky
@@ -43,12 +92,13 @@ the device but not yet verified on the Z13. Plan and status: `docs/ROADMAP.md`.
 - **SteamOS updater tool names:** check for `holo-update` first, falling back to
   `steamos-update` on older installs. Both update checks and installs use the
   same shared helper; Flatpak installer runs carry its matching source to the
-  host. Hardware setup notes show both readonly-tool names. On-device check pending.
+  host. Hardware setup notes show both readonly-tool names. Updater execution on-device check pending.
 - **One host-command seam** (`src/host.py`) for the desktop app, the `z13-profile` CLI and the
   Decky plugin. It replaces five hand-rolled runners and three `_in_flatpak()` copies, and gives
   every Decky child the deck env (incl. the `LD_LIBRARY_PATH` fix) in one place. `install.sh`
   installs it to `~/.local/lib/z13-helper/` (for `z13-profile`) and into Decky's `py_modules/`;
-  run `./install.sh --repair` after updating. On-device check pending.
+  run `./install.sh --repair` after updating. Host profile, installed desktop and repair paths
+  checked on 2026-10-30; interactive Game Mode and resume checks remain pending.
 
 ## 0.5.0 — 2026-10-15
 
