@@ -1072,11 +1072,22 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
     #    because z13ctl otherwise defaults it to high.
     lighting = profile.get("lighting") or {}
     br = profile.get("brightness")
-    # Set unmodified devices' brightness first; profile mode/colour changes follow
-    # as the final lighting writes for each device.
+    # Apply one write per device in the established keyboard-then-lightbar order,
+    # whether the profile requests a mode or only a brightness change.
     for dev in LIGHTING_DEVICES:
         setting = lighting.get(dev)
-        if br and not setting:
+        if setting:
+            level = br or "high"
+            argv = lighting_argv(dev, setting, level, z13ctl)
+            rc, out, timed_out = host.run(argv, timeout=Z13CTL_WRITE_TIMEOUT_S)
+            if timed_out:
+                out = f"z13ctl write timed out after {Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)"
+            results.append((f"lighting ({dev})", rc == 0,
+                            f"{setting['mode']} / {setting['color']} / {level}" if rc == 0
+                            else (out or f"rc={rc}")))
+            if timed_out:
+                return results
+        elif br:
             argv = [z13ctl, "--device", dev, "brightness", br]
             rc, out, hit_timeout = host.run(argv, timeout=Z13CTL_WRITE_TIMEOUT_S)
             timed_out = hit_timeout
@@ -1105,20 +1116,6 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
                     else:
                         out = f"{out}; {rec_msg}"
             results.append((f"brightness ({dev})", rc == 0, br if rc == 0 else (out or f"rc={rc}")))
-            if timed_out:
-                return results
-
-    for dev in LIGHTING_DEVICES:
-        setting = lighting.get(dev)
-        if setting:
-            level = br or "high"
-            argv = lighting_argv(dev, setting, level, z13ctl)
-            rc, out, timed_out = host.run(argv, timeout=Z13CTL_WRITE_TIMEOUT_S)
-            if timed_out:
-                out = f"z13ctl write timed out after {Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)"
-            results.append((f"lighting ({dev})", rc == 0,
-                            f"{setting['mode']} / {setting['color']} / {level}" if rc == 0
-                            else (out or f"rc={rc}")))
             if timed_out:
                 return results
 

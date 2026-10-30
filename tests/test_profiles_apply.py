@@ -80,9 +80,11 @@ def test_lighting_mode_argv_is_per_device_in_profile_order(profiles_env, fake_ho
                 "--color", "cyan", "--brightness", "medium"]
     assert expected in fake_host.argvs
     # Battery follows lighting per the documented profile binding order; hooks follow all writes.
-    at = fake_host.argvs.index(expected)
-    assert fake_host.argvs[at + 1] == [Z, "batterylimit", "--set", "80"]
-    assert fake_host.argvs[at + 2] == ["bash", "-lc", "enter-cmd"]
+    light_writes = [argv for argv in fake_host.argvs if "--device" in argv]
+    assert [argv[argv.index("--device") + 1] for argv in light_writes] == ["keyboard", "lightbar"]
+    assert fake_host.argvs.index([Z, "batterylimit", "--set", "80"]) > max(
+        fake_host.argvs.index(argv) for argv in light_writes)
+    assert fake_host.argvs[-1] == ["bash", "-lc", "enter-cmd"]
     assert f"lighting ({device})" in names(results)
     assert all(ok for _, ok, _ in results)
     assert next(c for c in fake_host.calls if c.argv == expected).timeout == profiles.Z13CTL_WRITE_TIMEOUT_S
@@ -130,6 +132,26 @@ def test_battery_timeout_stops_enter_hook_after_canonical_lighting(profiles_env,
     assert not any("enter-cmd" in argv for argv in fake_host.argvs)
     assert results[-1] == (
         "battery limit", False,
+        f"z13ctl write timed out after {profiles.Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)",
+    )
+
+
+def test_keyboard_mode_precedes_lightbar_brightness_timeout(profiles_env, fake_host):
+    fake_host.fail(lambda argv: "--device" in argv and "lightbar" in argv
+                   and "brightness" in argv, rc=124, out="timed out after 20 s",
+                   timed_out=True)
+    p = full_profile(lighting={"keyboard": {"mode": "breathe", "color": "cyan"}})
+
+    results = profiles.apply(p, z13ctl=Z)
+
+    keyboard = [Z, "--device", "keyboard", "apply", "--mode", "breathe",
+                "--color", "cyan", "--brightness", "medium"]
+    lightbar = [Z, "--device", "lightbar", "brightness", "medium"]
+    assert fake_host.argvs.index(keyboard) < fake_host.argvs.index(lightbar)
+    assert fake_host.argvs[-1] == lightbar
+    assert not any("batterylimit" in argv or "enter-cmd" in argv for argv in fake_host.argvs)
+    assert results[-1] == (
+        "brightness (lightbar)", False,
         f"z13ctl write timed out after {profiles.Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)",
     )
 
