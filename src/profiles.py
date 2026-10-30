@@ -793,7 +793,7 @@ def clear_z13ctl_default_custom_tdp(*, z13ctl=Z13CTL):
     if not re.search(r"(?:^|,\s*)\d+W(?:,|$)", custom.group("description")):
         return True, None
 
-    rc, out, _ = host.run([z13ctl, "tdp", "--reset", "--profile", "custom"], timeout=120)
+    rc, out, _ = host.run([z13ctl, "tdp", "--reset", "--profile", "custom"], timeout=20)
     ok = rc == 0
     result = ("tdp", ok, "cleared saved z13ctl custom TDP" if ok else (out or f"rc={rc}"))
     return ok, result
@@ -851,12 +851,13 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
     #    (only on a real switch: restore/resume keeps whatever the user chose).
     curve = profile.get("fan_curve")
     tdp = profile.get("tdp")
+    initial_max_fans_on = bool(_max_fans_state().get("enabled"))
     released = False
     if previous is None or previous.get("name") != profile["name"]:
-        if profile.get("max_fans") and not _max_fans_state().get("enabled"):
+        if profile.get("max_fans") and not initial_max_fans_on:
             _save_max_fans(enabled=True)
         elif (previous or {}).get("max_fans") and not profile.get("max_fans") \
-                and _max_fans_state().get("enabled"):
+                and initial_max_fans_on:
             _save_max_fans(enabled=False)
             released = True
     max_fans_on = bool(_max_fans_state().get("enabled"))
@@ -876,6 +877,11 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
             if cleanup_result:
                 results.append(cleanup_result)
     if curve_write_needed and not tdp and not cleanup_ok:
+        # The base profile write releases a custom curve. Keep the shared flag
+        # from asking the watchdog to re-enable Max Fans (which would write an
+        # unverified custom profile). If the base write failed, preserve the
+        # state that was already in force before this attempted transition.
+        _save_max_fans(enabled=initial_max_fans_on if not base_ok else False)
         results.append(("fans", False,
                         "saved custom TDP could not be safely cleared; fan curve was not applied"))
     elif _max_fans_state().get("enabled"):

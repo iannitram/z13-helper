@@ -4,7 +4,9 @@ import json
 
 import pytest
 
+import max_fans_state
 import profiles
+from fan_watchdog import FanWatchdog
 from fake_host import FakeHost
 
 Z = "z13ctl"
@@ -133,6 +135,72 @@ def test_curve_without_tdp_is_skipped_when_custom_tdp_cleanup_fails(profiles_env
     assert [Z, "fancurve", "--set", profiles.curve_spec(CURVE)] not in fake_host.argvs
     assert ("fans", False,
             "saved custom TDP could not be safely cleared; fan curve was not applied") in results
+
+
+def test_failed_base_switch_restores_initial_max_fans_flag(profiles_env, fake_host):
+    fake_host.fail("profile --set", rc=1, out="profile switch failed")
+    p = bare_profile(name="Turbo", base="performance", max_fans=True)
+
+    results = profiles.apply(p, z13ctl=Z)
+
+    assert not max_fans_state.is_enabled()
+    assert [Z, "fancurve", "--set", profiles.MAX_FANS_SPEC] not in fake_host.argvs
+    assert ("fans", False,
+            "saved custom TDP could not be safely cleared; fan curve was not applied") in results
+
+
+def test_failed_cleanup_disables_max_fans_before_watchdog_tick(profiles_env, fake_host):
+    max_fans_state.save(enabled=True)
+    fake_host.fail("tdp --help", rc=0, out="Flags: --profile string")
+    fake_host.fail("profile --list", rc=0,
+                   out="Firmware profiles: quiet, balanced, performance\n"
+                       "Custom profiles:\n   custom              fan curve, 20W\n")
+    fake_host.fail("tdp --reset --profile custom", rc=1, out="daemon rejected reset")
+    p = bare_profile(name="Turbo", base="performance", max_fans=True)
+
+    results = profiles.apply(p, z13ctl=Z)
+
+    assert not max_fans_state.is_enabled()
+    assert ("fans", False,
+            "saved custom TDP could not be safely cleared; fan curve was not applied") in results
+    assert next(call for call in fake_host.calls if "tdp --reset" in " ".join(call.argv)).timeout == 20
+
+    class Sensors:
+        def custom_fan_curve_enabled(self):
+            return False  # the successful base-profile write left firmware auto active
+
+        def custom_fan_curve_points(self):
+            return None
+
+        def get_apu_temp(self):
+            return 40.0
+
+        def get_fan_speeds(self):
+            return 0, 0
+
+    class Controller:
+        calls = []
+
+        def rewrite_profile(self):
+            self.calls.append("rewrite_profile")
+
+        def set_fans_max(self):
+            self.calls.append("set_fans_max")
+
+        def set_fancurve_pwm(self, curve):
+            self.calls.append(("set_fancurve_pwm", curve))
+
+        def apply_tdp(self, tdp):
+            self.calls.append(("apply_tdp", tdp))
+
+        def reset_fancurve(self):
+            self.calls.append("reset_fancurve")
+
+    ctl = Controller()
+    watchdog = FanWatchdog(Sensors(), ctl, max_fans_on=max_fans_state.is_enabled)
+
+    assert watchdog.tick() is None
+    assert ctl.calls == []
 
 
 def test_curveless_max_fans_profile_clears_stale_custom_tdp(profiles_env, fake_host):
