@@ -36,6 +36,7 @@ def test_sampler_stops_if_process_identity_changes(tmp_path):
                     duration_hours=1, proc_root=proc_root)
     assert result == 2
     assert "STOP identity_changed samples=0" in output.read_text()
+    assert "COMPLETE" not in output.read_text()
     assert "plugin/main.py" not in output.read_text()
 
 
@@ -50,8 +51,9 @@ def test_sampler_writes_bounded_sample_for_the_expected_process(tmp_path):
     rows = output.read_text().splitlines()
     assert result == 0
     assert "max_samples=61" in rows[0]
-    assert len(rows) == 62
+    assert len(rows) == 63
     assert "sample=0 pid=42 start_ticks=22 rss_mib=4.0 mem_available_mib=8.0" in rows[1]
+    assert "COMPLETE samples=61 elapsed_s=0.0 max_duration_s=3600" in rows[-1]
     assert "plugin/main.py" not in output.read_text()
 
 

@@ -100,6 +100,9 @@ def sample(pid: int, expected_start_ticks: int, cmd_fragment: str,
                 break
             deadline = start + (index + 1) * interval_s
             sleep(max(0.0, deadline - monotonic()))
+        elapsed = monotonic() - start
+        _log_line(out, f"{_utc_now()} COMPLETE samples={sample_count} "
+                      f"elapsed_s={elapsed:.1f} max_duration_s={duration_s}")
     return 0
 
 
