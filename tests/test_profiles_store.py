@@ -97,15 +97,124 @@ def test_default_profiles_are_builtin_and_valid():
     for p in defaults:
         assert p["builtin"] is True
         profiles.validate(p)
+    assert next(p for p in defaults if p["name"] == "Turbo")["fan_curve"] == [
+        [20, 50], [40, 50], [50, 75], [60, 90], [70, 100], [75, 100], [80, 100], [90, 100]]
+    assert next(p for p in defaults if p["name"] == "Balanced")["fan_curve"] == [
+        [20, 20], [40, 20], [50, 35], [60, 55], [70, 75], [75, 90], [80, 100], [90, 100]]
     boondock = next(p for p in defaults if p["name"] == "Boondock")
     assert boondock["hooks"]["enter"].endswith("boondock session-on")
     assert boondock["hooks"]["exit"].endswith("boondock session-off")
+
+
+def _curve_pwm_at(curve, temp):
+    if temp <= curve[0][0]:
+        return curve[0][1]
+    for (low_t, low_pwm), (high_t, high_pwm) in zip(curve, curve[1:]):
+        if temp <= high_t:
+            fraction = (temp - low_t) / (high_t - low_t)
+            return low_pwm + fraction * (high_pwm - low_pwm)
+    return curve[-1][1]
+
+
+def test_builtin_curve_change_preserves_the_response_from_40c_up():
+    for old_curve, new_curve in (
+            (profiles.LEGACY_TURBO_CURVE, profiles.TURBO_CURVE),
+            (profiles.LEGACY_BALANCED_CURVE, profiles.BALANCED_CURVE)):
+        for temp in (40, 45, 50, 55, 60, 65, 70, 74, 75, 77, 80, 82, 85, 87, 90):
+            assert _curve_pwm_at(new_curve, temp) == _curve_pwm_at(old_curve, temp)
 
 
 def test_builtin_names_follow_ghelper():
     assert profiles.BUILTIN_FOR_BASE == {"quiet": "Silent", "balanced": "Balanced",
                                          "performance": "Turbo"}
     assert set(profiles.LEGACY_NAMES_REV) == {"Turbo", "Balanced", "Silent"}
+
+
+def _legacy_builtin_store():
+    builtins = profiles.default_profiles()
+    for p in builtins:
+        if p["name"] == "Turbo":
+            p["fan_curve"] = [point[:] for point in profiles.LEGACY_TURBO_CURVE]
+        elif p["name"] == "Balanced":
+            p["fan_curve"] = [point[:] for point in profiles.LEGACY_BALANCED_CURVE]
+    return {"version": 1, "active": "Turbo", "profiles": builtins}
+
+
+def test_migrates_exact_legacy_builtin_curves_and_keeps_backup(profiles_env):
+    old = _legacy_builtin_store()
+    user_curve = [point[:] for point in profiles.LEGACY_TURBO_CURVE]
+    old["profiles"].append(custom("My Turbo", fan_curve=user_curve))
+    original = json.dumps(old, indent=2)
+    _seed(profiles_env, original)
+
+    store = profiles.load_store()
+    by_name = {p["name"]: p for p in store["profiles"]}
+
+    assert by_name["Turbo"]["fan_curve"] == profiles.TURBO_CURVE
+    assert by_name["Balanced"]["fan_curve"] == profiles.BALANCED_CURVE
+    assert by_name["My Turbo"]["fan_curve"] == user_curve
+    assert store["active"] == "Turbo"
+    backups = list(profiles_env.store.parent.glob("profiles.json.corrupt-*"))
+    assert len(backups) == 1 and backups[0].read_text() == original
+    saved = stored(profiles_env)
+    assert [p["fan_curve"] for p in saved["profiles"][:4]] == [
+        None, profiles.BALANCED_CURVE, profiles.TURBO_CURVE, None]
+    assert saved["profiles"][-1]["fan_curve"] == user_curve
+
+
+def test_curve_migration_is_idempotent(profiles_env):
+    _seed(profiles_env, json.dumps(_legacy_builtin_store()))
+
+    first = profiles.load_store()
+    second = profiles.load_store()
+
+    assert first == second
+    assert len(list(profiles_env.store.parent.glob("profiles.json.corrupt-*"))) == 1
+
+
+def test_curve_migration_preserves_edited_builtin_curve(profiles_env):
+    old = _legacy_builtin_store()
+    turbo = next(p for p in old["profiles"] if p["name"] == "Turbo")
+    turbo["fan_curve"][0][1] = 55
+    _seed(profiles_env, json.dumps(old))
+
+    store = profiles.load_store()
+    by_name = {p["name"]: p for p in store["profiles"]}
+
+    assert by_name["Turbo"]["fan_curve"] == turbo["fan_curve"]
+    assert by_name["Balanced"]["fan_curve"] == profiles.BALANCED_CURVE
+    assert profiles.TURBO_CURVE == [
+        [20, 50], [40, 50], [50, 75], [60, 90], [70, 100], [75, 100], [80, 100], [90, 100]]
+
+
+@pytest.mark.parametrize("name,builtin,base", [
+    ("Turbo", False, "performance"),
+    ("Turbo", True, "balanced"),
+    ("User Turbo", True, "performance"),
+])
+def test_curve_migration_ignores_nonmatching_builtin_identity(profiles_env, name, builtin, base):
+    old = _legacy_builtin_store()
+    turbo = next(p for p in old["profiles"] if p["name"] == "Turbo")
+    turbo.update(name=name, builtin=builtin, base=base)
+    expected = [point[:] for point in profiles.LEGACY_TURBO_CURVE]
+    _seed(profiles_env, json.dumps(old))
+
+    store = profiles.load_store()
+
+    migrated = next(p for p in store["profiles"] if p["name"] == name)
+    assert migrated["fan_curve"] == expected
+
+
+def test_curve_migration_create_false_does_not_write(profiles_env):
+    old = _legacy_builtin_store()
+    original = json.dumps(old)
+    _seed(profiles_env, original)
+
+    store = profiles.load_store(create=False)
+
+    assert next(p for p in store["profiles"] if p["name"] == "Turbo")["fan_curve"] == profiles.TURBO_CURVE
+    assert profiles_env.store.read_text() == original
+    assert not list(profiles_env.store.parent.glob("profiles.json.corrupt-*"))
 
 
 # ----------------------------------------------------------------------

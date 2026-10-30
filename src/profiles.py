@@ -72,11 +72,17 @@ MAX_FAN_TEMPS = (20, 30, 40, 50, 60, 70, 80, 90)   # from 20 C: fans idle below 
 MAX_FANS_SPEC = ",".join(f"{t}:100%" for t in MAX_FAN_TEMPS)
 
 # Curves carried over from the z13-max / z13-balanced host scripts (the
-# "hardware-longevity" curves: factory auto tops out at 40% @ 76 °C).
-TURBO_CURVE = [[40, 50], [50, 75], [60, 90], [70, 100],
-                     [75, 100], [80, 100], [85, 100], [90, 100]]
-BALANCED_CURVE = [[40, 20], [50, 35], [60, 55], [70, 75],
-                  [75, 90], [80, 100], [85, 100], [90, 100]]
+# "hardware-longevity" curves; factory auto tops out at 40% @ 76 °C). The
+# explicit 20 C anchor keeps the first PWM plateau defined below 40 C; the
+# redundant 85 C plateau point is removed to retain z13ctl's eight-point limit.
+LEGACY_TURBO_CURVE = [[40, 50], [50, 75], [60, 90], [70, 100],
+                      [75, 100], [80, 100], [85, 100], [90, 100]]
+LEGACY_BALANCED_CURVE = [[40, 20], [50, 35], [60, 55], [70, 75],
+                         [75, 90], [80, 100], [85, 100], [90, 100]]
+TURBO_CURVE = [[20, 50], [40, 50], [50, 75], [60, 90],
+               [70, 100], [75, 100], [80, 100], [90, 100]]
+BALANCED_CURVE = [[20, 20], [40, 20], [50, 35], [60, 55],
+                  [70, 75], [75, 90], [80, 100], [90, 100]]
 
 # Built-in names follow G-Helper (Silent / Balanced / Turbo); z13ctl's bases
 # are quiet / balanced / performance.
@@ -321,6 +327,27 @@ def _migrate_boondock_hooks(p):
                 hooks[key] = f"{parts[0]} {new}"
 
 
+def _migrate_builtin_fan_curve(p):
+    """Add the cold-temperature anchor to an unedited shipped built-in curve.
+
+    Exact matching protects user changes, including edited built-in curves and
+    custom profiles that happen to use the same points.
+    """
+    if p.get("builtin") is not True:
+        return False
+    migration = {
+        "Turbo": ("performance", LEGACY_TURBO_CURVE, TURBO_CURVE),
+        "Balanced": ("balanced", LEGACY_BALANCED_CURVE, BALANCED_CURVE),
+    }.get(p.get("name"))
+    if migration is None:
+        return False
+    base, old_curve, new_curve = migration
+    if p.get("base") != base or p.get("fan_curve") != old_curve:
+        return False
+    p["fan_curve"] = [point[:] for point in new_curve]
+    return True
+
+
 def _loaded_profile_ok(p):
     """True when a profile read from disk is safe to hand to the rest of the app.
 
@@ -351,13 +378,15 @@ def _sanitize_store(store):
     if not isinstance(store, dict) or not isinstance(store.get("profiles"), list):
         return None, True
     good, seen = [], set()
+    curve_migrated = False
     for p in store["profiles"]:
         if _loaded_profile_ok(p) and p["name"] not in seen:
             seen.add(p["name"])
+            curve_migrated = _migrate_builtin_fan_curve(p) or curve_migrated
             good.append(p)
     if not good:
         return None, True
-    changed = len(good) != len(store["profiles"])
+    changed = len(good) != len(store["profiles"]) or curve_migrated
     active = store.get("active")
     if not isinstance(active, str) or active not in seen:
         active = "Balanced" if "Balanced" in seen else good[0]["name"]

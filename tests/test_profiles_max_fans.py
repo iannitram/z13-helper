@@ -37,7 +37,8 @@ def test_switching_to_turbo_turns_max_fans_on(profiles_env, fake_host):
     assert mf(profiles_env)["enabled"] is True
     assert fan_calls(fake_host) == [["fancurve", "--set", profiles.MAX_FANS_SPEC]]
     # Turbo's own curve is what Max Fans OFF goes back to.
-    assert mf(profiles_env)["saved_curve"][0] == [40, round(by_name("Turbo")["fan_curve"][0][1] * 255 / 100)]
+    assert mf(profiles_env)["saved_curve"] == [
+        [temp, round(pwm * 255 / 100)] for temp, pwm in by_name("Turbo")["fan_curve"]]
 
 
 def test_leaving_turbo_for_a_curve_profile_turns_max_fans_off(profiles_env, fake_host):
