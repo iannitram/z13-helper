@@ -39,6 +39,7 @@ say() { printf '  %s\n' "$*"; }
 # The state file holds two independent groups of keys: session keys (brightness, svc)
 # and hardware keys (profile, pl1..pl3). Each operation rewrites only its own.
 SESSION_KEYS='brightness|svc'
+LEGACY_SESSION_KEYS='ctr|vm'
 HW_KEYS='profile|pl1|pl2|pl3'
 state_drop() { [ -f "$STATE" ] && { grep -Ev "^($1)=" "$STATE" > "$STATE.tmp"; mv "$STATE.tmp" "$STATE"; }; return 0; }
 state_get() { grep "^$1=" "$STATE" 2>/dev/null | cut -d= -f2; }
@@ -68,11 +69,10 @@ do_session_on() {
 
 do_session_off() {
   echo "🔌 boondock session OFF — restoring"
-  if [ -n "$(state_get brightness)" ] || grep -Eq "^($SESSION_KEYS)=" "$STATE" 2>/dev/null; then
+  if [ -n "$(state_get brightness)" ] || grep -Eq "^($SESSION_KEYS|$LEGACY_SESSION_KEYS)=" "$STATE" 2>/dev/null; then
     local b; b=$(state_get brightness)
     [ -n "$b" ]  && { echo "$b" | sudo tee "$BL/brightness" >/dev/null; say "brightness restored"; }
     for s in $(state_get svc); do systemctl --user start "$s" && say "restarted service: $s"; done
-    state_drop "$SESSION_KEYS"
     # An older `boondock on` wrote hardware keys into the same snapshot. A profile hook
     # must not write power, so leave the hardware as is and clear the stale keys
     # (otherwise status reports ON forever and a later `off` restores old values).
@@ -84,6 +84,8 @@ do_session_off() {
     set_bright_pct "$DEFAULT_RESTORE_PCT"; say "brightness → ${DEFAULT_RESTORE_PCT}%"
     for s in "${BG_SERVICES[@]}"; do systemctl --user start "$s" >/dev/null 2>&1 && say "started service: $s"; done
   fi
+  # Purge keys from older snapshots without acting on their Docker/VM values.
+  state_drop "$SESSION_KEYS|$LEGACY_SESSION_KEYS"
   state_cleanup
 }
 
