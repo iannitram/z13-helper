@@ -12,9 +12,7 @@
 # because the profile engine already applied the profile's own TDP/base/fans.
 # `hardware-on` / `hardware-off` are the standalone power half (quiet + 20/30/40 W).
 #
-# DESIGN RULE (learned the hard way 2026-07-01): interactive workloads are NOT
-# touched by default. The dev-VM is left running unless you pass
-# `--pause-vm`, because you might be working in it.
+# Background services are the only session workload this script pauses.
 #
 # Lives in ~/.local/bin (on /home) so it survives SteamOS atomic updates.
 # Companion to z13ctl — folds into z13ctl natively later if we get a Go toolchain.
@@ -28,9 +26,8 @@ BL=${BOONDOCK_BACKLIGHT:-/sys/class/backlight/amdgpu_bl0}
 PPT_DIR=${BOONDOCK_PPT_DIR:-/sys/devices/platform/asus-nb-wmi}
 BOONDOCK_BRIGHT_PCT=35                 # screen brightness in boondock mode
 DEFAULT_RESTORE_PCT=80                 # brightness if we restore without a snapshot
-TDP_PL1=20; TDP_PL2=30; TDP_PL3=40     # PPT (sustained/short/fast) in W — 20W keeps VM work usable
+TDP_PL1=20; TDP_PL2=30; TDP_PL3=40     # PPT (sustained/short/fast) in W — 20W keeps background work usable
 BG_SERVICES=(llama-swap)               # systemd services safe to stop off-grid
-BG_CONTAINERS=(pm-fork-runner-z13)     # docker containers safe to stop off-grid
 PROFILE_SYSFS=${BOONDOCK_PROFILE_SYSFS:-/sys/firmware/acpi/platform_profile}
 # ------------------------------
 
@@ -39,9 +36,10 @@ bright_max() { cat "$BL/max_brightness"; }
 set_bright_pct() { local pct=$1 max; max=$(bright_max); local v=$(( max * pct / 100 )); echo "$v" | sudo tee "$BL/brightness" >/dev/null; }
 say() { printf '  %s\n' "$*"; }
 
-# The state file holds two independent groups of keys: session keys (brightness, svc,
-# ctr, vm) and hardware keys (profile, pl1..pl3). Each operation rewrites only its own.
-SESSION_KEYS='brightness|svc|ctr|vm'
+# The state file holds two independent groups of keys: session keys (brightness, svc)
+# and hardware keys (profile, pl1..pl3). Each operation rewrites only its own.
+SESSION_KEYS='brightness|svc'
+LEGACY_SESSION_KEYS='ctr|vm'
 HW_KEYS='profile|pl1|pl2|pl3'
 state_drop() { [ -f "$STATE" ] && { grep -Ev "^($1)=" "$STATE" > "$STATE.tmp"; mv "$STATE.tmp" "$STATE"; }; return 0; }
 state_get() { grep "^$1=" "$STATE" 2>/dev/null | cut -d= -f2; }
@@ -52,43 +50,29 @@ state_cleanup() { [ -f "$STATE" ] && [ ! -s "$STATE" ] && rm -f "$STATE"; return
 # profile engine has already applied the profile's own base, TDP and fans before the enter
 # hook, so nothing here may select a firmware profile, write TDP or read PPT values.
 do_session_on() {
-  local pause_vm=0; [ "${1:-}" = "--pause-vm" ] && pause_vm=1
   echo "🏕️  boondock session ON"
 
   # 1. snapshot current session state so `session-off` restores exactly
   state_drop "$SESSION_KEYS"
   {
     echo "brightness=$(cat "$BL/brightness" 2>/dev/null)"
-    for s in "${BG_SERVICES[@]}"; do systemctl is-active "$s" >/dev/null 2>&1 && echo "svc=$s"; done
-    for c in "${BG_CONTAINERS[@]}"; do docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$c" && echo "ctr=$c"; done
-    [ "$pause_vm" = 1 ] && [ "$(sudo virsh domstate dev-vm 2>/dev/null)" = running ] && echo "vm=dev-vm"
+    for s in "${BG_SERVICES[@]}"; do systemctl --user is-active "$s" >/dev/null 2>&1 && echo "svc=$s"; done
   } >> "$STATE"
 
   # 2. dim the screen
   set_bright_pct "$BOONDOCK_BRIGHT_PCT"; say "brightness → ${BOONDOCK_BRIGHT_PCT}%"
 
   # 3. stop BACKGROUND infra only (restartable services, not interactive sessions)
-  for s in "${BG_SERVICES[@]}"; do systemctl is-active "$s" >/dev/null 2>&1 && { sudo systemctl stop "$s" && say "stopped service: $s"; }; done
-  for c in "${BG_CONTAINERS[@]}"; do docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$c" && { docker stop "$c" >/dev/null && say "stopped container: $c"; }; done
-
-  # 4. interactive VM — ONLY on explicit request
-  if [ "$pause_vm" = 1 ]; then
-    [ "$(sudo virsh domstate dev-vm 2>/dev/null)" = running ] && { sudo virsh suspend dev-vm >/dev/null && say "PAUSED dev-vm (--pause-vm)"; }
-  else
-    [ "$(sudo virsh domstate dev-vm 2>/dev/null)" = running ] && say "dev-vm left RUNNING (use --pause-vm to include it)"
-  fi
+  for s in "${BG_SERVICES[@]}"; do systemctl --user is-active "$s" >/dev/null 2>&1 && { systemctl --user stop "$s" && say "stopped service: $s"; }; done
   return 0
 }
 
 do_session_off() {
   echo "🔌 boondock session OFF — restoring"
-  if [ -n "$(state_get brightness)" ] || grep -Eq "^($SESSION_KEYS)=" "$STATE" 2>/dev/null; then
+  if [ -n "$(state_get brightness)" ] || grep -Eq "^($SESSION_KEYS|$LEGACY_SESSION_KEYS)=" "$STATE" 2>/dev/null; then
     local b; b=$(state_get brightness)
     [ -n "$b" ]  && { echo "$b" | sudo tee "$BL/brightness" >/dev/null; say "brightness restored"; }
-    for s in $(state_get svc); do sudo systemctl start "$s" && say "restarted service: $s"; done
-    for c in $(state_get ctr); do docker start "$c" >/dev/null && say "restarted container: $c"; done
-    for v in $(state_get vm); do [ "$(sudo virsh domstate "$v" 2>/dev/null)" = paused ] && { sudo virsh resume "$v" >/dev/null && say "resumed $v"; }; done
-    state_drop "$SESSION_KEYS"
+    for s in $(state_get svc); do systemctl --user start "$s" && say "restarted service: $s"; done
     # An older `boondock on` wrote hardware keys into the same snapshot. A profile hook
     # must not write power, so leave the hardware as is and clear the stale keys
     # (otherwise status reports ON forever and a later `off` restores old values).
@@ -98,10 +82,10 @@ do_session_off() {
   else
     say "no snapshot — restoring to defaults"
     set_bright_pct "$DEFAULT_RESTORE_PCT"; say "brightness → ${DEFAULT_RESTORE_PCT}%"
-    for s in "${BG_SERVICES[@]}"; do sudo systemctl start "$s" >/dev/null 2>&1 && say "started service: $s"; done
-    for c in "${BG_CONTAINERS[@]}"; do docker start "$c" >/dev/null 2>&1 && say "started container: $c"; done
-    [ "$(sudo virsh domstate dev-vm 2>/dev/null)" = paused ] && { sudo virsh resume dev-vm >/dev/null && say "resumed dev-vm"; }
+    for s in "${BG_SERVICES[@]}"; do systemctl --user start "$s" >/dev/null 2>&1 && say "started service: $s"; done
   fi
+  # Purge keys from older snapshots without acting on their Docker/VM values.
+  state_drop "$SESSION_KEYS|$LEGACY_SESSION_KEYS"
   state_cleanup
 }
 
@@ -144,8 +128,7 @@ do_status() {
   local max cur pct; max=$(bright_max); cur=$(cat "$BL/brightness"); pct=$(( cur * 100 / max ))
   echo "boondock status:"
   say "brightness: ${pct}%   profile: $(cat "$PROFILE_SYSFS" 2>/dev/null)   TDP(PL1): $(cat $PPT_DIR/ppt_pl1_spl 2>/dev/null)W"
-  say "dev-vm: $(sudo virsh domstate dev-vm 2>/dev/null || echo n/a)"
-  for s in "${BG_SERVICES[@]}"; do say "service $s: $(systemctl is-active "$s" 2>/dev/null)"; done
+  for s in "${BG_SERVICES[@]}"; do say "service $s: $(systemctl --user is-active "$s" 2>/dev/null)"; done
   [ -f "$STATE" ] && say "MODE: boondock ON (snapshot present)" || say "MODE: normal (no snapshot)"
 }
 
@@ -157,5 +140,5 @@ case "${1:-status}" in
   hardware-on)  do_hw_on;;                     # standalone only
   hardware-off) do_hw_off;;
   status) do_status;;
-  *) echo "usage: boondock {on [--pause-vm]|off|session-on [--pause-vm]|session-off|hardware-on|hardware-off|status}"; exit 1;;
+  *) echo "usage: boondock {on|off|session-on|session-off|hardware-on|hardware-off|status}"; exit 1;;
 esac
