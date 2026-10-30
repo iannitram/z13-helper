@@ -41,6 +41,7 @@ import errno
 import fcntl
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -713,6 +714,62 @@ def apply_tdp(profile, *, z13ctl=Z13CTL):
     return [("tdp", ok, f"{tdp['pl1']}/{tdp['pl2']}/{tdp['pl3']} W" if ok else (out or f"rc={rc}"))]
 
 
+def clear_z13ctl_default_custom_tdp(*, z13ctl=Z13CTL):
+    """Clear a stale TDP from z13ctl's default custom profile, when safe.
+
+    A bare ``fancurve --set`` edits and activates z13ctl's ``custom`` profile,
+    including any TDP saved there by an earlier Z13-Helper profile. A Z13-Helper
+    profile with a fan curve and no TDP must not inherit that old limit. The
+    caller must first switch successfully to the firmware profile, which makes
+    ``custom`` inactive. The CLI help is not enough: older daemons ignore the
+    target field and apply the reset to the live profile, so require a working
+    ``profile --list`` request and confirm the default custom profile is
+    inactive and actually has a TDP before clearing it. Returns (ok, step); a
+    missing step means no cleanup was needed or the CLI predates named profiles.
+    """
+    rc, help_text, _ = host.run([z13ctl, "tdp", "--help"], timeout=10)
+    if rc == 0 and "--profile" not in help_text:
+        return True, None
+    if rc != 0:
+        return False, ("tdp", False,
+                       help_text or f"could not check z13ctl capabilities (rc={rc})")
+
+    rc, listing, _ = host.run([z13ctl, "profile", "--list"], timeout=15)
+    if rc != 0:
+        return False, ("tdp", False,
+                       listing or f"could not verify z13ctl daemon profile support (rc={rc})")
+    lines = listing.splitlines()
+    has_firmware_header = any(re.match(r"^\s*Firmware profiles:", line, re.IGNORECASE)
+                              for line in lines)
+    has_custom_header = any(re.match(r"^\s*Custom profiles:\s*$", line, re.IGNORECASE)
+                            for line in lines)
+    if not (has_firmware_header and has_custom_header):
+        return False, ("tdp", False, "could not verify z13ctl profile-list output")
+    custom = None
+    for line in lines:
+        # `profile --list` uses a padded 20-character name column; requiring
+        # its separator also keeps the `Custom profiles:` heading from matching.
+        match = re.match(r"^[ \t]*(?P<active>\*)?[ \t]*custom[ \t]{2,}(?P<description>.*)$",
+                         line, re.IGNORECASE)
+        if match:
+            custom = match
+            break
+    if custom is None:
+        # A fresh profile list can contain no custom rows. Its recognized
+        # headers prove the daemon replied, and there is no saved TDP to clear.
+        return True, None
+    if custom.group("active"):
+        return False, ("tdp", False,
+                       "z13ctl custom profile is still active; saved TDP was left unchanged")
+    if not re.search(r"(?:^|,\s*)\d+W(?:,|$)", custom.group("description")):
+        return True, None
+
+    rc, out, _ = host.run([z13ctl, "tdp", "--reset", "--profile", "custom"], timeout=20)
+    ok = rc == 0
+    result = ("tdp", ok, "cleared saved z13ctl custom TDP" if ok else (out or f"rc={rc}"))
+    return ok, result
+
+
 def apply_undervolt(profile, *, z13ctl=Z13CTL):
     """The undervolt step of apply() (needs ryzen_smu; absent on stock SteamOS ->
     reported, not fatal): [] when the profile sets none. Also used by fan recovery."""
@@ -753,7 +810,7 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
             step("exit hook", ["bash", "-lc", exit_cmd], f"ran: {exit_cmd}")
 
     # 2. Base platform profile.
-    step("profile", [z13ctl, "profile", "--set", profile["base"]], profile["base"])
+    base_ok = step("profile", [z13ctl, "profile", "--set", profile["base"]], profile["base"])
 
     # 3. TDP (None = whatever the firmware profile dictates, restored by the
     #    profile write above).
@@ -765,15 +822,40 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
     #    (only on a real switch: restore/resume keeps whatever the user chose).
     curve = profile.get("fan_curve")
     tdp = profile.get("tdp")
+    initial_max_fans_on = bool(_max_fans_state().get("enabled"))
     released = False
     if previous is None or previous.get("name") != profile["name"]:
-        if profile.get("max_fans") and not _max_fans_state().get("enabled"):
+        if profile.get("max_fans") and not initial_max_fans_on:
             _save_max_fans(enabled=True)
         elif (previous or {}).get("max_fans") and not profile.get("max_fans") \
-                and _max_fans_state().get("enabled"):
+                and initial_max_fans_on:
             _save_max_fans(enabled=False)
             released = True
-    if _max_fans_state().get("enabled"):
+    max_fans_on = bool(_max_fans_state().get("enabled"))
+    curve_write_needed = bool(curve) or max_fans_on
+    cleanup_ok = True
+    if curve_write_needed and not tdp:
+        # Editing a fan curve through z13ctl activates its default `custom`
+        # profile. Clear only its inactive saved TDP first, so neither a
+        # profile curve nor Max Fans (including curveless Max Fans profiles)
+        # can reactivate a limit from an older app profile.
+        if not base_ok:
+            cleanup_ok = False
+            results.append(("tdp", False,
+                            "base profile switch failed; saved custom TDP was not changed"))
+        else:
+            cleanup_ok, cleanup_result = clear_z13ctl_default_custom_tdp(z13ctl=z13ctl)
+            if cleanup_result:
+                results.append(cleanup_result)
+    if curve_write_needed and not tdp and not cleanup_ok:
+        # The base profile write releases a custom curve. Keep the shared flag
+        # from asking the watchdog to re-enable Max Fans (which would write an
+        # unverified custom profile). If the base write failed, preserve the
+        # state that was already in force before this attempted transition.
+        _save_max_fans(enabled=initial_max_fans_on if not base_ok else False)
+        results.append(("fans", False,
+                        "saved custom TDP could not be safely cleared; fan curve was not applied"))
+    elif _max_fans_state().get("enabled"):
         # What Max Fans OFF should go back to: this profile's curve, or none
         # (= firmware auto) -- never the previous profile's leftover curve.
         _save_max_fans(saved_curve=[[int(t), round(int(p) * 255 / 100)] for t, p in curve]
