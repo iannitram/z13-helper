@@ -41,7 +41,7 @@ def names(results):
 
 
 EXPECTED_ORDER = ["exit hook", "profile", "tdp", "fans", "undervolt",
-                  "brightness (keyboard)", "brightness (lightbar)", "battery limit", "enter hook"]
+                  "battery limit", "brightness (keyboard)", "brightness (lightbar)", "enter hook"]
 
 
 # ----------------------------------------------------------------------
@@ -61,11 +61,52 @@ def test_write_order(profiles_env, fake_host):
         [Z, "tdp", "--set", "50", "--pl2", "60", "--pl3", "70"],
         [Z, "fancurve", "--set", profiles.curve_spec(CURVE)],
         [Z, "undervolt", "--set", "-15"],
+        [Z, "batterylimit", "--set", "80"],
         [Z, "--device", "keyboard", "brightness", "medium"],
         [Z, "--device", "lightbar", "brightness", "medium"],
-        [Z, "batterylimit", "--set", "80"],
         ["bash", "-lc", "enter-cmd"],
     ]
+
+
+@pytest.mark.parametrize("device,mode", [("keyboard", mode) for mode in profiles.LIGHTING_MODES] +
+                         [("lightbar", mode) for mode in profiles.LIGHTING_MODES])
+def test_lighting_mode_argv_is_per_device_and_last(profiles_env, fake_host, device, mode):
+    setting = {"mode": mode, "color": "cyan"}
+    p = full_profile(lighting={device: setting})
+
+    results = profiles.apply(p, z13ctl=Z)
+
+    expected = [Z, "--device", device, "apply", "--mode", mode,
+                "--color", "cyan", "--brightness", "medium"]
+    assert expected in fake_host.argvs
+    # Hooks can run after hardware writes; no further z13ctl write may follow lighting.
+    at = fake_host.argvs.index(expected)
+    assert all(call[0] == "bash" for call in fake_host.argvs[at + 1:])
+    assert f"lighting ({device})" in names(results)
+    assert all(ok for _, ok, _ in results)
+    assert next(c for c in fake_host.calls if c.argv == expected).timeout == profiles.Z13CTL_WRITE_TIMEOUT_S
+
+
+def test_lighting_timeout_stops_remaining_writes(profiles_env, fake_host):
+    fake_host.fail("--device keyboard apply --mode breathe", rc=124,
+                   out="timed out after 20 s", timed_out=True)
+    p = full_profile(lighting={
+        "keyboard": {"mode": "breathe", "color": "cyan"},
+        "lightbar": {"mode": "cycle", "color": "purple"},
+    })
+
+    results = profiles.apply(p, z13ctl=Z)
+
+    assert fake_host.calls[-1].argv == [
+        Z, "--device", "keyboard", "apply", "--mode", "breathe",
+        "--color", "cyan", "--brightness", "medium",
+    ]
+    assert fake_host.calls[-1].timeout == profiles.Z13CTL_WRITE_TIMEOUT_S
+    assert not any("lightbar" in argv for argv in fake_host.argvs)
+    assert results[-1] == (
+        "lighting (keyboard)", False,
+        f"z13ctl write timed out after {profiles.Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)",
+    )
 
 
 def test_curve_spec_format():
@@ -562,12 +603,12 @@ def test_wedged_lightbar_recovers_once_and_retries_once(profiles_env, fake_host)
     results = profiles.apply(bare_profile(brightness="low", battery_limit=80), z13ctl=Z)
     assert fake_host.argvs == [
         [Z, "profile", "--set", "balanced"],
+        [Z, "batterylimit", "--set", "80"],
         [Z, "--device", "keyboard", "brightness", "low"],     # keyboard first, before any reset
         [Z, "--device", "lightbar", "brightness", "low"],
         RESET,
         RESTART,                                              # daemon cached the old hidraw path
         [Z, "--device", "lightbar", "brightness", "low"],     # exactly one retry
-        [Z, "batterylimit", "--set", "80"],
     ]
     assert ("brightness (keyboard)", True, "low") in results
     assert ("brightness (lightbar)", True, "low (lightbar recovered)") in results
@@ -579,11 +620,11 @@ def test_stale_lightbar_recovers_with_daemon_restart_only(profiles_env, fake_hos
     results = profiles.apply(bare_profile(brightness="low", battery_limit=80), z13ctl=Z)
     assert fake_host.argvs == [
         [Z, "profile", "--set", "balanced"],
+        [Z, "batterylimit", "--set", "80"],
         [Z, "--device", "keyboard", "brightness", "low"],     # keyboard first, before any recovery
         [Z, "--device", "lightbar", "brightness", "low"],
         RESTART,                                              # no reset unit: just a stale handle
         [Z, "--device", "lightbar", "brightness", "low"],     # exactly one retry
-        [Z, "batterylimit", "--set", "80"],
     ]
     assert RESET not in fake_host.argvs
     assert ("brightness (keyboard)", True, "low") in results

@@ -68,6 +68,8 @@ Z13CTL = os.path.expanduser("~/.local/bin/z13ctl")
 BASES = ("quiet", "balanced", "performance")
 BRIGHTNESS_LEVELS = ("off", "low", "medium", "high")
 LIGHTING_DEVICES = ("keyboard", "lightbar")
+LIGHTING_MODES = ("static", "breathe", "cycle", "rainbow", "strobe")
+LIGHTING_COLORS = ("red", "orange", "yellow", "green", "cyan", "blue", "purple", "white")
 
 # Max Fans = every point at 100%. Must match the desktop app and the Decky plugin.
 MAX_FAN_TEMPS = (20, 30, 40, 50, 60, 70, 80, 90)   # Low anchor; firmware response still needs verification.
@@ -558,6 +560,32 @@ def set_active(name):
     _mirror_legacy(name)
 
 
+def set_profile_lighting(name, device, setting, brightness=None):
+    """Store one device's lighting intent in a profile; None clears its override."""
+    if device not in LIGHTING_DEVICES:
+        raise ValueError("bad lighting device")
+    with store_lock():
+        store = load_store()
+        profile = get_profile(name, store)
+        if profile is None:
+            raise ValueError(f"unknown profile: {name}")
+        lighting = profile.setdefault("lighting", {})
+        if setting is None:
+            lighting.pop(device, None)
+            if not lighting:
+                profile.pop("lighting", None)
+        else:
+            profile["lighting"] = {**lighting, device: dict(setting)}
+            # z13ctl apply defaults to high brightness. Capture the current
+            # UI choice when a profile first gains a mode so reapplying it
+            # cannot silently change brightness later.
+            if profile.get("brightness") is None:
+                profile["brightness"] = brightness or "high"
+        validate(profile)
+        save_store(store)
+    return get_profile(name)
+
+
 def _mirror_legacy(name):
     """Mirror the active name for the legacy restore script / z13-* scripts."""
     legacy = LEGACY_NAMES_REV.get(name)
@@ -629,6 +657,16 @@ def validate(p):
         raise ValueError("undervolt must be 0..-40")
     if p.get("brightness") not in (None, *BRIGHTNESS_LEVELS):
         raise ValueError("bad brightness level")
+    lighting = p.get("lighting", {})
+    if not isinstance(lighting, dict) or set(lighting) - set(LIGHTING_DEVICES):
+        raise ValueError("lighting must map keyboard/lightbar to settings")
+    for device, setting in lighting.items():
+        if not isinstance(setting, dict):
+            raise ValueError(f"lighting.{device} must be an object")
+        if setting.get("mode") not in LIGHTING_MODES:
+            raise ValueError(f"bad lighting.{device}.mode")
+        if setting.get("color") not in LIGHTING_COLORS:
+            raise ValueError(f"bad lighting.{device}.color")
     bl = p.get("battery_limit")
     if bl is not None and (not isinstance(bl, int) or not 40 <= bl <= 100):
         raise ValueError("battery_limit must be 40..100")
@@ -891,6 +929,18 @@ def apply_undervolt(profile, *, z13ctl=Z13CTL):
              if "ryzen_smu" in out else out)]
 
 
+def lighting_argv(device, setting, brightness, z13ctl=Z13CTL):
+    """Build z13ctl's per-device lighting apply command from validated profile data."""
+    if device not in LIGHTING_DEVICES:
+        raise ValueError("bad lighting device")
+    candidate = {"name": "lighting", "base": "balanced", "lighting": {device: setting}}
+    validate(candidate)
+    if brightness not in BRIGHTNESS_LEVELS:
+        raise ValueError("bad brightness level")
+    return [z13ctl, "--device", device, "apply", "--mode", setting["mode"],
+            "--color", setting["color"], "--brightness", brightness]
+
+
 def apply(profile, *, previous=None, z13ctl=Z13CTL,
           skip_hooks=False, login_battery_default=None):
     """Put the machine into the state `profile` describes.
@@ -1016,11 +1066,26 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
     if timed_out:
         return results
 
-    # 6. Lighting, per device so one stalled hidraw endpoint can't block the other.
-    #    The keyboard goes first, so it is set before any lightbar recovery.
+    # 6. Battery charge limit.
+    # A login restore passes login_battery_default=80: a profile that sets no limit
+    # (e.g. Boondock) then gets the 80% fallback, as the retired 80% unit used to give.
+    bl = profile.get("battery_limit")
+    note = ""
+    if bl is None and login_battery_default is not None:
+        bl, note = login_battery_default, " (fallback: profile sets no limit)"
+    if bl is not None:
+        step("battery limit", [z13ctl, "batterylimit", "--set", str(bl)], f"{bl}%{note}")
+
+    # 7. Lighting is last among hardware writes. Each device is independent so a
+    #    stalled endpoint cannot block the other. A mode apply carries brightness
+    #    because z13ctl otherwise defaults it to high.
+    lighting = profile.get("lighting") or {}
     br = profile.get("brightness")
-    if br:
-        for dev in LIGHTING_DEVICES:
+    # Set unmodified devices' brightness first; profile mode/colour changes follow
+    # as the final lighting writes.
+    for dev in LIGHTING_DEVICES:
+        setting = lighting.get(dev)
+        if br and not setting:
             argv = [z13ctl, "--device", dev, "brightness", br]
             rc, out, hit_timeout = host.run(argv, timeout=Z13CTL_WRITE_TIMEOUT_S)
             timed_out = hit_timeout
@@ -1041,7 +1106,8 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
                         if hit_timeout:
                             out = f"z13ctl write timed out after {Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)"
                         if rc == 0:
-                            results.append((f"brightness ({dev})", True, f"{br} (lightbar recovered)"))
+                            results.append((f"brightness ({dev})", True,
+                                            f"{br} (lightbar recovered)"))
                             continue
                         if not hit_timeout:
                             out = f"{out or f'rc={rc}'} (still failing after a {rec_msg})"
@@ -1051,17 +1117,19 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
             if timed_out:
                 return results
 
-    # 7. Battery charge limit.
-    # A login restore passes login_battery_default=80: a profile that sets no limit
-    # (e.g. Boondock) then gets the 80% fallback, as the retired 80% unit used to give.
-    bl = profile.get("battery_limit")
-    note = ""
-    if bl is None and login_battery_default is not None:
-        bl, note = login_battery_default, " (fallback: profile sets no limit)"
-    if bl is not None:
-        step("battery limit", [z13ctl, "batterylimit", "--set", str(bl)], f"{bl}%{note}")
-    if timed_out:
-        return results
+    for dev in LIGHTING_DEVICES:
+        setting = lighting.get(dev)
+        if setting:
+            level = br or "high"
+            argv = lighting_argv(dev, setting, level, z13ctl)
+            rc, out, timed_out = host.run(argv, timeout=Z13CTL_WRITE_TIMEOUT_S)
+            if timed_out:
+                out = f"z13ctl write timed out after {Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)"
+            results.append((f"lighting ({dev})", rc == 0,
+                            f"{setting['mode']} / {setting['color']} / {level}" if rc == 0
+                            else (out or f"rc={rc}")))
+            if timed_out:
+                return results
 
     # 8. Enter hook.
     if not skip_hooks:
