@@ -145,7 +145,6 @@ def test_temp_name_is_not_predictable(dmain, tmp_path, monkeypatch):
         dmain.write_store_atomic({"active": "A", "profiles": []}, str(tmp_path / "p.json"))
     assert len(set(seen)) == 3
     assert all(re.fullmatch(r"\.p\.json\.[0-9a-f]{16}\.tmp", n) for n in seen)
-    assert not any(str(os.getpid()) in n.split(".") for n in seen)
 
 
 def test_write_failure_leaves_no_temp(dmain, tmp_path, monkeypatch):
