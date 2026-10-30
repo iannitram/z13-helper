@@ -12,13 +12,15 @@ It also makes the Armoury Crate side button useful in both. Behind both front-en
 [**z13ctl**](https://github.com/dahui/z13ctl) does the hardware access; Z13-Helper is the interface,
 the glue and the self-repair around it.
 
-> **Status:** a personal project, built and tested on one Z13 (GZ302EA, SteamOS 3.8.28, kernel
-> 6.18, z13ctl 1.4.2). It writes power limits and fan curves, so read what it does before you run
+> **Status:** version **0.5.1**, built and tested on one Z13 (GZ302EA, SteamOS 3.9.5, kernel
+> 7.2, z13ctl 1.4.2). It writes power limits and fan curves, so read what it does before you run
 > it. Not affiliated with ASUS, Valve or any project credited below. Licensed under the
 > [GPL-3.0](LICENSE).
 >
 > Plan and status: [`docs/ROADMAP.md`](docs/ROADMAP.md) · Changes: [`CHANGELOG.md`](CHANGELOG.md)
 > · The side-button story: [`docs/BUTTON-AND-INPUTPLUMBER.md`](docs/BUTTON-AND-INPUTPLUMBER.md)
+> · Code and connections: [`MAP/README.md`](MAP/README.md)
+> · Repair verification: [`docs/releases/0.5.1.md`](docs/releases/0.5.1.md)
 
 ---
 
@@ -30,13 +32,20 @@ the glue and the self-repair around it.
 
 ![Help → Error log → Fan trace: one line per reading with temperature, both fan RPMs, the ACPI fan, curve mode, Max Fans and how long each reading has been unchanged](docs/screenshots/fan-trace.png)
 
-These are rendered from the real app with live readings: `tooling/screenshots.py`, offscreen, nothing
+These earlier screenshots predate the 0.5.1 power-label changes. They were rendered from the real app with live readings: `tooling/screenshots.py`, offscreen, nothing
 written to the hardware. A Game Mode (Decky) screenshot is still to come; Game Mode can't be
 captured from Desktop Mode.
 
 ## What works so far
 
-**Verified on the device** (GZ302EA, SteamOS 3.8.28):
+**0.5.1 repair checks on SteamOS 3.9.5 / kernel 7.2 (2026-10-30):**
+desktop unset-power controls and host range detection; installed Max Fans ON/OFF/ON;
+two Turbo/Balanced/Turbo cycles with the resident app; stale backend custom-TDP cleanup;
+and installer health checks. Automated tests: 679 pytest, 80 backend unittest and 5 frontend
+tests. See the [verification record](docs/releases/0.5.1.md) for evidence and limits.
+Interactive Game Mode, suspend/resume, cold boot and a sustained load/soak remain pending.
+
+**Earlier device checks** (GZ302EA, SteamOS 3.8.28; not all repeated on 3.9.5):
 - ✅ Desktop app: mode tiles, profiles, power limits, the fan curve editor, Max Fans, keyboard and
   lightbar brightness, screen brightness, battery limit, tray, error log.
 - ✅ Profiles: built-in and custom, and `z13-profile`. The active profile is restored at login and
@@ -123,7 +132,10 @@ The window is laid out after G-Helper's: one main window plus a **Fans + Power**
 - **Battery Charge Limit**, 40–100 %, with a one-tap **100 %**, plus live charge and power draw.
 - **Run on Startup**: runs the app as a resident user service, hidden in the tray until you need it.
 - **Fans + Power window:**
-  - **Power limits:** SPL / sPPT / fPPT sliders, 5–93 W, kept in order (sPPT ≥ SPL, fPPT ≥ sPPT).
+  - **Power limits:** SPL / sPPT / fPPT sliders use each rail's kernel limits, kept in order
+    (sPPT ≥ SPL, fPPT ≥ sPPT). With no override, desktop and Decky show **Not set**.
+    On the tested AC setup the Armoury bounds are 28–80 / 32–92 / 45–93 W;
+    missing metadata falls back to 5–93 W. These are configured limits, not measured power draw.
   - **Fan curve:** a draggable 8-point curve editor with Clamp to Grid, Factory Defaults and RPM
     labels. Both Z13 fans share one curve.
   - **Curve Optimizer:** undervolt, shown only when the `ryzen_smu` module is present. Stock SteamOS
@@ -186,11 +198,13 @@ watchdog** runs in both front-ends. It is one shared module, tested once.
 It reacts to three things:
 - **Dropped curve while Max Fans is on:** puts Max Fans back.
 - **Stall:** the curve asks for at least half speed and both fans read 0 RPM.
-- **Frozen tach:** a spinning fan's reading stays exactly the same for 90 s. Real readings jitter
-  every tick, so a stuck one means that fan has probably stopped.
+- **Frozen tach:** an unchanged reading is only suspicious when corroborated by the other fan
+  moving and rising APU temperature. Recovery attempts are bounded; a steady RPM alone is insufficient.
 
 Each time, it recovers the only way that reliably works: rewrite the platform profile, then the
-curve. It never acts while a profile change is in progress. The **fan trace** logs its readings
+curve. Profile applies hold the shared Max Fans flag off until the intended curve is installed;
+queued recovery rechecks current intent and curve mode, including before a full-speed write.
+These guards do not constitute a cross-process transaction lock. The **fan trace** logs its readings
 and decisions, including the two minutes before and the minute after every recovery, so false
 alarms can be told from real stalls.
 
@@ -212,6 +226,12 @@ profiles are made in the Fans + Power window.
 One profile store drives the desktop app, the Decky plugin and the host command
 **`z13-profile`** (`list`, `active`, `show`, `apply`, `restore`). `z13-profile` is the same Python file as the
 app's profile engine.
+
+Built-in Balanced and Turbo curves start with a 20 °C plateau. Exact old built-ins and matching
+enabled Max Fans restore snapshots migrate with backups; edited/custom curves are preserved.
+App profiles and z13ctl's named profiles remain separate stores (#23). Before a fan-only apply,
+the engine probes backend capabilities and clears stale TDP on its default `custom` profile;
+unsafe cleanup prevents curve activation. Curve-enabled readback alone does not prove fan response.
 
 ### Settings that stick
 
@@ -242,7 +262,7 @@ The **Updates** panel watches upstream projects and shows installed versus lates
 why each matters:
 - z13ctl, Decky Loader and SteamOS, which it can also **install or update**: it shows the plan,
   keeps a backup and logs every step. z13ctl comes from a sha256-checked release; SteamOS goes
-  through Valve's own `steamos-update`.
+  through Valve's own `holo-update`, with `steamos-update` as the compatibility fallback.
 - The mainline kernel, as reference only: SteamOS ships its own kernel.
 - Projects it only tracks, such as asusctl, InputPlumber, G-Helper, Handheld Daemon and community
   Z13 tools (see [Credits](#credits)).
@@ -273,7 +293,7 @@ Every replaced file is backed up first. The app's **Repair install** button runs
 ## Requirements
 
 - An **ASUS ROG Flow Z13 (2025, GZ302EA)**. Other models aren't supported; z13ctl is model-specific.
-- **SteamOS 3.8** (tested on 3.8.28). Other Arch-based distros may work but are untested.
+- **SteamOS** (repair checks on 3.9.5; earlier checks on 3.8.28). Other Arch-based distros may work but are untested.
 - The deck user in the `users` group, which z13ctl's device permissions use.
 - **sudo**, for z13ctl setup, Decky and the `/etc` files. Root only runs files placed in the root-owned
   `/etc/z13-helper/` (checked against the release's published hash), never a file under your home or cache.
@@ -309,6 +329,7 @@ service and plugin.
 | Screen brightness | KDE PowerDevil `org.kde.ScreenBrightness` over D-Bus, else `/sys/class/backlight` |
 | One app instance | file lock + Unix socket in the Flatpak's runtime folder |
 | Shared state | `~/.config/z13-helper/` (`profiles.json`, `max-fans.json`, `config.json`) |
+| Backend state | z13ctl's independent `~/.local/state/z13ctl/state.json`; named-profile/event integration remains #23 |
 | Logs | `~/.local/state/z13-helper/` (`app.log`, `crashes/`, `fan-trace-*.log`, install logs) |
 
 ```

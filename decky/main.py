@@ -56,7 +56,7 @@ MAX_FANS_STATE = os.path.expanduser("~/.config/z13-helper/max-fans.json")
 # commands use the z13ctl daemon socket; the host's LD_LIBRARY_PATH, not the loader's).
 
 # Max Fans = 8 monotonic temp anchors, all at 100%.
-MAX_FAN_TEMPS = (20, 30, 40, 50, 60, 70, 80, 90)   # from 20 C: fans idle below the first point
+MAX_FAN_TEMPS = (20, 30, 40, 50, 60, 70, 80, 90)   # Low anchor; firmware response still needs verification.
 MAX_FANS_SPEC = ",".join(f"{t}:100%" for t in MAX_FAN_TEMPS)
 # Fan watchdog poll cadence (its thresholds live in fan_watchdog.py).
 ENFORCE_INTERVAL_S = 2
@@ -434,8 +434,8 @@ def _in_gamemode():
 # ----------------------------------------------------------------------
 
 def tdp_ranges():
-    """Per-rail (min, max) for the interface in use: sysfs existence checks only,
-    no ppt reads and no z13ctl (ROADMAP principle 5)."""
+    """Per-rail bounds from host permissions and kernel range metadata.
+    Never opens live PPT current_value nodes (ROADMAP principle 5)."""
     return power_range.detect_ranges()
 
 

@@ -68,7 +68,7 @@ BRIGHTNESS_LEVELS = ("off", "low", "medium", "high")
 LIGHTING_DEVICES = ("keyboard", "lightbar")
 
 # Max Fans = every point at 100%. Must match the desktop app and the Decky plugin.
-MAX_FAN_TEMPS = (20, 30, 40, 50, 60, 70, 80, 90)   # from 20 C: fans idle below the first point
+MAX_FAN_TEMPS = (20, 30, 40, 50, 60, 70, 80, 90)   # Low anchor; firmware response still needs verification.
 MAX_FANS_SPEC = ",".join(f"{t}:100%" for t in MAX_FAN_TEMPS)
 
 # Curves carried over from the z13-max / z13-balanced host scripts (the

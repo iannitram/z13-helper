@@ -49,6 +49,17 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="0.5.1" date="2026-10-30">
+      <description>
+        <p>Repair power ranges and fan/profile transitions on SteamOS 3.9.5.</p>
+        <ul>
+          <li>Detect the host power backend and its per-rail limits from Flatpak; show unset limits clearly.</li>
+          <li>Prevent fan-only profiles from recalling stale power overrides.</li>
+          <li>Anchor untouched built-in fan curves at low temperatures and migrate matching Max Fans snapshots with backups.</li>
+          <li>Cancel stale watchdog recovery and publish Max Fans state only after a successful curve write.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.5.0" date="2026-10-15">
       <description>
         <p>Renamed to Z13-Helper. The app is running after every switch to Desktop Mode. One fan watchdog shared with the Decky plugin, plus a fan trace for troubleshooting. Screen brightness slider.</p>

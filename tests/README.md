@@ -14,9 +14,10 @@ lets that error through rather than turning it into an rc).
 
 | File | Covers |
 |---|---|
-| `test_profiles_apply.py` | `profiles.apply()`: write order, step independence, hooks, Max Fans, undervolt |
+| `test_profiles_apply.py` | `profiles.apply()`: write order, step independence, hooks, Max Fans state suspension, undervolt |
 | `test_profiles_store.py` | store seeding/CRUD, `validate`, `apply_by_name`, the `z13-profile` CLI |
-| `test_fan_watchdog.py` | the three recovery rules, throttle, and "profile rewrite before curve" |
+| `test_fan_watchdog.py` | recovery rules, throttle, stale queued recovery cancellation, in-flight Max Fans cancellation, and "profile rewrite before curve" |
+| `test_power_range.py` | per-rail bounds from kernel metadata and fallback ranges |
 | `test_sensor_reader.py` | hwmon discovery by name and the custom-curve readers, on a fake sysfs tree |
 | `test_max_fans_state.py` | the shared `max-fans.json` (atomic merge, corrupt/missing file) |
 | `test_install_check.py` | the manifest `install.sh` reads, `keep-list`, `flatpak_diff`, restore grading |
@@ -37,5 +38,7 @@ The Decky backend has its own unittest suite: `python3 -m unittest discover -s d
 (CI runs both).
 
 Not covered here (needs the device): real z13ctl/firmware behaviour, the Qt UI,
-the evdev side-button reader, the Decky plugin, and `install.sh` itself. Those
-are in `docs/ROADMAP.md` §12.
+the evdev side-button reader, the Decky plugin, and `install.sh` itself. Unit tests
+check watchdog state transitions and trace formatting; they do not prove physical
+fan rotation or every Desktop/Game Mode, resume, and cold-boot transition. Those
+device checks are tracked in `docs/ROADMAP.md` §12.

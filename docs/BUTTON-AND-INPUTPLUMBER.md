@@ -20,8 +20,9 @@ the repo).
   symlinked to `/dev/null`). It was masked on **2026-05-06** to kill a phantom "SteamOS Handheld
   Controller" (`deck-uhid`) that hijacked real game-controller input (e.g. God of War Ragnarök).
   **The mask must stay** — it is load-bearing for game controllers.
-- Therefore the app's *only* button pathway is dead, and pressing the button does nothing.
-  **That is the bug.**
+- That explained the original failure: the app depended on a pathway that was unavailable on this
+  machine. The current implementation reads the button with evdev directly; D-Bus remains only as
+  a fallback for systems where InputPlumber owns the button.
 - **The fix:** read the button **directly via evdev** on the `Asus WMI hotkeys` device. The
   volume keys and the Armoury Crate button still work through that driver with InputPlumber
   masked; they never needed it.
@@ -79,14 +80,15 @@ present).
 
 ## Two other things that must be true for the button to open the app
 
-1. **The app must be resident.** The side button toggles an already-running (hidden/tray) instance;
-   it cannot cold-start the app. The `z13-helper.service` user unit keeps it running. That unit
-   was dead + had parse errors; the fixed version is in
+1. **For the in-app listener, the app must be resident.** The side button toggles an already-running
+   (hidden/tray) instance. The `z13-helper.service` user unit keeps it resident; when the app is not
+   running, the separate `z13-button-watcher` handles the tap and starts/shows the desktop app. The
+   fixed unit is in
    [`packaging/host/systemd/user/z13-helper.service`](../packaging/host/systemd/user/z13-helper.service)
    and installed live.
-2. **The fixed code must be deployed into the Flatpak.** The running app is the old build (only the
-   InputPlumber path). The Flatpak must be rebuilt + reinstalled (`flatpak/build.sh`) and the app
-   restarted for the evdev path to take effect.
+2. **The installed Flatpak must contain the evdev implementation.** A source checkout can be newer
+   than an already-installed bundle. Rebuild and reinstall (`flatpak/build.sh`) if the installed
+   build predates the host-side evdev reader, then restart the app.
 
 ## Follow-up: wiki KB corrected (2026-09-23)
 

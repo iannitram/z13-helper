@@ -271,8 +271,8 @@ class HardwareController:
 
     # Temp anchors for the flat max-fans curve. Any 8 monotonically increasing
     # temps work; z13ctl only requires monotonic temps + non-decreasing speeds.
-    # Starts at 20 C: the firmware idles the fans below the first point (with
-    # hysteresis), so a curve starting at 40 C is not "always 100%".
+    # Starts at 20 C to cover low temperatures. Configured curve readback alone
+    # does not establish physical fan response on every firmware/kernel version.
     _MAX_FAN_TEMPS = (20, 30, 40, 50, 60, 70, 80, 90)
 
     def set_fans_max(self):
