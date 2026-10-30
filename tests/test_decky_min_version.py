@@ -50,3 +50,48 @@ def test_repair_with_3_3_0_present_active_latest_does_not_install(decky_env, mon
     monkeypatch.setattr(installers, "_decky_installed_version", lambda: "3.3.0")
     assert installers.repair_decky() == 0
     assert decky_env == []
+
+
+def test_repair_below_minimum_installs_when_latest_release_unavailable(monkeypatch):
+    calls = []
+    monkeypatch.setattr(installers, "_decky_installed_version", lambda: "3.2.10")
+    monkeypatch.setattr(installers.os.path, "exists", lambda _p: True)
+    monkeypatch.setattr(installers.subprocess, "run",
+                        lambda *a, **k: types.SimpleNamespace(stdout="active\n", stderr="", returncode=0))
+    monkeypatch.setattr(installers, "fetch", lambda *a, **k: (_ for _ in ()).throw(OSError("offline")))
+    monkeypatch.setattr(installers, "install_decky", lambda: calls.append("install") or 0)
+    assert installers.repair_decky() == 0
+    assert calls == ["install"]
+
+
+def test_updates_row_forces_minimum_repair_even_when_latest_was_seen():
+    import update_watch
+
+    cache = {"items": {"decky": {"latest": "3.3.0", "installed": "3.2.10", "seen": "3.3.0"}}}
+    row = next(r for r in update_watch.summary(cache) if r["id"] == "decky")
+    assert row["new"] is True
+    assert "Needs 3.3.0 or newer" in row["note"]
+
+
+def test_install_check_marks_old_decky_red(tmp_path, monkeypatch):
+    import install_check
+
+    version_file = tmp_path / "homebrew" / "services" / ".loader.version"
+    version_file.parent.mkdir(parents=True)
+    version_file.write_text("v3.2.10\n")
+    monkeypatch.setattr(install_check, "HOME", str(tmp_path))
+    monkeypatch.setattr(install_check, "_active", lambda *a, **k: "active")
+    monkeypatch.setattr(install_check, "sh", lambda *a, **k: (0, "LISTEN 0 128 *:1337", ""))
+    monkeypatch.setattr(install_check, "same", lambda *a, **k: True)
+    monkeypatch.setattr(install_check, "DECKY_LOGS", str(tmp_path / "logs"))
+
+    class Report:
+        def __init__(self): self.rows = []
+        def head(self, *_): pass
+        def add(self, status, name, detail): self.rows.append((status, name, detail))
+
+    report = Report()
+    install_check.check_decky(report)
+    row = next(row for row in report.rows if row[1] == "Decky version")
+    assert row[0] == install_check.RED
+    assert row[2] == "Decky 3.2.10 < 3.3.0 (Steam client 2026-10-13 needs 3.3.0+)"

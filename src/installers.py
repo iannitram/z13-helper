@@ -40,6 +40,7 @@ import time
 import urllib.request
 
 import host
+from versions import DECKY_MIN, older_than
 
 HOME = os.path.expanduser("~")
 CACHE = os.path.join(HOME, ".cache", "z13-helper", "updates")
@@ -503,6 +504,10 @@ def repair_decky():
         log(f"Could not read the latest Decky release ({e}); judging by the local state only")
     log(f"Decky Loader: installed {have or 'none'}, latest {latest or '?'}, "
         f"unit {'present' if unit else 'MISSING'}, {'active' if active else 'NOT active'}")
+    if older_than(have, DECKY_MIN):
+        log(f"Decky Loader {have or '?'} is older than {DECKY_MIN} "
+            "(needed since the 2026-10-13 Steam client)")
+        return install_decky()
     if have and unit and active and (latest is None or have == latest):
         log("Decky Loader: OK")
         return 0
