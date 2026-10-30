@@ -174,3 +174,15 @@ def test_apply_tdp_takes_a_profiles_tdp_dict(fake_host):
         ["z13ctl", "tdp", "--set", "20", "--pl2", "30", "--pl3", "40"],
         ["z13ctl", "tdp", "--set", "80", "--pl2", "85", "--pl3", "90", "--force"],
     ]
+
+
+@pytest.mark.parametrize("device", ["keyboard", "lightbar"])
+@pytest.mark.parametrize("mode", profiles.LIGHTING_MODES)
+def test_set_lighting_builds_per_device_argv(device, mode):
+    c = Fake(lambda _args, _calls: None)
+
+    c.set_lighting(device, {"mode": mode, "color": "cyan"}, brightness="low")
+
+    assert c.calls == [(["--device", device, "apply", "--mode", mode,
+                         "--color", "cyan", "--brightness", "low"],
+                        Z13CTL_WRITE_TIMEOUT_S)]

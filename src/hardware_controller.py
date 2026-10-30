@@ -172,6 +172,11 @@ class HardwareController:
             raise RuntimeError("; ".join(errors))
         return failed
 
+    def set_lighting(self, device: str, setting: dict, brightness: str = "high"):
+        """Applies one profile's lighting mode and colour to one device."""
+        argv = profiles.lighting_argv(device, setting, brightness, self.z13ctl_path)
+        return self._run_command(argv[1:], timeout=Z13CTL_WRITE_TIMEOUT_S)
+
     # --- Read commands ---
 
     def get_profile(self) -> str:
