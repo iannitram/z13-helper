@@ -946,6 +946,9 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
     # 2. Base platform profile.
     base_ok = step("profile", [z13ctl, "profile", "--set", profile["base"]], profile["base"])
     if timed_out:
+        # A timed-out write may still have reached the daemon. The Max Fans flag
+        # represents confirmed enforcement, so keep it suspended rather than
+        # letting the watchdog issue another curve write against uncertain state.
         return results
 
     # 3. TDP (None = whatever the firmware profile dictates, restored by the

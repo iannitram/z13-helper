@@ -795,12 +795,21 @@ def apply_tdp(enabled, pl1, pl2, pl3, profile=None):
         rc, out = _run(Z13_PROFILE + ["apply", name, "--no-hooks"],
                        timeout=PROFILE_APPLY_TIMEOUT_S, as_deck=True)
         ok = rc == 0 and "ERR  profile" not in out
-        timeout_message = next((line.strip() for line in out.splitlines()
-                                if line.strip().startswith("z13ctl write timed out after ")), "")
+        timeout_message = _extract_z13ctl_timeout(out)
         msg = (f"{name}: power limits back to the firmware" if ok
                else timeout_message if timeout_message
                else f"{name}: saved, but re-apply failed ({out[-120:] or f'rc={rc}'})")
     return {"ok": ok, "saved": True, "message": msg, "tdp": tdp}
+
+
+def _extract_z13ctl_timeout(output):
+    """Return the exact per-write timeout embedded in z13-profile CLI output."""
+    prefix = "z13ctl write timed out after "
+    for line in output.splitlines():
+        index = line.find(prefix)
+        if index >= 0:
+            return line[index:].strip()
+    return ""
 
 
 def apply_battery_limit(value, profile=None):
@@ -1091,8 +1100,7 @@ class Plugin:
             rc, out = await asyncio.to_thread(
                 lambda: _run(Z13_PROFILE + ["apply", name], PROFILE_APPLY_TIMEOUT_S, as_deck=True))
         ok = rc == 0 and "ERR  profile" not in out
-        timeout_message = next((line.strip().split("  ")[-1] for line in out.splitlines()
-                                if "z13ctl write timed out after " in line), "")
+        timeout_message = _extract_z13ctl_timeout(out)
         message = (f"{name} applied" if ok else timeout_message or
                    f"{name}: profile apply failed ({out[-160:] or f'rc={rc}'})")
         decky.logger.info("profile apply %s -> rc=%s", name, rc)

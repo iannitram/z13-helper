@@ -146,6 +146,10 @@ class HardwareController:
             try:
                 self._run_command(argv, timeout=Z13CTL_WRITE_TIMEOUT_S)
             except RuntimeError as e:
+                if str(e).startswith("z13ctl write timed out after "):
+                    # A timed-out write may have reached the device. Do not
+                    # retry, recover the lightbar, or continue to another device.
+                    raise
                 if device == "lightbar":
                     kind = profiles.lightbar_failure_kind(str(e))
                     recover = {"wedged": profiles.recover_lightbar,
@@ -157,6 +161,8 @@ class HardwareController:
                                 self._run_command(argv, timeout=Z13CTL_WRITE_TIMEOUT_S)
                                 continue
                             except RuntimeError as e2:
+                                if str(e2).startswith("z13ctl write timed out after "):
+                                    raise
                                 e = RuntimeError(f"{e2} (still failing after a {msg})")
                         else:
                             e = RuntimeError(f"{e}; {msg}")

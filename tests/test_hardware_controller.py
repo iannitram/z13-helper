@@ -121,6 +121,18 @@ def test_keyboard_timeout_never_resets(recover):
     assert recover.seen == []
 
 
+@pytest.mark.parametrize("device", ["keyboard", "lightbar"])
+def test_write_timeout_brightness_stops_and_propagates_exact_message(
+        device, recover, recover_stale):
+    message = "z13ctl write timed out after 20 s (kernel asus-wmi hang?)"
+    c = Fake(lambda a, calls: message if a[1] == device else None)
+    with pytest.raises(RuntimeError) as err:
+        c.set_brightness("high")
+    assert str(err.value) == message
+    assert devs(c) == (["keyboard"] if device == "keyboard" else ["keyboard", "lightbar"])
+    assert recover.seen == [] and recover_stale.seen == []
+
+
 def test_all_failed_raises(recover):
     recover.result = (False, "skipped")
     c = Fake(lambda a, calls: WEDGED)

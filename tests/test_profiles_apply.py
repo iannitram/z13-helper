@@ -93,6 +93,19 @@ def test_profile_apply_stops_after_timed_out_write(profiles_env, fake_host):
     ]
 
 
+def test_base_profile_timeout_keeps_max_fans_suspended_for_uncertain_state(
+        profiles_env, fake_host):
+    max_fans_state.save(enabled=True, saved_curve=[[40, 255]])
+    fake_host.fail("profile --set", rc=124, out="timed out after 20 s", timed_out=True)
+    results = profiles.apply(full_profile(), z13ctl=Z)
+    assert results == [(
+        "profile", False,
+        "z13ctl write timed out after 20 s (kernel asus-wmi hang?)",
+    )]
+    assert fake_host.argvs == [[Z, "profile", "--set", "performance"]]
+    assert not max_fans_state.is_enabled()
+
+
 def test_null_fields_are_left_alone(profiles_env, fake_host):
     results = profiles.apply(bare_profile(), z13ctl=Z)
     # Only the platform profile is written; fans report firmware auto without a call.

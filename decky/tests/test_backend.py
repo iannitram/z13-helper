@@ -5,6 +5,7 @@ Run from the repo root:  python3 -m unittest discover -s decky/tests -v
 
 import asyncio
 import importlib.util
+import io
 import json
 import logging
 import os
@@ -12,6 +13,7 @@ import sys
 import tempfile
 import types
 import unittest
+from contextlib import redirect_stdout
 from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -28,6 +30,7 @@ import fan_watchdog  # noqa: E402
 import host  # noqa: E402
 import power_range  # noqa: E402
 import sensor_reader  # noqa: E402
+import profiles  # noqa: E402
 from fake_host import FakeHost  # noqa: E402
 
 _SETTINGS = tempfile.mkdtemp(prefix="z13-helper-settings-")
@@ -69,6 +72,15 @@ def _store(active="Balanced"):
         prof("Boondock", "quiet", tdp={"pl1": 20, "pl2": 30, "pl3": 40, "force": False},
              hooks={"enter": "boondock on", "exit": "boondock off"}),
     ]}
+
+
+def _formatted_profile_timeout():
+    stream = io.StringIO()
+    with redirect_stdout(stream):
+        profiles._print_results([
+            ("fans", False, "z13ctl write timed out after 20 s (kernel asus-wmi hang?)")
+        ])
+    return stream.getvalue()
 
 
 FAIL_OUT = "write /dev/hidraw5: connection timed out"
@@ -215,6 +227,23 @@ class StoreTest(unittest.TestCase):
         self.assertTrue(argv[-4].endswith("/z13-profile"))
         self.assertEqual(argv[-3:], ["apply", "Boondock", "--no-hooks"])
         self.assertGreaterEqual(timeout, 60)
+
+    def test_apply_tdp_off_preserves_formatted_profile_timeout(self):
+        self._write(_store("Boondock"))
+        run = fake_host(self)
+        output = _formatted_profile_timeout()
+        run.fail("z13-profile", rc=1, out=output)
+        result = m.apply_tdp(False, 20, 30, 40)
+        self.assertEqual(result["message"],
+                         "z13ctl write timed out after 20 s (kernel asus-wmi hang?)")
+
+    def test_set_app_profile_preserves_formatted_profile_timeout(self):
+        run = fake_host(self)
+        output = _formatted_profile_timeout()
+        run.fail("z13-profile", rc=1, out=output)
+        result = asyncio.run(m.Plugin().set_app_profile("Boondock"))
+        self.assertEqual(result["message"],
+                         "z13ctl write timed out after 20 s (kernel asus-wmi hang?)")
 
     def test_apply_tdp_hw_failure_still_saved(self):
         self._write(_store("Balanced"))
