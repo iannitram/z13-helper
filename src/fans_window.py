@@ -284,7 +284,11 @@ class FansWindow(QWidget):
                 self.spl.set(a["pl1"]); self.sppt.set(a["pl2"]); self.fppt.set(a["pl3"])
                 note = st["note"]
             else:
+                # Keep the slider positions as the enable-time defaults, but don't
+                # present them as configured limits while the override is off.
                 self.spl.set(DEFAULT_TDP[0]); self.sppt.set(DEFAULT_TDP[1]); self.fppt.set(DEFAULT_TDP[2])
+                for row in (self.spl, self.sppt, self.fppt):
+                    row.value.setText("Not set")
             self.power_note.setText(note)
             self.power_note.setVisible(bool(note))
             for row in (self.spl, self.sppt, self.fppt):
@@ -356,8 +360,12 @@ class FansWindow(QWidget):
         for row in (self.spl, self.sppt, self.fppt):
             row.setEnabled(on)
         if on:
+            for row in (self.spl, self.sppt, self.fppt):
+                row.value.setText(f"{row.slider.value()}{row.suffix}")
             self._save_tdp()
         else:
+            for row in (self.spl, self.sppt, self.fppt):
+                row.value.setText("Not set")
             p = self._profile()
             p["tdp"] = None
             self.control.save(p, "tdp")
