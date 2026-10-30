@@ -125,7 +125,9 @@ function Content() {
 
 export default definePlugin(() => ({
   name: "Z13-Helper",
-  titleView: <div className={staticClasses.Title}>Z13-Helper</div>,
+  titleView: (
+    <div className={staticClasses?.Title ?? ""}>Z13-Helper</div>
+  ),
   content: <Content />,
   icon: <FaFan />,
   onDismount() {},
