@@ -308,7 +308,13 @@ events (not in 1.4.2's CLI — check the socket API) instead of polling.
   via `/etc/steamos-manager/remotes.d/*.toml` (the ROG Ally ships one) would bring them back. Must call
   z13ctl, not sysfs (principle 1).
 - **48–180 Hz VRR profile for gamescope** (`~/.config/gamescope/scripts/`, modelled on
-  `asus.rogally.lcd.lua`). Unverified whether the Tianma TL134ADXP03 accepts front-porch modegen.
+  `asus.rogally.lcd.lua`). The repository now includes a Gamescope display script matched only
+  to EDID vendor `TMA`, product `0x0803`, model `TL134ADXP03`; it derives 48–180 Hz fixed-clock
+  front-porch modes from the panel's advertised 2560×1600 timing and the script is in the
+  installer manifest. The panel EDID advertises Adaptive-Sync 48–180 Hz and DRM reports
+  `vrr_capable=1`, but actual Game Mode slider reach and panel response to generated timings
+  remain **on-device verification pending**. Do not describe this as hardware-accepted until
+  tested in Game Mode.
 - **Open since Phase 6:** QAM focus test with a game running (only the owner can do it).
 
 ---
