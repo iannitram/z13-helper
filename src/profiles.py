@@ -347,6 +347,71 @@ def _migrate_builtin_fan_curve(p):
     return True
 
 
+def _max_fans_curve_migration(store):
+    if not isinstance(store, dict) or not isinstance(store.get("profiles"), list):
+        return None
+    active_name = store.get("active")
+    active = next((p for p in store["profiles"]
+                   if isinstance(p, dict) and p.get("name") == active_name), None)
+    if active is None or active.get("builtin") is not True:
+        return None
+    migration = {
+        "Turbo": ("performance", LEGACY_TURBO_CURVE, TURBO_CURVE),
+        "Balanced": ("balanced", LEGACY_BALANCED_CURVE, BALANCED_CURVE),
+    }.get(active_name)
+    if migration is None:
+        return None
+    base, old_curve, new_curve = migration
+    if active.get("base") != base or active.get("fan_curve") != new_curve:
+        return None
+    return old_curve, new_curve
+
+
+def _migrate_enabled_max_fans_snapshot(store):
+    """Update an enabled snapshot only when it is the active built-in's old curve.
+
+    Profile-store lock is acquired before the Max Fans lock, matching apply's
+    store-to-snapshot lock order. Re-read both files while locked so a profile
+    edit or toggle racing startup is not overwritten.
+    """
+    migration = _max_fans_curve_migration(store)
+    if migration is None:
+        return
+    old_curve, new_curve = migration
+    old_snapshot = [[int(temp), round(int(pwm) * 255 / 100)]
+                    for temp, pwm in old_curve]
+    state = _read_json(MAX_FANS_PATH)
+    if not isinstance(state, dict) or state.get("enabled") is not True \
+            or state.get("saved_curve") != old_snapshot:
+        return
+
+    with store_lock():
+        # The active profile may have changed since the fast-path reads above.
+        current_migration = _max_fans_curve_migration(_read_json(STORE_PATH))
+        if current_migration is None:
+            return
+        old_curve, new_curve = current_migration
+        old_snapshot = [[int(temp), round(int(pwm) * 255 / 100)]
+                        for temp, pwm in old_curve]
+        new_snapshot = [[int(temp), round(int(pwm) * 255 / 100)]
+                        for temp, pwm in new_curve]
+        with file_lock(MAX_FANS_PATH):
+            state = _read_json(MAX_FANS_PATH)
+            if not isinstance(state, dict) or state.get("enabled") is not True \
+                    or state.get("saved_curve") != old_snapshot:
+                return
+            stamp = (f"{time.strftime('%Y%m%d-%H%M%S')}-"
+                     f"{time.time_ns() // 1000 % 1_000_000:06d}-{os.getpid()}")
+            backup = f"{MAX_FANS_PATH}.before-idle-curve-{stamp}"
+            suffix = 0
+            while os.path.exists(backup):
+                suffix += 1
+                backup = f"{MAX_FANS_PATH}.before-idle-curve-{stamp}-{suffix}"
+            shutil.copy2(MAX_FANS_PATH, backup)
+            state["saved_curve"] = new_snapshot
+            _write_json(MAX_FANS_PATH, state)
+
+
 def _loaded_profile_ok(p):
     """True when a profile read from disk is safe to hand to the rest of the app.
 
@@ -457,6 +522,8 @@ def load_store(create=True):
         if "max_fans" not in p:
             p["max_fans"] = bool(p.get("builtin") and shipped.get(p["name"], {}).get("max_fans"))
         _migrate_boondock_hooks(p)
+    if create:
+        _migrate_enabled_max_fans_snapshot(store)
     return store
 
 

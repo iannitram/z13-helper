@@ -217,6 +217,101 @@ def test_curve_migration_create_false_does_not_write(profiles_env):
     assert not list(profiles_env.store.parent.glob("profiles.json.corrupt-*"))
 
 
+def _raw_curve(curve):
+    return [[temp, round(pwm * 255 / 100)] for temp, pwm in curve]
+
+
+@pytest.mark.parametrize("name,old_curve,new_curve", [
+    ("Turbo", profiles.LEGACY_TURBO_CURVE, profiles.TURBO_CURVE),
+    ("Balanced", profiles.LEGACY_BALANCED_CURVE, profiles.BALANCED_CURVE),
+])
+def test_migrates_enabled_max_fans_snapshot_for_active_builtin(
+        profiles_env, name, old_curve, new_curve):
+    _seed(profiles_env, json.dumps({"version": 1, "active": name,
+                                    "profiles": profiles.default_profiles()}))
+    old_state = {"enabled": True, "saved_curve": _raw_curve(old_curve),
+                 "other_setting": "preserved"}
+    original = json.dumps(old_state, indent=2)
+    profiles_env.max_fans.write_text(original)
+
+    profiles.load_store()
+
+    migrated = json.loads(profiles_env.max_fans.read_text())
+    assert migrated == {"enabled": True, "saved_curve": _raw_curve(new_curve),
+                        "other_setting": "preserved"}
+    backups = list(profiles_env.max_fans.parent.glob("max-fans.json.before-idle-curve-*"))
+    assert len(backups) == 1 and backups[0].read_text() == original
+    profiles.load_store()
+    assert len(list(profiles_env.max_fans.parent.glob("max-fans.json.before-idle-curve-*"))) == 1
+
+
+def test_already_migrated_snapshot_keeps_store_load_lock_free(profiles_env, monkeypatch):
+    _seed(profiles_env, json.dumps({"version": 1, "active": "Turbo",
+                                    "profiles": profiles.default_profiles()}))
+    profiles_env.max_fans.write_text(json.dumps(
+        {"enabled": True, "saved_curve": _raw_curve(profiles.TURBO_CURVE)}))
+
+    def unexpected_store_lock():
+        raise AssertionError("steady-state profile loads should not take the store lock")
+
+    monkeypatch.setattr(profiles, "store_lock", unexpected_store_lock)
+
+    profiles.load_store()
+
+
+@pytest.mark.parametrize("enabled,snapshot", [
+    (False, _raw_curve(profiles.LEGACY_TURBO_CURVE)),
+    (True, None),
+    (True, [[25, 200]]),
+])
+def test_max_fans_snapshot_migration_preserves_off_null_and_unrelated_state(
+        profiles_env, enabled, snapshot):
+    _seed(profiles_env, json.dumps({"version": 1, "active": "Turbo",
+                                    "profiles": profiles.default_profiles()}))
+    original_state = {"enabled": enabled, "saved_curve": snapshot, "marker": 7}
+    original = json.dumps(original_state, indent=2)
+    profiles_env.max_fans.write_text(original)
+
+    profiles.load_store()
+
+    assert profiles_env.max_fans.read_text() == original
+    assert not list(profiles_env.max_fans.parent.glob("max-fans.json.before-idle-curve-*"))
+
+
+@pytest.mark.parametrize("profile_kind", ["custom", "edited_builtin"])
+def test_max_fans_snapshot_migration_preserves_custom_or_edited_active_profile(
+        profiles_env, profile_kind):
+    store = {"version": 1, "active": "Turbo", "profiles": profiles.default_profiles()}
+    turbo = next(p for p in store["profiles"] if p["name"] == "Turbo")
+    if profile_kind == "custom":
+        turbo["builtin"] = False
+    else:
+        turbo["fan_curve"] = [point[:] for point in turbo["fan_curve"]]
+        turbo["fan_curve"][0][1] = 51
+    _seed(profiles_env, json.dumps(store))
+    original_state = {"enabled": True, "saved_curve": _raw_curve(profiles.LEGACY_TURBO_CURVE)}
+    original = json.dumps(original_state, indent=2)
+    profiles_env.max_fans.write_text(original)
+
+    profiles.load_store()
+
+    assert profiles_env.max_fans.read_text() == original
+    assert not list(profiles_env.max_fans.parent.glob("max-fans.json.before-idle-curve-*"))
+
+
+def test_max_fans_snapshot_migration_create_false_does_not_write(profiles_env):
+    _seed(profiles_env, json.dumps({"version": 1, "active": "Turbo",
+                                    "profiles": profiles.default_profiles()}))
+    original_state = {"enabled": True, "saved_curve": _raw_curve(profiles.LEGACY_TURBO_CURVE)}
+    original = json.dumps(original_state, indent=2)
+    profiles_env.max_fans.write_text(original)
+
+    profiles.load_store(create=False)
+
+    assert profiles_env.max_fans.read_text() == original
+    assert not list(profiles_env.max_fans.parent.glob("max-fans.json.before-idle-curve-*"))
+
+
 # ----------------------------------------------------------------------
 # set_active / upsert / delete
 # ----------------------------------------------------------------------
