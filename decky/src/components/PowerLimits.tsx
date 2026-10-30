@@ -78,9 +78,11 @@ export function PowerLimits({ state }: { state: PowerState | null }) {
         <PanelSectionRow key={key}>
           <div {...handlers}>
             <SliderField
-              label={label}
+              label={enabled ? label : `${label} · Not set`}
               description={
-                key === "pl1" && rails.pl1 > safeMax
+                !enabled
+                  ? "No override; firmware controls this limit."
+                  : key === "pl1" && rails.pl1 > safeMax
                   ? `${description} · above ${safeMax} W runs with --force`
                   : description
               }
@@ -88,7 +90,7 @@ export function PowerLimits({ state }: { state: PowerState | null }) {
               min={state?.pl_ranges?.[key][0] ?? min}
               max={state?.pl_ranges?.[key][1] ?? max}
               step={1}
-              showValue
+              showValue={enabled}
               valueSuffix=" W"
               disabled={!enabled || !haveProfile}
               onChange={(v: number) => {

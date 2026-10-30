@@ -23,9 +23,9 @@ from fan_curve_widget import FanCurveWidget, DEFAULT_CURVE
 from profile_control import ProfileControl
 
 PL_MIN, PL_MAX = 5, 93           # IsZ1325 cap in G-Helper: the outer envelope; the live per-rail range
-                                 # is picked by power_range.detect_ranges (sysfs existence checks only). z13ctl --force above 75
+                                 # is picked by power_range.detect_ranges (sysfs metadata only). z13ctl --force above 75
 PL1_SAFE_MAX = 75
-# Shown when the profile has no TDP override. Deliberately NOT read live:
+# Slider positions when the profile has no TDP override. Deliberately NOT read live:
 # `z13ctl tdp --get` can go through the asus-armoury ppt_* files, which may
 # hard-lock the EC (ROADMAP principle 5); the Decky panel uses the same values.
 DEFAULT_TDP = (70, 86, 86)
@@ -81,7 +81,7 @@ class FansWindow(QWidget):
         self._uv_available = controller.is_undervolt_available()
         self._selected = control.active_name()
         self._loading = False
-        # Per-rail kernel range, from sysfs existence checks (no reads, no z13ctl).
+        # Per-rail kernel range from sysfs metadata (no live PPT reads, no z13ctl).
         self._ranges = power_range.detect_ranges()
         self.resize(675, 560)
         self._build()
@@ -284,7 +284,11 @@ class FansWindow(QWidget):
                 self.spl.set(a["pl1"]); self.sppt.set(a["pl2"]); self.fppt.set(a["pl3"])
                 note = st["note"]
             else:
+                # Keep enable-time slider positions, but make clear these are
+                # placeholders rather than power limits applied to this profile.
                 self.spl.set(DEFAULT_TDP[0]); self.sppt.set(DEFAULT_TDP[1]); self.fppt.set(DEFAULT_TDP[2])
+                for row in (self.spl, self.sppt, self.fppt):
+                    row.value.setText("Not set")
             self.power_note.setText(note)
             self.power_note.setVisible(bool(note))
             for row in (self.spl, self.sppt, self.fppt):
@@ -356,8 +360,12 @@ class FansWindow(QWidget):
         for row in (self.spl, self.sppt, self.fppt):
             row.setEnabled(on)
         if on:
+            for row in (self.spl, self.sppt, self.fppt):
+                row.value.setText(f"{row.slider.value()}{row.suffix}")
             self._save_tdp()
         else:
+            for row in (self.spl, self.sppt, self.fppt):
+                row.value.setText("Not set")
             p = self._profile()
             p["tdp"] = None
             self.control.save(p, "tdp")
