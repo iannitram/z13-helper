@@ -84,6 +84,149 @@ def test_null_fields_are_left_alone(profiles_env, fake_host):
     assert results[1] == ("fans", True, "firmware auto")
 
 
+def test_curve_without_tdp_clears_only_default_custom_tdp_after_base_profile(
+        profiles_env, fake_host):
+    """A bare z13ctl curve edit activates `custom`, so old custom TDP must be cleared first."""
+    fake_host.fail("tdp --help", rc=0, out="Usage: z13ctl tdp [flags]\nFlags: --profile string")
+    fake_host.fail("profile --list", rc=0,
+                   out="Firmware profiles: quiet, balanced, performance\n"
+                       "Custom profiles:\n   custom              fan curve, 20W\n")
+    p = bare_profile(base="performance", fan_curve=[list(pt) for pt in CURVE])
+
+    results = profiles.apply(p, z13ctl=Z)
+
+    assert fake_host.argvs == [
+        [Z, "profile", "--set", "performance"],
+        [Z, "tdp", "--help"],
+        [Z, "profile", "--list"],
+        [Z, "tdp", "--reset", "--profile", "custom"],
+        [Z, "fancurve", "--set", profiles.curve_spec(CURVE)],
+    ]
+    assert ("tdp", True, "cleared saved z13ctl custom TDP") in results
+
+
+def test_curve_without_tdp_does_not_clear_custom_tdp_if_base_switch_fails(
+        profiles_env, fake_host):
+    fake_host.fail("profile --set", rc=1, out="profile switch failed")
+    p = bare_profile(base="performance", fan_curve=[list(pt) for pt in CURVE])
+
+    results = profiles.apply(p, z13ctl=Z)
+
+    assert [Z, "tdp", "--help"] not in fake_host.argvs
+    assert [Z, "tdp", "--reset", "--profile", "custom"] not in fake_host.argvs
+    assert [Z, "fancurve", "--set", profiles.curve_spec(CURVE)] not in fake_host.argvs
+    assert ("fans", False,
+            "saved custom TDP could not be safely cleared; fan curve was not applied") in results
+
+
+def test_curve_without_tdp_is_skipped_when_custom_tdp_cleanup_fails(profiles_env, fake_host):
+    fake_host.fail("tdp --help", rc=0, out="Flags: --profile string")
+    fake_host.fail("profile --list", rc=0,
+                   out="Firmware profiles: quiet, balanced, performance\n"
+                       "Custom profiles:\n   custom              fan curve, 20W\n")
+    fake_host.fail("tdp --reset --profile custom", rc=1, out="daemon rejected reset")
+    p = bare_profile(base="performance", fan_curve=[list(pt) for pt in CURVE])
+
+    results = profiles.apply(p, z13ctl=Z)
+
+    assert [Z, "tdp", "--reset", "--profile", "custom"] in fake_host.argvs
+    assert [Z, "fancurve", "--set", profiles.curve_spec(CURVE)] not in fake_host.argvs
+    assert ("fans", False,
+            "saved custom TDP could not be safely cleared; fan curve was not applied") in results
+
+
+def test_curveless_max_fans_profile_clears_stale_custom_tdp(profiles_env, fake_host):
+    fake_host.fail("tdp --help", rc=0, out="Flags: --profile string")
+    fake_host.fail("profile --list", rc=0,
+                   out="Firmware profiles: quiet, balanced, performance\n"
+                       "Custom profiles:\n   custom              20W\n")
+    p = bare_profile(name="Turbo", base="performance", max_fans=True)
+
+    results = profiles.apply(p, z13ctl=Z)
+
+    assert [Z, "tdp", "--reset", "--profile", "custom"] in fake_host.argvs
+    assert [Z, "fancurve", "--set", profiles.MAX_FANS_SPEC] in fake_host.argvs
+    assert ("tdp", True, "cleared saved z13ctl custom TDP") in results
+
+
+def test_default_custom_without_tdp_is_not_created_or_reset(profiles_env, fake_host):
+    fake_host.fail("tdp --help", rc=0, out="Flags: --profile string")
+    fake_host.fail("profile --list", rc=0,
+                   out="Firmware profiles: quiet, balanced, performance\n"
+                       "Custom profiles:\n   custom              (empty)\n")
+    p = bare_profile(base="performance", fan_curve=[list(pt) for pt in CURVE])
+
+    profiles.apply(p, z13ctl=Z)
+
+    assert [Z, "tdp", "--reset", "--profile", "custom"] not in fake_host.argvs
+    assert [Z, "fancurve", "--set", profiles.curve_spec(CURVE)] in fake_host.argvs
+
+
+def test_empty_custom_profile_list_allows_curve_for_fresh_user(profiles_env, fake_host):
+    fake_host.fail("tdp --help", rc=0, out="Flags: --profile string")
+    fake_host.fail("profile --list", rc=0,
+                   out="Firmware profiles: quiet, balanced, performance\nCustom profiles:\n")
+    p = bare_profile(base="performance", fan_curve=[list(pt) for pt in CURVE])
+
+    profiles.apply(p, z13ctl=Z)
+
+    assert [Z, "tdp", "--reset", "--profile", "custom"] not in fake_host.argvs
+    assert [Z, "fancurve", "--set", profiles.curve_spec(CURVE)] in fake_host.argvs
+
+
+def test_malformed_profile_list_blocks_curve_write(profiles_env, fake_host):
+    fake_host.fail("tdp --help", rc=0, out="Flags: --profile string")
+    fake_host.fail("profile --list", rc=0, out="unexpected output")
+    p = bare_profile(base="performance", fan_curve=[list(pt) for pt in CURVE])
+
+    results = profiles.apply(p, z13ctl=Z)
+
+    assert [Z, "tdp", "--reset", "--profile", "custom"] not in fake_host.argvs
+    assert [Z, "fancurve", "--set", profiles.curve_spec(CURVE)] not in fake_host.argvs
+    assert ("fans", False,
+            "saved custom TDP could not be safely cleared; fan curve was not applied") in results
+
+
+def test_curve_without_tdp_skips_for_daemon_without_profile_list(profiles_env, fake_host):
+    fake_host.fail("tdp --help", rc=0, out="Flags: --profile string")
+    fake_host.fail("profile --list", rc=1, out="unknown command: profile-list")
+    p = bare_profile(base="performance", fan_curve=[list(pt) for pt in CURVE])
+
+    results = profiles.apply(p, z13ctl=Z)
+
+    assert [Z, "tdp", "--reset", "--profile", "custom"] not in fake_host.argvs
+    assert [Z, "fancurve", "--set", profiles.curve_spec(CURVE)] not in fake_host.argvs
+    assert ("fans", False,
+            "saved custom TDP could not be safely cleared; fan curve was not applied") in results
+
+
+def test_curve_without_tdp_refuses_reset_if_custom_remains_active(profiles_env, fake_host):
+    fake_host.fail("tdp --help", rc=0, out="Flags: --profile string")
+    fake_host.fail("profile --list", rc=0,
+                   out="Firmware profiles: quiet, balanced, performance\n"
+                       "Custom profiles:\n * custom             20W\n")
+    p = bare_profile(base="performance", fan_curve=[list(pt) for pt in CURVE])
+
+    results = profiles.apply(p, z13ctl=Z)
+
+    assert [Z, "tdp", "--reset", "--profile", "custom"] not in fake_host.argvs
+    assert [Z, "fancurve", "--set", profiles.curve_spec(CURVE)] not in fake_host.argvs
+    assert ("tdp", False,
+            "z13ctl custom profile is still active; saved TDP was left unchanged") in results
+
+
+def test_old_z13ctl_without_named_tdp_reset_leaves_saved_custom_tdp_unchanged(
+        profiles_env, fake_host):
+    p = bare_profile(base="performance", fan_curve=[list(pt) for pt in CURVE])
+
+    results = profiles.apply(p, z13ctl=Z)
+
+    assert [Z, "tdp", "--help"] in fake_host.argvs
+    assert [Z, "profile", "--list"] not in fake_host.argvs
+    assert [Z, "tdp", "--reset", "--profile", "custom"] not in fake_host.argvs
+    assert all(step != "tdp" for step, _, _ in results)
+
+
 def test_tdp_without_curve_resets_fans_after_tdp(profiles_env, fake_host):
     """z13ctl's `tdp --set` re-applies the last curve its "custom" profile stored
     (Boondock came back with Max Fans' 100% curve); the reset after it clears that."""
