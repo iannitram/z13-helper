@@ -280,40 +280,111 @@ find_pnpm() {
     ls -d "$HOME"/.nvm/versions/node/*/bin/pnpm 2>/dev/null | sort -V | tail -1
 }
 
-restart_loader() {
-    # stop -> kill -> start: a plain restart can leave the old loader holding :1337.
+quiesce_loader() {
+    # Do not replace files in a live plugin tree: the loader watches it and can
+    # import a mixture of old/new files while the install is in progress.
     if ((DRY)); then
-        info "(dry run) sudo systemctl stop/kill/start plugin_loader.service, wait for 'z13-helper up'"
+        info "(dry run) sudo systemctl stop/kill plugin_loader.service and verify inactive + :1337 free"
         return 0
     fi
-    act sudo systemctl stop plugin_loader.service
+    if ! act sudo systemctl stop plugin_loader.service; then
+        # A timed-out stop can still leave the unit in a state that systemctl
+        # kill clears. Verify both unit state and listener before replacement.
+        warn "systemctl stop returned an error; force-stopping and verifying unit state + :1337 before replacement"
+    fi
     sleep 2
     sudo systemctl kill plugin_loader.service 2>/dev/null
     sleep 1
-    local pid
-    pid=$(sudo ss -Hltnp 'sport = :1337' | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2)
-    if [[ -n $pid ]]; then
-        warn "a stale loader (pid $pid) still holds :1337 outside the unit; killing it"
-        sudo kill "$pid"; sleep 2
+    local listeners pid
+    if ! listeners=$(sudo ss -Hltnp 'sport = :1337'); then
+        fail "could not verify plugin_loader is quiescent; plugin files left unchanged"
+        return 1
+    fi
+    if [[ -n $listeners ]]; then
+        while read -r pid; do
+            [[ -n $pid ]] || continue
+            warn "a stale loader (pid $pid) still holds :1337 outside the unit; killing it"
+            if ! sudo kill "$pid"; then
+                fail "could not stop stale plugin loader (pid $pid); plugin files left unchanged"
+                return 1
+            fi
+        done < <(printf '%s\n' "$listeners" | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u)
+        sleep 2
+    fi
+    if ! listeners=$(sudo ss -Hltnp 'sport = :1337'); then
+        fail "could not verify plugin_loader is quiescent; plugin files left unchanged"
+        return 1
+    fi
+    local state
+    state=$(sudo systemctl is-active plugin_loader.service 2>/dev/null || true)
+    case $state in
+        inactive|failed|dead) ;;
+        *)
+        if [[ -n $listeners ]]; then
+            fail "plugin_loader still holds :1337; plugin files left unchanged"
+        else
+            fail "plugin_loader state is not confirmed stopped (${state:-empty}); plugin files left unchanged"
+        fi
+        return 1
+        ;;
+    esac
+    if [[ -n $listeners ]]; then
+        fail "plugin_loader still holds :1337; plugin files left unchanged"
+        return 1
+    fi
+}
+
+start_loader() {
+    # Start only after all plugin files have reached their final state.
+    if ((DRY)); then
+        info "(dry run) sudo systemctl start plugin_loader.service and wait for 'z13-helper up'"
+        return 0
     fi
     sudo systemctl reset-failed plugin_loader.service 2>/dev/null
-    local marker="$STATE/.loader-restart" i newest
-    touch "$marker"
-    act sudo systemctl start plugin_loader.service
+    local journal_state cursor since i entries
+    if ! journal_state=$(sudo journalctl -n 0 --show-cursor --no-pager 2>/dev/null); then
+        fail "could not read the system journal before starting plugin_loader"
+        return 1
+    fi
+    cursor=$(sed -n 's/^-- cursor: //p' <<<"$journal_state")
+    since=""
+    if [[ -z $cursor ]]; then
+        since=$(date +%s.%N) || { fail "could not record startup time for plugin_loader journal check"; return 1; }
+        since="@$since"
+    fi
+    if ! act sudo systemctl start plugin_loader.service; then
+        fail "could not start plugin_loader.service"
+        return 1
+    fi
     for i in $(seq 1 30); do
         sleep 1
-        newest=$(ls -t "$HOME"/homebrew/logs/z13-helper/*.log 2>/dev/null | head -1)
-        if [[ -n $newest && $newest -nt $marker ]] && grep -q 'z13-helper up' "$newest"; then
-            info "z13-helper backend up (${i}s)"
+        if [[ -n $cursor ]]; then
+            entries=$(sudo journalctl -u plugin_loader.service --after-cursor "$cursor" --no-pager -o cat 2>/dev/null) || entries=""
+        else
+            entries=$(sudo journalctl -u plugin_loader.service --since "$since" --no-pager -o cat 2>/dev/null) || entries=""
+        fi
+        if grep -Fq 'z13-helper up' <<<"$entries"; then
+            info "z13-helper backend started (${i}s)"
             return 0
         fi
     done
-    fail "z13-helper backend did not log 'up' within 30 s after the loader restart"
+    fail "Decky backend did not log 'z13-helper up' in plugin_loader.service within 30 s after start"
+    return 1
+}
+
+resume_loader() {
+    # A failed quiesce/swap can happen after systemd stopped the old service.
+    # If it is already active, leave it alone; otherwise try to restore it.
+    if sudo systemctl is-active --quiet plugin_loader.service; then
+        return 0
+    fi
+    warn "plugin_loader is inactive after an unsuccessful replacement; restoring the old service"
+    start_loader
 }
 
 decky_plugin() {
     say "Decky plugin (z13-helper)"
-    local pnpm
+    local pnpm old_plugin=0 live_plugin=0
     pnpm=$(find_pnpm)
     if ((DRY)); then
         info "(dry run) would build with ${pnpm:-<no pnpm: use the existing decky/dist>}"
@@ -337,33 +408,195 @@ decky_plugin() {
         return 1
     fi
 
-    if [[ -d $OLD_PLUGIN_DIR ]]; then
-        info "removing the old plugin $OLD_PLUGIN_DIR (renamed to z13-helper)"
-        if ((!DRY)); then
-            mkdir -p "$BACKUP" && sudo tar -C "$(dirname "$OLD_PLUGIN_DIR")" -cf "$BACKUP/z13-decky-plugin.tar" z13-decky
-        fi
-        act sudo rm -rf "$OLD_PLUGIN_DIR" && CHANGED+=("removed old plugin z13-decky")
-        PLUGIN_CHANGED=1
-    fi
+    [[ -d $OLD_PLUGIN_DIR ]] && old_plugin=1
     local f diff=()
     for f in "${PLUGIN_FILES[@]}"; do
         cmp -s "$(plugin_src "$f")" "$PLUGIN_DIR/$f" || diff+=("$f")
     done
+    ((old_plugin)) && diff+=("old plugin z13-decky")
     if ((${#diff[@]} == 0)); then
         info "installed plugin matches the build"
-        ((PLUGIN_CHANGED)) && restart_loader
         return 0
     fi
     info "differs: ${diff[*]}"
-    if ((!DRY)); then
-        for f in "${PLUGIN_FILES[@]}"; do backup "$PLUGIN_DIR/$f" sudo; done
+
+    # Prepare a complete, checked tree outside Decky's watched plugins directory.
+    # A failed build/copy cannot expose a partial frontend or backend to the loader.
+    local stage_dir="" old_dir=""
+    if ((DRY)); then
+        info "(dry run) create a private root-owned staging directory and verify ${#PLUGIN_FILES[@]} Decky files"
+    else
+        if ! mkdir -p "$HOME/homebrew"; then
+            fail "could not create the Decky staging parent directory"
+            return 1
+        fi
+        # Keep staging and the target on one filesystem so directory rename is
+        # atomic. mktemp supplies private, unpredictable names; sudo owns each.
+        stage_dir=$(sudo mktemp -d "$HOME/homebrew/.z13-helper-stage.XXXXXXXXXX") || stage_dir=""
+        old_dir=$(sudo mktemp -d "$HOME/homebrew/.z13-helper-old.XXXXXXXXXX") || old_dir=""
+        if [[ -z $stage_dir || -z $old_dir ]]; then
+            fail "could not create a staging directory for the Decky plugin"
+            [[ -z $stage_dir ]] || sudo rm -rf "$stage_dir"
+            [[ -z $old_dir ]] || sudo rm -rf "$old_dir"
+            return 1
+        fi
+        if ! sudo rmdir "$old_dir"; then
+            fail "could not prepare the rollback directory"
+            sudo rm -rf "$stage_dir" "$old_dir"
+            return 1
+        fi
+        for f in "${PLUGIN_FILES[@]}"; do
+            if ! sudo install -D -m 644 -o root -g root "$(plugin_src "$f")" "$stage_dir/$f"; then
+                fail "stage plugin $f; installed plugin left unchanged"
+                sudo rm -rf "$stage_dir" "$old_dir"
+                return 1
+            fi
+            if ! sudo cmp -s "$(plugin_src "$f")" "$stage_dir/$f"; then
+                fail "verify staged plugin $f; installed plugin left unchanged"
+                sudo rm -rf "$stage_dir" "$old_dir"
+                return 1
+            fi
+        done
     fi
-    for f in "${PLUGIN_FILES[@]}"; do
-        act sudo install -D -m 644 -o root -g root "$(plugin_src "$f")" "$PLUGIN_DIR/$f" || fail "install plugin $f"
-    done
+
+    # Quiesce before moving the current plugin tree. If the loader cannot be
+    # stopped and verified inactive with :1337 free, leave installed files intact.
+    if ! quiesce_loader; then
+        if ((!DRY)); then
+            resume_loader || true
+            sudo rm -rf "$stage_dir"
+        fi
+        return 1
+    fi
+
+    [[ -e $PLUGIN_DIR || -L $PLUGIN_DIR ]] && live_plugin=1
+
+    if ((!DRY)) && ! sudo mkdir -p "$(dirname "$PLUGIN_DIR")"; then
+        fail "could not create Decky plugins directory"
+        resume_loader || true
+        sudo rm -rf "$stage_dir"
+        return 1
+    fi
+
+    # Back up both live trees before renaming either. The temporary old active
+    # tree stays outside Decky's watched directory until the new backend is healthy.
+    if ((!DRY)); then
+        if ((live_plugin)); then
+            if ! mkdir -p "$BACKUP" || ! sudo tar -C "$(dirname "$PLUGIN_DIR")" -cf "$BACKUP/z13-helper-plugin.tar" "$(basename "$PLUGIN_DIR")"; then
+                fail "could not back up installed Decky plugin; leaving it in place"
+                resume_loader || true
+                sudo rm -rf "$stage_dir" "$old_dir"
+                return 1
+            fi
+        fi
+        if ((old_plugin)); then
+            if ! mkdir -p "$BACKUP" || ! sudo tar -C "$(dirname "$OLD_PLUGIN_DIR")" -cf "$BACKUP/z13-decky-plugin.tar" "$(basename "$OLD_PLUGIN_DIR")"; then
+                fail "could not back up old Decky plugin; leaving it in place"
+                resume_loader || true
+                sudo rm -rf "$stage_dir" "$old_dir"
+                return 1
+            fi
+        fi
+    fi
+
+    # Keep the staged tree root-private while Decky is running. Make it
+    # traversable only after the watcher is stopped and immediately before swap.
+    if ((!DRY)) && ! sudo chmod 755 "$stage_dir"; then
+        fail "could not make staged Decky plugin traversable by the loader"
+        resume_loader || true
+        sudo rm -rf "$stage_dir" "$old_dir"
+        return 1
+    fi
+
+    if ((live_plugin)); then
+        if ! act sudo mv -T -- "$PLUGIN_DIR" "$old_dir"; then
+            fail "could not move installed Decky plugin aside"
+            if ((!DRY)); then
+                resume_loader || true
+                sudo rm -rf "$stage_dir" "$old_dir"
+            fi
+            return 1
+        fi
+    fi
+    if ! act sudo mv -T -- "$stage_dir" "$PLUGIN_DIR"; then
+        fail "could not install staged Decky plugin; restoring previous plugin"
+        if ((!DRY)); then
+            local preserve_old=0
+            if ((live_plugin)); then
+                if ! sudo mv -T -- "$old_dir" "$PLUGIN_DIR"; then
+                    fail "could not restore previous Decky plugin from $old_dir"
+                    preserve_old=1
+                fi
+            fi
+            if ((preserve_old)); then
+                sudo rm -rf "$stage_dir"
+                return 1
+            fi
+            resume_loader || true
+            sudo rm -rf "$stage_dir" "$old_dir"
+        fi
+        return 1
+    fi
+
+    # Decky scans every plugin directory on startup, so remove the legacy
+    # directory before starting the loader. Its tar backup supports rollback.
+    if ((old_plugin)); then
+        info "removing the old plugin $OLD_PLUGIN_DIR (renamed to z13-helper)"
+        if ! act sudo rm -rf "$OLD_PLUGIN_DIR"; then
+            fail "could not remove old Decky plugin"
+            if ! sudo rm -rf -- "$PLUGIN_DIR" || [[ -e $PLUGIN_DIR || -L $PLUGIN_DIR ]]; then
+                fail "could not remove failed plugin tree; previous plugin remains at $old_dir"
+                return 1
+            fi
+            if ((live_plugin)) && ! sudo mv -T -- "$old_dir" "$PLUGIN_DIR"; then
+                fail "could not restore previous Decky plugin from $old_dir"
+                return 1
+            fi
+            # The previous plugin tree is restored, while the legacy tree is
+            # still present. Restarting would load both, so leave the loader stopped.
+            sudo rm -rf "$stage_dir" "$old_dir"
+            return 1
+        else
+            CHANGED+=("removed old plugin z13-decky")
+            PLUGIN_CHANGED=1
+        fi
+    fi
+
     CHANGED+=("decky plugin (${diff[*]})")
     PLUGIN_CHANGED=1
-    restart_loader
+    if ! start_loader; then
+        fail "Decky plugin replaced but plugin_loader did not become healthy; restoring previous plugin"
+        if ((!DRY)); then
+            if ! quiesce_loader; then
+                fail "could not quiesce unhealthy plugin_loader; keeping current plugin and rollback tree at $old_dir"
+                return 1
+            fi
+            if ! sudo rm -rf -- "$PLUGIN_DIR" || [[ -e $PLUGIN_DIR || -L $PLUGIN_DIR ]]; then
+                fail "could not remove failed plugin tree; previous plugin remains at $old_dir"
+                return 1
+            fi
+            local preserve_old=0
+            if ((live_plugin)) && ! sudo mv -T -- "$old_dir" "$PLUGIN_DIR"; then
+                fail "could not restore previous Decky plugin from $old_dir"
+                preserve_old=1
+            fi
+            if ((preserve_old)); then
+                return 1
+            fi
+            if ((old_plugin)) && ! sudo tar -C "$(dirname "$OLD_PLUGIN_DIR")" -xf "$BACKUP/z13-decky-plugin.tar"; then
+                fail "could not restore old Decky plugin from backup"
+            fi
+            resume_loader || true
+            sudo rm -rf "$stage_dir" "$old_dir"
+        fi
+        return 1
+    fi
+    if ((!DRY && live_plugin)); then
+        if ! sudo rm -rf "$old_dir"; then
+            warn "new plugin is installed, but rollback tree remains at $old_dir"
+        fi
+    fi
+    return 0
 }
 
 # ----------------------------------------------------------------------

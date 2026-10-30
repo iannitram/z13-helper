@@ -16,7 +16,11 @@ the device but not yet verified on the Z13. Plan and status: `docs/ROADMAP.md`.
 
 ## Unreleased
 
-No changes queued after the 0.5.1 repair release.
+- **Decky repair avoids live file-watcher reload storms (#100).** Stage and byte-verify the
+  complete plugin outside the watched directory, quiesce the loader, then swap the root-owned
+  tree and start it once. A failed swap restores the previous tree; staging failures leave the
+  live plugin untouched. An unchanged repair leaves the loader running. Failures are reported;
+  backend startup alone is not evidence that Steam's frontend imported successfully.
 
 ## 0.5.1 — 2026-10-30
 
