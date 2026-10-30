@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+import host
 import max_fans_state
 import profiles
 from fan_watchdog import FanWatchdog
@@ -201,6 +202,167 @@ def test_failed_cleanup_disables_max_fans_before_watchdog_tick(profiles_env, fak
 
     assert watchdog.tick() is None
     assert ctl.calls == []
+
+
+def test_leaving_turbo_disables_watchdog_before_base_profile_write(
+        profiles_env, fake_host, monkeypatch):
+    max_fans_state.save(enabled=True, saved_curve=[[40, 128]])
+
+    class Sensors:
+        def custom_fan_curve_enabled(self):
+            return False  # the platform-profile write just released the curve
+
+        def custom_fan_curve_points(self):
+            return None
+
+        def get_apu_temp(self):
+            return 40.0
+
+        def get_fan_speeds(self):
+            return 0, 0
+
+    class Controller:
+        def __init__(self):
+            self.calls = []
+
+        def rewrite_profile(self):
+            self.calls.append("rewrite_profile")
+
+        def set_fans_max(self):
+            self.calls.append("set_fans_max")
+
+        def set_fancurve_pwm(self, curve):
+            self.calls.append(("set_fancurve_pwm", curve))
+
+        def apply_tdp(self, tdp):
+            self.calls.append(("apply_tdp", tdp))
+
+        def reset_fancurve(self):
+            self.calls.append("reset_fancurve")
+
+    ctl = Controller()
+    watchdog = FanWatchdog(Sensors(), ctl, max_fans_on=max_fans_state.is_enabled)
+    real_run = host.run
+
+    def tick_during_base_write(argv, **kwargs):
+        result = real_run(argv, **kwargs)
+        if argv == [Z, "profile", "--set", "balanced"]:
+            assert not max_fans_state.is_enabled()
+            watchdog.tick()
+        return result
+
+    monkeypatch.setattr(host, "run", tick_during_base_write)
+    fake_host.fail("tdp --help", rc=0, out="Flags: --profile string")
+    fake_host.fail("profile --list", rc=0,
+                   out="Firmware profiles: quiet, balanced, performance\nCustom profiles:\n")
+    defaults = {p["name"]: p for p in profiles.default_profiles()}
+
+    profiles.apply(defaults["Balanced"], previous=defaults["Turbo"], z13ctl=Z)
+
+    assert not max_fans_state.is_enabled()
+    assert ctl.calls == []
+    assert [Z, "fancurve", "--set", profiles.curve_spec(defaults["Balanced"]["fan_curve"])] \
+        in fake_host.argvs
+
+
+def test_max_fans_reapply_suspends_flag_through_base_and_cleanup(
+        profiles_env, fake_host, monkeypatch):
+    max_fans_state.save(enabled=True)
+    hardware = {"curve_enabled": False}
+
+    class Sensors:
+        def custom_fan_curve_enabled(self):
+            return hardware["curve_enabled"]
+
+        def custom_fan_curve_points(self):
+            return None
+
+        def get_apu_temp(self):
+            return 40.0
+
+        def get_fan_speeds(self):
+            return 0, 0
+
+    class Controller:
+        def __init__(self):
+            self.calls = []
+
+        def rewrite_profile(self):
+            self.calls.append("rewrite_profile")
+
+        def set_fans_max(self):
+            self.calls.append("set_fans_max")
+
+        def set_fancurve_pwm(self, curve):
+            self.calls.append(("set_fancurve_pwm", curve))
+
+        def apply_tdp(self, tdp):
+            self.calls.append(("apply_tdp", tdp))
+
+        def reset_fancurve(self):
+            self.calls.append("reset_fancurve")
+
+    ctl = Controller()
+    watchdog = FanWatchdog(Sensors(), ctl, max_fans_on=max_fans_state.is_enabled)
+    real_run = host.run
+
+    def tick_during_apply(argv, **kwargs):
+        result = real_run(argv, **kwargs)
+        if argv[1:3] == ["profile", "--set"] or argv[1:3] in (
+                ["tdp", "--help"], ["profile", "--list"]):
+            assert not max_fans_state.is_enabled()
+            watchdog.tick()
+        if argv == [Z, "fancurve", "--set", profiles.MAX_FANS_SPEC]:
+            hardware["curve_enabled"] = result[0] == 0
+            assert not max_fans_state.is_enabled()
+        return result
+
+    monkeypatch.setattr(host, "run", tick_during_apply)
+    fake_host.fail("tdp --help", rc=0, out="Flags: --profile string")
+    fake_host.fail("profile --list", rc=0,
+                   out="Firmware profiles: quiet, balanced, performance\nCustom profiles:\n")
+    turbo = next(p for p in profiles.default_profiles() if p["name"] == "Turbo")
+
+    profiles.apply(turbo, previous=turbo, z13ctl=Z)
+
+    assert not ctl.calls
+    assert max_fans_state.is_enabled()
+    assert [Z, "fancurve", "--set", profiles.MAX_FANS_SPEC] in fake_host.argvs
+
+
+def test_entering_turbo_enables_flag_only_after_successful_curve_write(
+        profiles_env, fake_host, monkeypatch):
+    real_run = host.run
+
+    def inspect_fan_write(argv, **kwargs):
+        result = real_run(argv, **kwargs)
+        if argv == [Z, "fancurve", "--set", profiles.MAX_FANS_SPEC]:
+            assert not max_fans_state.is_enabled()
+        return result
+
+    monkeypatch.setattr(host, "run", inspect_fan_write)
+    fake_host.fail("tdp --help", rc=0, out="Flags: --profile string")
+    fake_host.fail("profile --list", rc=0,
+                   out="Firmware profiles: quiet, balanced, performance\nCustom profiles:\n")
+    defaults = {p["name"]: p for p in profiles.default_profiles()}
+
+    profiles.apply(defaults["Turbo"], previous=defaults["Balanced"], z13ctl=Z)
+
+    assert max_fans_state.is_enabled()
+
+
+def test_failed_max_fans_curve_write_does_not_publish_enabled_flag(
+        profiles_env, fake_host):
+    fake_host.fail("tdp --help", rc=0, out="Flags: --profile string")
+    fake_host.fail("profile --list", rc=0,
+                   out="Firmware profiles: quiet, balanced, performance\nCustom profiles:\n")
+    fake_host.fail("fancurve --set", rc=1, out="curve write failed")
+    defaults = {p["name"]: p for p in profiles.default_profiles()}
+
+    results = profiles.apply(defaults["Turbo"], previous=defaults["Balanced"], z13ctl=Z)
+
+    assert not max_fans_state.is_enabled()
+    assert ("fans", False, "curve write failed") in results
 
 
 def test_curveless_max_fans_profile_clears_stale_custom_tdp(profiles_env, fake_host):

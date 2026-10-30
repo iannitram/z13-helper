@@ -809,6 +809,24 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
         if exit_cmd.strip():
             step("exit hook", ["bash", "-lc", exit_cmd], f"ran: {exit_cmd}")
 
+    # Compute the desired state now, but suspend the shared Max Fans flag for
+    # the whole apply. The watchdog must not re-pin a curve between the base
+    # profile write and this apply's own fan write.
+    curve = profile.get("fan_curve")
+    tdp = profile.get("tdp")
+    switching = previous is None or previous.get("name") != profile["name"]
+    initial_max_fans_on = bool(_max_fans_state().get("enabled"))
+    planned_max_fans_on = initial_max_fans_on
+    released = False
+    if switching and profile.get("max_fans"):
+        planned_max_fans_on = True
+    elif switching and previous and previous.get("max_fans") and not profile.get("max_fans") \
+            and initial_max_fans_on:
+        planned_max_fans_on = False
+        released = True
+    if initial_max_fans_on:
+        _save_max_fans(enabled=False)
+
     # 2. Base platform profile.
     base_ok = step("profile", [z13ctl, "profile", "--set", profile["base"]], profile["base"])
 
@@ -820,19 +838,7 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
     #    the profile's curve as the one to restore when it's switched OFF.
     #    A max_fans profile turns it ON when switched to and OFF when left
     #    (only on a real switch: restore/resume keeps whatever the user chose).
-    curve = profile.get("fan_curve")
-    tdp = profile.get("tdp")
-    initial_max_fans_on = bool(_max_fans_state().get("enabled"))
-    released = False
-    if previous is None or previous.get("name") != profile["name"]:
-        if profile.get("max_fans") and not initial_max_fans_on:
-            _save_max_fans(enabled=True)
-        elif (previous or {}).get("max_fans") and not profile.get("max_fans") \
-                and initial_max_fans_on:
-            _save_max_fans(enabled=False)
-            released = True
-    max_fans_on = bool(_max_fans_state().get("enabled"))
-    curve_write_needed = bool(curve) or max_fans_on
+    curve_write_needed = bool(curve) or planned_max_fans_on
     cleanup_ok = True
     if curve_write_needed and not tdp:
         # Editing a fan curve through z13ctl activates its default `custom`
@@ -855,12 +861,14 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
         _save_max_fans(enabled=initial_max_fans_on if not base_ok else False)
         results.append(("fans", False,
                         "saved custom TDP could not be safely cleared; fan curve was not applied"))
-    elif _max_fans_state().get("enabled"):
+    elif planned_max_fans_on:
         # What Max Fans OFF should go back to: this profile's curve, or none
         # (= firmware auto) -- never the previous profile's leftover curve.
         _save_max_fans(saved_curve=[[int(t), round(int(p) * 255 / 100)] for t, p in curve]
                         if curve else None)
-        step("fans", [z13ctl, "fancurve", "--set", MAX_FANS_SPEC], "Max Fans stays ON (100%)")
+        if step("fans", [z13ctl, "fancurve", "--set", MAX_FANS_SPEC],
+                "Max Fans stays ON (100%)"):
+            _save_max_fans(enabled=True)
     elif curve:
         step("fans", [z13ctl, "fancurve", "--set", curve_spec(curve)], "custom curve")
     elif released or tdp:
