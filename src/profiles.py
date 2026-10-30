@@ -48,6 +48,8 @@ import tempfile
 import threading
 import time
 
+Z13CTL_WRITE_TIMEOUT_S = 20
+
 # Installed as ~/.local/bin/z13-profile, the host seam sits in ~/.local/lib/z13-helper/
 # (install.sh puts it there). In the Flatpak and the tests it's next to this file.
 _HOST_LIB = os.path.expanduser("~/.local/lib/z13-helper")
@@ -805,7 +807,7 @@ def apply_tdp(profile, *, z13ctl=Z13CTL):
             "--pl2", str(tdp["pl2"]), "--pl3", str(tdp["pl3"])]
     if tdp.get("force"):
         argv.append("--force")
-    rc, out, _ = host.run(argv, timeout=120)
+    rc, out, _ = host.run(argv, timeout=Z13CTL_WRITE_TIMEOUT_S)
     ok = rc == 0
     return [("tdp", ok, f"{tdp['pl1']}/{tdp['pl2']}/{tdp['pl3']} W" if ok else (out or f"rc={rc}"))]
 
@@ -872,7 +874,7 @@ def apply_undervolt(profile, *, z13ctl=Z13CTL):
     uv = profile.get("undervolt")
     if uv is None:
         return []
-    rc, out, _ = host.run([z13ctl, "undervolt", "--set", str(uv)], timeout=120)
+    rc, out, _ = host.run([z13ctl, "undervolt", "--set", str(uv)], timeout=Z13CTL_WRITE_TIMEOUT_S)
     if rc == 0:
         return [("undervolt", True, f"{uv}")]
     return [("undervolt", False, "unavailable (ryzen_smu not loaded)"
@@ -893,7 +895,7 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
     """
     results = []
 
-    def step(name, argv, ok_msg=None, timeout=120):
+    def step(name, argv, ok_msg=None, timeout=Z13CTL_WRITE_TIMEOUT_S):
         rc, out, _ = host.run(argv, timeout=timeout)
         ok = rc == 0
         results.append((name, ok, ok_msg if (ok and ok_msg) else (out or f"rc={rc}")))

@@ -128,6 +128,9 @@ def _run(args, timeout=15, *, as_deck=False):
     return rc, out
 
 
+Z13CTL_WRITE_TIMEOUT_S = 20
+
+
 _DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 
 
@@ -780,7 +783,7 @@ def apply_tdp(enabled, pl1, pl2, pl3, profile=None):
         msg = (f"{name}: {tdp['pl1']}/{tdp['pl2']}/{tdp['pl3']} W" if ok
                else f"{name}: saved, but z13ctl tdp failed ({out[-120:] or f'rc={rc}'})")
     else:
-        rc, out = _run(Z13_PROFILE + ["apply", name, "--no-hooks"], timeout=120, as_deck=True)
+        rc, out = _run(Z13_PROFILE + ["apply", name, "--no-hooks"], timeout=Z13CTL_WRITE_TIMEOUT_S, as_deck=True)
         ok = rc == 0 and "ERR  profile" not in out
         msg = (f"{name}: power limits back to the firmware" if ok
                else f"{name}: saved, but re-apply failed ({out[-120:] or f'rc={rc}'})")
@@ -843,7 +846,7 @@ class DeckyFans:
     """
 
     def _z13ctl(self, *args, as_deck=False):
-        rc, out = _run([Z13CTL, *args], as_deck=as_deck)
+        rc, out = _run([Z13CTL, *args], timeout=Z13CTL_WRITE_TIMEOUT_S, as_deck=as_deck)
         if rc != 0:
             raise RuntimeError(f"z13ctl {' '.join(args)} failed (rc={rc}): {out}")
 
