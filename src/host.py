@@ -35,6 +35,10 @@ RC_TIMEOUT = 124
 RC_NOT_FOUND = 127
 
 Result = collections.namedtuple("Result", "rc out timed_out")
+
+# Maximum time for one command that writes Z13 hardware state. Profile apply
+# has a separate aggregate budget because it runs several such writes in order.
+Z13CTL_WRITE_TIMEOUT_S = 20
 Result.__doc__ = "rc, stdout+stderr (stripped), and whether the timeout killed it."
 
 

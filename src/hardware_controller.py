@@ -14,6 +14,7 @@ _RE_FAN_HEADER = re.compile(r"Fans:\s+(\d+)\s*RPM,\s*mode:\s*(\w+)")
 
 
 _DEFAULT_Z13CTL = os.path.expanduser("~/.local/bin/z13ctl")
+Z13CTL_WRITE_TIMEOUT_S = host.Z13CTL_WRITE_TIMEOUT_S
 
 # z13ctl --device targets for the RGB/brightness commands.
 _LIGHTING_DEVICES = ("keyboard", "lightbar")
@@ -32,14 +33,15 @@ class HardwareController:
                 z13ctl_path = _DEFAULT_Z13CTL if os.path.exists(_DEFAULT_Z13CTL) else "z13ctl"
         self.z13ctl_path = z13ctl_path
 
-    def _run_command(self, args, quiet: bool = False, timeout: float = 120):
+    def _run_command(self, args, quiet: bool = False, timeout: float = Z13CTL_WRITE_TIMEOUT_S):
         """z13ctl's output; RuntimeError when it fails (ProfileControl relies on that)."""
         cmd = [self.z13ctl_path] + args
         r = host.run(cmd, timeout=timeout)
         if r.timed_out:
             if not quiet:
                 logger.error(f"Command '{' '.join(cmd)}' timed out after {timeout} s")
-            raise RuntimeError(f"z13ctl command timed out after {timeout} s")
+            raise RuntimeError(
+                f"z13ctl write timed out after {Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)")
         if r.rc == host.RC_NOT_FOUND:
             logger.error(f"z13ctl not found at: {self.z13ctl_path}")
             raise RuntimeError("z13ctl executable not found.")
@@ -142,8 +144,12 @@ class HardwareController:
         for device in devices:
             argv = ["--device", device, "brightness", level]
             try:
-                self._run_command(argv, timeout=30)
+                self._run_command(argv, timeout=Z13CTL_WRITE_TIMEOUT_S)
             except RuntimeError as e:
+                if str(e).startswith("z13ctl write timed out after "):
+                    # A timed-out write may have reached the device. Do not
+                    # retry, recover the lightbar, or continue to another device.
+                    raise
                 if device == "lightbar":
                     kind = profiles.lightbar_failure_kind(str(e))
                     recover = {"wedged": profiles.recover_lightbar,
@@ -152,9 +158,11 @@ class HardwareController:
                         ok, msg = recover()
                         if ok:
                             try:
-                                self._run_command(argv, timeout=30)
+                                self._run_command(argv, timeout=Z13CTL_WRITE_TIMEOUT_S)
                                 continue
                             except RuntimeError as e2:
+                                if str(e2).startswith("z13ctl write timed out after "):
+                                    raise
                                 e = RuntimeError(f"{e2} (still failing after a {msg})")
                         else:
                             e = RuntimeError(f"{e}; {msg}")

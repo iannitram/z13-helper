@@ -17,6 +17,7 @@ import {
   setAppProfile,
   getPowerState,
   PowerState,
+  isWriteTimeout,
 } from "./backend";
 import { cancelPendingCommits } from "./hooks";
 import { switchProfile } from "./profileSwitch";
@@ -70,7 +71,11 @@ function Content() {
             checked={maxFans}
             onChange={async (v: boolean) => {
               setMaxFansState(v);
-              if (!(await setMaxFans(v))) setMaxFansState(!v); // revert on failure
+              const result = await setMaxFans(v);
+              if (!result.ok) {
+                setMaxFansState(!v); // revert on failure
+                if (isWriteTimeout(result.message)) toaster.toast({ title: "Z13-Helper", body: result.message });
+              }
             }}
           />
         </PanelSectionRow>
@@ -101,8 +106,9 @@ function Content() {
               if (!r.ok) {
                 toaster.toast({
                   title: "Z13-Helper",
-                  body:
-                    r.profile === name
+                  body: r.message && isWriteTimeout(r.message)
+                    ? r.message
+                    : r.profile === name
                       ? `${name} is active, but some settings did not apply`
                       : `Could not switch to ${name}`,
                 });

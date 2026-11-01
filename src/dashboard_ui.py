@@ -57,8 +57,9 @@ _INTERCEPT_MODE_ALL        = 2
 _INTERCEPT_MODE_NONE       = 0
 _TARGET_DEVICES_WITH_DBUS  = ["xbox-elite", "touchpad", "keyboard", "dbus"]
 
-# Built-in tiles: (profile name, accent) — G-Helper's Silent / Balanced / Turbo.
-_TILES = [("Silent", ECO), ("Balanced", STANDARD), ("Turbo", TURBO)]
+# Built-in tiles: (profile name, accent, icon) — G-Helper's performance presets.
+_TILES = [("Silent", ECO, "leaf"), ("Balanced", STANDARD, "balance"),
+          ("Turbo", TURBO, "bolt")]
 _BRIGHTNESS = [("Off", "off"), ("Low", "low"), ("Medium", "medium"), ("High", "high")]
 _LIGHT_TARGETS = [("Both", ("keyboard", "lightbar")), ("Keyboard", ("keyboard",)), ("Rear light", ("lightbar",))]
 
@@ -103,7 +104,7 @@ class DashboardUI(QMainWindow):
 
         self.worker = ApplyWorker(self)
         self.control = ProfileControl(controller, self.worker, self)
-        self.control.message.connect(lambda m: self.status_bar.showMessage(m, 8000))
+        self.control.message.connect(self._on_control_message)
         self._log_dialog = None
         self._errors_unseen = 0
         self._last_crash_notice = 0.0
@@ -236,6 +237,12 @@ class DashboardUI(QMainWindow):
         self._tray.activated.connect(self._on_tray_activated)
         self._tray.show()
 
+    def _on_control_message(self, message):
+        self.status_bar.showMessage(message, 8000)
+        if message.startswith("z13ctl write timed out after ") and self._tray is not None:
+            self._tray.showMessage("Z13-Helper", message,
+                                   QSystemTrayIcon.MessageIcon.Warning, 8000)
+
     def _rebuild_tray_menu(self):
         m = self._tray_menu
         m.clear()
@@ -334,12 +341,12 @@ class DashboardUI(QMainWindow):
         tiles = QHBoxLayout()
         tiles.setSpacing(6)
         self._tiles = {}
-        for name, accent in _TILES:
-            t = ModeTile(name, accent, height=48)
+        for name, accent, icon in _TILES:
+            t = ModeTile(name, accent, height=60, icon=icon)
             t.clicked.connect(lambda checked, n=name: self._tile_clicked(n))
             tiles.addWidget(t)
             self._tiles[name] = t
-        self.fans_tile = ModeTile("Fans + Power", CUSTOM, secondary=True, height=48)
+        self.fans_tile = ModeTile("Fans + Power", CUSTOM, secondary=True, height=60, icon="fan")
         self.fans_tile.clicked.connect(self._fans_tile_clicked)
         tiles.addWidget(self.fans_tile)
         self.perf.body.addLayout(tiles)

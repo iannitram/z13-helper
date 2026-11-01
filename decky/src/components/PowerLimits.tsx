@@ -1,6 +1,7 @@
 import { PanelSection, PanelSectionRow, SliderField, ToggleField } from "@decky/ui";
+import { toaster } from "@decky/api";
 import { useEffect, useRef, useState } from "react";
-import { clampTdp, PowerState, safely, setTdp, TdpResult } from "../backend";
+import { clampTdp, isWriteTimeout, PowerState, safely, setTdp, TdpResult } from "../backend";
 import { useCommitOnRelease } from "../hooks";
 
 type Rails = { pl1: number; pl2: number; pl3: number };
@@ -37,6 +38,7 @@ export function PowerLimits({ state }: { state: PowerState | null }) {
     setMsg("Applying…");
     const res = await safely<TdpResult>(setTdp(on, r.pl1, r.pl2, r.pl3, target));
     setMsg(res.message);
+    if (isWriteTimeout(res.message)) toaster.toast({ title: "Z13-Helper", body: res.message });
     if ("tdp" in res && res.tdp) setRails({ pl1: res.tdp.pl1, pl2: res.tdp.pl2, pl3: res.tdp.pl3 });
     return res;
   };
