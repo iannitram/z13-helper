@@ -16,7 +16,7 @@ the device but not yet verified on the Z13. Plan and status: `docs/ROADMAP.md`.
 
 ## Unreleased
 
-No changes queued after the 0.5.1 repair release.
+- **Decky Loader minimum is 3.3.0.** The repair path reinstalls older loaders even when the latest release cannot be read; install verification and the Updates panel flag the same minimum required by the 2026-10-13 Steam client (#77).
 
 ## 0.5.1 — 2026-10-30
 

@@ -17,6 +17,7 @@ import update_watch
 from theme import TURBO, TEXT_DIM
 
 _INSTALLERS_SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "installers.py")
+_VERSIONS_SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "versions.py")
 
 
 def _installer_source():
@@ -25,7 +26,12 @@ def _installer_source():
         helper = f.read()
     with open(_INSTALLERS_SRC) as f:
         installer = f.read()
+    with open(_VERSIONS_SRC) as f:
+        versions = f.read()
     return ("import sys, types\n"
+            "_versions = types.ModuleType('versions')\n"
+            f"exec({versions!r}, _versions.__dict__)\n"
+            "sys.modules['versions'] = _versions\n"
             "_host = types.ModuleType('host')\n"
             "sys.modules['host'] = _host\n"
             f"exec({helper!r}, _host.__dict__)\n" + installer)

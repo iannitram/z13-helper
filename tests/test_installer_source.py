@@ -12,7 +12,8 @@ def test_stdin_installer_runs_without_repo_on_import_path(tmp_path, real_subproc
     function = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
                     and n.name == "_installer_source")
     namespace = {"host": types.SimpleNamespace(__file__=str(root / "src" / "host.py")),
-                 "_INSTALLERS_SRC": str(root / "src" / "installers.py")}
+                 "_INSTALLERS_SRC": str(root / "src" / "installers.py"),
+                 "_VERSIONS_SRC": str(root / "src" / "versions.py")}
     # Load only the pure source builder, without importing PyQt6.
     exec(compile(ast.Module(body=[function], type_ignores=[]), "updates_dialog.py", "exec"),
          namespace)
