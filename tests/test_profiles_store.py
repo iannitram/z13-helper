@@ -106,6 +106,29 @@ def test_default_profiles_are_builtin_and_valid():
     assert boondock["hooks"]["exit"].endswith("boondock session-off")
 
 
+def test_profile_lighting_is_persisted_and_can_be_cleared(profiles_env):
+    setting = {"mode": "breathe", "color": "cyan"}
+    profiles.set_profile_lighting("Balanced", "lightbar", setting, brightness="low")
+
+    saved = profiles.get_profile("Balanced")
+    assert saved["lighting"]["lightbar"] == setting
+    assert saved["brightness"] == "medium"  # built-in brightness remains its shipped value
+
+    profiles.upsert_profile(custom("Mine"))
+    profiles.set_profile_lighting("Mine", "keyboard", setting, brightness="low")
+    assert profiles.get_profile("Mine")["brightness"] == "low"
+
+    profiles.set_profile_lighting("Balanced", "lightbar", None)
+    assert "lighting" not in profiles.get_profile("Balanced")
+
+
+def test_profile_lighting_rejects_unknown_modes_and_colors():
+    with pytest.raises(ValueError, match="bad lighting.keyboard.mode"):
+        profiles.validate(custom(lighting={"keyboard": {"mode": "flash", "color": "cyan"}}))
+    with pytest.raises(ValueError, match="bad lighting.keyboard.color"):
+        profiles.validate(custom(lighting={"keyboard": {"mode": "static", "color": "ultraviolet"}}))
+
+
 def _curve_pwm_at(curve, temp):
     if temp <= curve[0][0]:
         return curve[0][1]

@@ -62,6 +62,9 @@ _TILES = [("Silent", ECO, "leaf"), ("Balanced", STANDARD, "balance"),
           ("Turbo", TURBO, "bolt")]
 _BRIGHTNESS = [("Off", "off"), ("Low", "low"), ("Medium", "medium"), ("High", "high")]
 _LIGHT_TARGETS = [("Both", ("keyboard", "lightbar")), ("Keyboard", ("keyboard",)), ("Rear light", ("lightbar",))]
+_LIGHT_MODES = [("Unchanged", None), ("Static", "static"), ("Breathe", "breathe"),
+                ("Cycle", "cycle"), ("Rainbow", "rainbow"), ("Strobe", "strobe")]
+_LIGHT_COLORS = [(name.title(), name) for name in profiles.LIGHTING_COLORS]
 
 # Unique marker on the host-side side-button reader's argv, so we can reap stale
 # ones (flatpak-spawn --host children are NOT reliably killed when the app dies).
@@ -367,6 +370,28 @@ class DashboardUI(QMainWindow):
             self.light_target.addItem(label)
         self.light_target.setFixedWidth(110)
         self.light.add_head_widget(self.light_target)
+        self._lighting_syncing = False
+        self._lighting_combos = {}
+        for device, label in (("lightbar", "Rear Light"), ("keyboard", "Laptop Keyboard")):
+            lrow = QHBoxLayout()
+            lrow.setSpacing(6)
+            lrow.addWidget(QLabel(label))
+            mode_combo = QComboBox()
+            for text, value in _LIGHT_MODES:
+                mode_combo.addItem(text, value)
+            mode_combo.setMinimumWidth(125)
+            color_combo = QComboBox()
+            for text, value in _LIGHT_COLORS:
+                color_combo.addItem(text, value)
+            color_combo.setMinimumWidth(95)
+            mode_combo.currentIndexChanged.connect(
+                lambda _index, dev=device: self._lighting_changed(dev))
+            color_combo.currentIndexChanged.connect(
+                lambda _index, dev=device: self._lighting_changed(dev))
+            lrow.addWidget(mode_combo)
+            lrow.addWidget(color_combo)
+            self.light.body.addLayout(lrow)
+            self._lighting_combos[device] = (mode_combo, color_combo)
         brow = QHBoxLayout()
         brow.setSpacing(6)
         self._bright_tiles = {}
@@ -498,6 +523,7 @@ class DashboardUI(QMainWindow):
             self.profile_combo.addItems(names)
         self.profile_combo.setCurrentText(name)
         self.profile_combo.blockSignals(False)
+        self._refresh_lighting_ui(active)
         if self._tray is not None:
             if set(self._tray_profile_actions) != set(names):
                 self._rebuild_tray_menu()
@@ -582,6 +608,44 @@ class DashboardUI(QMainWindow):
     def _highlight_brightness(self, level):
         for lv, t in self._bright_tiles.items():
             t.setChecked(lv == level)
+
+    def _refresh_lighting_ui(self, profile):
+        self._lighting_syncing = True
+        lighting = profile.get("lighting") or {}
+        for device, (mode_combo, color_combo) in self._lighting_combos.items():
+            setting = lighting.get(device) or {}
+            mode = setting.get("mode")
+            color = setting.get("color", "red")
+            mode_combo.blockSignals(True)
+            color_combo.blockSignals(True)
+            mode_combo.setCurrentIndex(max(0, mode_combo.findData(mode)))
+            color_combo.setCurrentIndex(max(0, color_combo.findData(color)))
+            color_combo.setEnabled(mode is not None)
+            mode_combo.blockSignals(False)
+            color_combo.blockSignals(False)
+        self._lighting_syncing = False
+
+    def _lighting_changed(self, device):
+        if self._lighting_syncing:
+            return
+        name = self.control.shown()["name"]
+        mode_combo, color_combo = self._lighting_combos[device]
+        mode = mode_combo.currentData()
+        setting = None if mode is None else {"mode": mode, "color": color_combo.currentData()}
+        try:
+            profile = profiles.set_profile_lighting(
+                name, device, setting, brightness=self.config.get("brightness", "medium"))
+        except (OSError, ValueError) as exc:
+            self.status_bar.showMessage(f"Lighting setting failed: {exc}", 8000)
+            self._refresh_lighting_ui(self.control.shown())
+            return
+        self._refresh_lighting_ui(profile)
+        if setting is None:
+            self.control._submit("Lighting", lambda: "profile override cleared; current lighting left unchanged")
+            return
+        brightness = profile.get("brightness") or self.config.get("brightness", "high")
+        self.control._submit(f"Lighting → {device}",
+                              lambda: self.controller.set_lighting(device, setting, brightness))
 
     # ------------------------------------------------------------------
     # Screen brightness
