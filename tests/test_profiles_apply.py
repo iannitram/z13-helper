@@ -860,6 +860,16 @@ def test_exit_hook_runs_first_when_switching(profiles_env, fake_host):
     assert hook_calls(fake_host) == ["boondock off", "say hi"]
 
 
+def test_hooks_keep_120s_timeout_not_z13ctl_write_cap(profiles_env, fake_host):
+    prev = bare_profile("Boondock", hooks={"enter": "", "exit": "boondock off"})
+    nxt = bare_profile("Balanced", hooks={"enter": "say hi", "exit": ""})
+    profiles.apply(nxt, z13ctl=Z, previous=prev)
+    hooks = {c.argv[2]: c.timeout for c in fake_host.calls if c.argv[0] == "bash"}
+    assert hooks == {"boondock off": 120, "say hi": 120}
+    writes = [c.timeout for c in fake_host.calls if c.argv[0] == Z]
+    assert writes and all(t == profiles.Z13CTL_WRITE_TIMEOUT_S for t in writes)
+
+
 def test_exit_hook_skipped_when_reapplying_same_profile(profiles_env, fake_host):
     p = bare_profile("Boondock", hooks={"enter": "boondock on", "exit": "boondock off"})
     profiles.apply(p, previous=dict(p), z13ctl=Z)

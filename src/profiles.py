@@ -56,6 +56,9 @@ if os.path.isdir(_HOST_LIB) and _HOST_LIB not in sys.path:
 import host  # noqa: E402
 
 Z13CTL_WRITE_TIMEOUT_S = host.Z13CTL_WRITE_TIMEOUT_S
+# Enter/exit hooks are arbitrary host commands, not z13ctl writes: keep their
+# original generous bound instead of the short z13ctl write cap.
+HOOK_TIMEOUT_S = 120
 
 STORE_PATH = os.path.expanduser("~/.config/z13-helper/profiles.json")
 MAX_FANS_PATH = os.path.expanduser("~/.config/z13-helper/max-fans.json")
@@ -973,7 +976,8 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
     if not skip_hooks and previous and previous.get("name") != profile["name"]:
         exit_cmd = (previous.get("hooks") or {}).get("exit") or ""
         if exit_cmd.strip():
-            step("exit hook", ["bash", "-lc", exit_cmd], f"ran: {exit_cmd}")
+            step("exit hook", ["bash", "-lc", exit_cmd], f"ran: {exit_cmd}",
+                 timeout=HOOK_TIMEOUT_S)
 
     # Compute the desired state now, but suspend the shared Max Fans flag for
     # the whole apply. The watchdog must not re-pin a curve between the base
@@ -1135,7 +1139,8 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
     if not skip_hooks:
         enter_cmd = (profile.get("hooks") or {}).get("enter") or ""
         if enter_cmd.strip():
-            step("enter hook", ["bash", "-lc", enter_cmd], f"ran: {enter_cmd}")
+            step("enter hook", ["bash", "-lc", enter_cmd], f"ran: {enter_cmd}",
+                 timeout=HOOK_TIMEOUT_S)
 
     return results
 
