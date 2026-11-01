@@ -341,11 +341,18 @@ class FileLockSafetyTest(unittest.TestCase):
                 t.join(5)
 
     def test_lock_file_owned_by_current_user_is_accepted(self):
-        # An unprivileged runner is neither root nor the deck uid.
-        self.assertNotEqual(os.geteuid(), 0)
-        with mock.patch.object(m, "DECK_UID", os.geteuid() + 1):
+        # Root creates a Deck-owned lock; unprivileged runners own their lock.
+        # Use an explicit owner in each case so this test is independent of the
+        # account running pytest (including uid 54321 with no passwd entry).
+        euid = os.geteuid()
+        expected_owner = m.DECK_UID if euid == 0 else euid
+        # Use uid 0 as the alternate account for unprivileged tests: it has a
+        # passwd entry, unlike an arbitrary euid + 1 on uid-less CI runners.
+        deck_uid = m.DECK_UID if euid == 0 else 0
+        with mock.patch.object(m, "DECK_UID", deck_uid):
             with m._file_lock(self.store):
                 pass
+            self.assertEqual(os.stat(self.store + ".lock").st_uid, expected_owner)
             with m._file_lock(self.store):   # now it exists: the owner check runs
                 pass
 
@@ -770,7 +777,11 @@ class FanWatchdogLoopTest(unittest.TestCase):
         d = tempfile.mkdtemp(prefix="z13-trace-")
         path = os.path.join(d, "new", "fan-trace-gamemode.log")
         owner = (os.getuid(), os.getgid())
-        trace = m.make_fan_trace(path, owner=owner)
+        # A container may run as a numeric uid with no passwd entry. Supply a
+        # deterministic passwd record because the tested path is outside HOME.
+        with mock.patch("pwd.getpwuid", return_value=types.SimpleNamespace(
+                pw_dir="/nonexistent-test-home")):
+            trace = m.make_fan_trace(path, owner=owner)
         self.assertIsNotNone(trace)
         wd = m.make_fan_watchdog(StalledSensors(), (fake_host(self) and m.DeckyFans()),
                                  may_act=lambda: True, trace=trace)
@@ -800,7 +811,9 @@ class FanWatchdogLoopTest(unittest.TestCase):
                 self.assertIs(m.logging_enabled(), want)
                 d = tempfile.mkdtemp(prefix="z13-trace-")
                 path = os.path.join(d, "fan-trace-gamemode.log")
-                trace = m.make_fan_trace(path, owner=(os.getuid(), os.getgid()))
+                with mock.patch("pwd.getpwuid", return_value=types.SimpleNamespace(
+                        pw_dir="/nonexistent-test-home")):
+                    trace = m.make_fan_trace(path, owner=(os.getuid(), os.getgid()))
                 self.assertEqual(trace is not None, want)
                 self.assertEqual(os.path.exists(path), want)
         self.assertTrue(REAL["INSTALL_JSON"].endswith("/.config/z13-helper/install.json"))
