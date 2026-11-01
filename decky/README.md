@@ -43,21 +43,18 @@ pnpm install
 pnpm run build        # -> dist/index.js
 ```
 
-## Install / reload (plugins dir is root-owned)
+## Install / reload
 ```bash
-sudo mkdir -p /home/deck/homebrew/plugins/z13-helper
-sudo cp -r plugin.json package.json main.py dist /home/deck/homebrew/plugins/z13-helper/
-# stop + kill + start: a plain restart can leave a stale loader holding :1337
-sudo systemctl stop plugin_loader.service
-sudo systemctl kill plugin_loader.service
-sudo systemctl start plugin_loader.service
+./install.sh --repair
 ```
-(or just `./install.sh --repair` from the repo root, which does build + copy + the clean restart).
-Then: **QAM → Decky (plug icon) → Z13-Helper**. Faster iteration: Decky → Settings → Developer
-mode → per-plugin **Reload**.
+The installer stages and verifies the full plugin tree, stops Decky's watcher before swapping the
+root-owned plugin directory, then starts the loader once. An unchanged repair leaves it running.
+Do not copy files directly into the live plugin directory; Decky can reload while a bundle is
+only partly installed. Then open **QAM → Decky (plug icon) → Z13-Helper**. For a frontend-only
+iteration, use Decky → Settings → Developer mode → per-plugin **Reload**.
 
 ## Logs
-- Backend: `~/homebrew/logs/z13-helper/`
+- Backend: `journalctl -u plugin_loader.service`
 - Frontend: CEF inspector at `http://localhost:8080` (SharedJSContext)
 
 ## Notes

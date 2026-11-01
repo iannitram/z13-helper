@@ -85,3 +85,8 @@ The desktop Fans + Power window and Decky `power_state()` display stored profile
 | `flatpak/` | Flatpak manifest, runtime setup and build script. |
 
 `z13ctl` is the sole hardware command backend. Decky Loader provides the Game Mode QAM surface; G-Helper informs the desktop layout and interaction model. The device verification checklist is in [`docs/ROADMAP.md`](../docs/ROADMAP.md); automated tests do not replace pending on-device checks.
+
+Decky's file watcher must be stopped before changing installed plugin files: otherwise every
+individual copy can trigger a reload against a partial bundle (#100). The installer leaves an
+unchanged plugin running and starts the loader after changed files are installed. Its backend
+startup check must be supplemented by a Steam frontend check when investigating import errors.

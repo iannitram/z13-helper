@@ -17,6 +17,11 @@ the device but not yet verified on the Z13. Plan and status: `docs/ROADMAP.md`.
 ## Unreleased
 
 - **Decky Loader minimum is 3.3.0.** The repair path reinstalls older loaders even when the latest release cannot be read; install verification and the Updates panel flag the same minimum required by the 2026-10-13 Steam client (#77).
+- **Decky repair avoids live file-watcher reload storms (#100).** Stage and byte-verify the
+  complete plugin outside the watched directory, quiesce the loader, then swap the root-owned
+  tree and start it once. A failed swap restores the previous tree; staging failures leave the
+  live plugin untouched. An unchanged repair leaves the loader running. Failures are reported;
+  backend startup alone is not evidence that Steam's frontend imported successfully.
 
 ## 0.5.1 — 2026-10-30
 
