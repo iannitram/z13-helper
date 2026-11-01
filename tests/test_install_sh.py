@@ -158,7 +158,7 @@ def _decky_plugin_harness(tmp_path, *, changed=False, stop_fail=False, install_f
                           old_plugin=False, dry_run=False, first_install=False,
                           backup_fail=False, start_fail=False, rollback_fail=False,
                           journal_cursor=True, journal_fail=False, stop_state="inactive",
-                          rollback_rm_fail=False):
+                          rollback_rm_fail=False, legacy_rm_fail=False):
     """Run the actual Decky installer functions against temporary paths and a sudo stub."""
     source = SCRIPT.read_text()
     start = source.index("find_pnpm() {")
@@ -242,6 +242,7 @@ case \"$1\" in
     exec /usr/bin/install -D -m 644 \"$@\" ;;
   rm)
     if [ \"$ROLLBACK_RM_FAIL\" = 1 ] && [ \"$3\" = -- ] && [ \"$4\" = \"$HOME/homebrew/plugins/z13-helper\" ]; then exit 1; fi
+    if [ \"$LEGACY_RM_FAIL\" = 1 ] && [ \"$3\" = \"$HOME/homebrew/plugins/z13-decky\" ]; then /usr/bin/rm -f \"$3/plugin.json\"; exit 1; fi
     shift; exec /usr/bin/rm \"$@\" ;;
   mkdir) shift; exec /bin/mkdir \"$@\" ;;
   tar) [ \"$BACKUP_FAIL\" != 1 ] || exit 1; shift; exec /usr/bin/tar "$@" ;;
@@ -261,6 +262,7 @@ esac
         "START_FAIL": "1" if start_fail else "0",
         "ROLLBACK_FAIL": "1" if rollback_fail else "0",
         "ROLLBACK_RM_FAIL": "1" if rollback_rm_fail else "0",
+        "LEGACY_RM_FAIL": "1" if legacy_rm_fail else "0",
         "JOURNAL_CURSOR": "1" if journal_cursor else "0",
         "JOURNAL_FAIL": "1" if journal_fail else "0",
         "INSTALL_FAIL_DEST": "dist/index.js" if install_fail else "never-match",
@@ -509,6 +511,24 @@ def test_decky_plugin_removes_legacy_directory_only_after_quiescing(tmp_path, re
     assert stop < swap < remove < start
     assert not old_dir.exists()
     assert (plugin_dir / "dist/index.js").read_text() == (source_repo / "decky/dist/index.js").read_text()
+
+
+@needs_bash[1]
+def test_decky_plugin_legacy_removal_failure_restores_both_trees_and_restarts(tmp_path, real_subprocess):
+    script, env, events, plugin_dir, old_dir, _ = _decky_plugin_harness(
+        tmp_path, changed=True, old_plugin=True, legacy_rm_fail=True)
+    p = real_subprocess(["bash", "-c", script], env=env, capture_output=True, text=True, timeout=15)
+    assert p.returncode == 1, p.stdout + p.stderr
+    assert "FAIL: could not remove old Decky plugin" in p.stderr
+    # Previous z13-helper tree is back, and the partly removed legacy tree is re-extracted.
+    assert (plugin_dir / "dist/index.js").read_text() == "stale installed frontend\n"
+    assert (old_dir / "plugin.json").read_text() == "old plugin"
+    calls = events.read_text().splitlines()
+    remove = calls.index(f"sudo rm -rf {old_dir}")
+    start = calls.index("sudo systemctl start plugin_loader.service")
+    assert remove < start
+    assert (tmp_path / "active-state").read_text() == "active"
+    assert not list(plugin_dir.parent.parent.glob(".z13-helper-*"))
 
 
 @needs_bash[1]

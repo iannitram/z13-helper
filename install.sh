@@ -552,8 +552,13 @@ decky_plugin() {
                 fail "could not restore previous Decky plugin from $old_dir"
                 return 1
             fi
-            # The previous plugin tree is restored, while the legacy tree is
-            # still present. Restarting would load both, so leave the loader stopped.
+            # The previous plugin tree is restored. rm may have removed part of
+            # the legacy tree, so re-extract its checked backup to return to the
+            # pre-install pair of trees, then start the loader again (#100).
+            if ! sudo tar -C "$(dirname "$OLD_PLUGIN_DIR")" -xf "$BACKUP/z13-decky-plugin.tar"; then
+                fail "could not restore old Decky plugin from backup; starting plugin_loader anyway"
+            fi
+            resume_loader || true
             sudo rm -rf "$stage_dir" "$old_dir"
             return 1
         else
