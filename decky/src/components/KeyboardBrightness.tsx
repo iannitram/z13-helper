@@ -1,6 +1,7 @@
 import { DialogButton, Focusable, PanelSectionRow } from "@decky/ui";
+import { toaster } from "@decky/api";
 import { useEffect, useState } from "react";
-import { BrightnessLevel, PowerState, setBrightness } from "../backend";
+import { BrightnessLevel, isWriteTimeout, PowerState, setBrightness } from "../backend";
 
 const LEVELS: { level: BrightnessLevel; label: string }[] = [
   { level: "off", label: "Off" },
@@ -32,6 +33,7 @@ export function KeyboardBrightness({ state }: { state: PowerState | null }) {
       if (res.ok) setCurrent(level);
       setMsg(res.message);
       setWarn(!res.ok || res.failed.length > 0);
+      if (isWriteTimeout(res.message)) toaster.toast({ title: "Z13-Helper", body: res.message });
     } catch (e) {
       setMsg(`Backend error: ${String(e)}`);
       setWarn(true);

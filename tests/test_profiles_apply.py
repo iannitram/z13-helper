@@ -68,6 +68,94 @@ def test_write_order(profiles_env, fake_host):
     ]
 
 
+@pytest.mark.parametrize("device,mode", [("keyboard", mode) for mode in profiles.LIGHTING_MODES] +
+                         [("lightbar", mode) for mode in profiles.LIGHTING_MODES])
+def test_lighting_mode_argv_is_per_device_in_profile_order(profiles_env, fake_host, device, mode):
+    setting = {"mode": mode, "color": "cyan"}
+    p = full_profile(lighting={device: setting})
+
+    results = profiles.apply(p, z13ctl=Z)
+
+    expected = [Z, "--device", device, "apply", "--mode", mode,
+                "--color", "cyan", "--brightness", "medium"]
+    assert expected in fake_host.argvs
+    # Battery follows lighting per the documented profile binding order; hooks follow all writes.
+    light_writes = [argv for argv in fake_host.argvs if "--device" in argv]
+    assert [argv[argv.index("--device") + 1] for argv in light_writes] == ["keyboard", "lightbar"]
+    assert fake_host.argvs.index([Z, "batterylimit", "--set", "80"]) > max(
+        fake_host.argvs.index(argv) for argv in light_writes)
+    assert fake_host.argvs[-1] == ["bash", "-lc", "enter-cmd"]
+    assert f"lighting ({device})" in names(results)
+    assert all(ok for _, ok, _ in results)
+    assert next(c for c in fake_host.calls if c.argv == expected).timeout == profiles.Z13CTL_WRITE_TIMEOUT_S
+
+
+def test_lighting_timeout_stops_remaining_writes(profiles_env, fake_host):
+    fake_host.fail("--device keyboard apply --mode breathe", rc=124,
+                   out="timed out after 20 s", timed_out=True)
+    p = full_profile(lighting={
+        "keyboard": {"mode": "breathe", "color": "cyan"},
+        "lightbar": {"mode": "cycle", "color": "purple"},
+    })
+
+    results = profiles.apply(p, z13ctl=Z)
+
+    assert fake_host.calls[-1].argv == [
+        Z, "--device", "keyboard", "apply", "--mode", "breathe",
+        "--color", "cyan", "--brightness", "medium",
+    ]
+    assert fake_host.calls[-1].timeout == profiles.Z13CTL_WRITE_TIMEOUT_S
+    assert not any("lightbar" in argv for argv in fake_host.argvs)
+    assert not any("batterylimit" in argv or "enter-cmd" in argv for argv in fake_host.argvs)
+    assert results[-1] == (
+        "lighting (keyboard)", False,
+        f"z13ctl write timed out after {profiles.Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)",
+    )
+
+
+def test_battery_timeout_stops_enter_hook_after_canonical_lighting(profiles_env, fake_host):
+    fake_host.fail("batterylimit", rc=124, out="timed out after 20 s", timed_out=True)
+    p = full_profile(lighting={
+        "keyboard": {"mode": "breathe", "color": "cyan"},
+        "lightbar": {"mode": "cycle", "color": "purple"},
+    })
+
+    results = profiles.apply(p, z13ctl=Z)
+
+    assert [argv for argv in fake_host.argvs if "--device" in argv] == [
+        [Z, "--device", "keyboard", "apply", "--mode", "breathe",
+         "--color", "cyan", "--brightness", "medium"],
+        [Z, "--device", "lightbar", "apply", "--mode", "cycle",
+         "--color", "purple", "--brightness", "medium"],
+    ]
+    assert fake_host.argvs[-1] == [Z, "batterylimit", "--set", "80"]
+    assert not any("enter-cmd" in argv for argv in fake_host.argvs)
+    assert results[-1] == (
+        "battery limit", False,
+        f"z13ctl write timed out after {profiles.Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)",
+    )
+
+
+def test_keyboard_mode_precedes_lightbar_brightness_timeout(profiles_env, fake_host):
+    fake_host.fail(lambda argv: "--device" in argv and "lightbar" in argv
+                   and "brightness" in argv, rc=124, out="timed out after 20 s",
+                   timed_out=True)
+    p = full_profile(lighting={"keyboard": {"mode": "breathe", "color": "cyan"}})
+
+    results = profiles.apply(p, z13ctl=Z)
+
+    keyboard = [Z, "--device", "keyboard", "apply", "--mode", "breathe",
+                "--color", "cyan", "--brightness", "medium"]
+    lightbar = [Z, "--device", "lightbar", "brightness", "medium"]
+    assert fake_host.argvs.index(keyboard) < fake_host.argvs.index(lightbar)
+    assert fake_host.argvs[-1] == lightbar
+    assert not any("batterylimit" in argv or "enter-cmd" in argv for argv in fake_host.argvs)
+    assert results[-1] == (
+        "brightness (lightbar)", False,
+        f"z13ctl write timed out after {profiles.Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)",
+    )
+
+
 def test_curve_spec_format():
     assert profiles.curve_spec([[40, 50], [50.0, "75"]]) == "40:50%,50:75%"
 
@@ -77,6 +165,33 @@ def test_tdp_force_flag(profiles_env, fake_host):
     profiles.apply(p, z13ctl=Z)
     tdp = [a for a in fake_host.argvs if a[1] == "tdp"]
     assert tdp == [[Z, "tdp", "--set", "80", "--pl2", "85", "--pl3", "90", "--force"]]
+
+
+def test_profile_apply_stops_after_timed_out_write(profiles_env, fake_host):
+    fake_host.fail("tdp", rc=124, out="timed out after 20 s", timed_out=True)
+    results = profiles.apply(full_profile(), z13ctl=Z)
+    assert names(results) == ["profile", "tdp"]
+    assert results[-1] == (
+        "tdp", False,
+        "z13ctl write timed out after 20 s (kernel asus-wmi hang?)",
+    )
+    assert fake_host.argvs == [
+        [Z, "profile", "--set", "performance"],
+        [Z, "tdp", "--set", "50", "--pl2", "60", "--pl3", "70"],
+    ]
+
+
+def test_base_profile_timeout_keeps_max_fans_suspended_for_uncertain_state(
+        profiles_env, fake_host):
+    max_fans_state.save(enabled=True, saved_curve=[[40, 255]])
+    fake_host.fail("profile --set", rc=124, out="timed out after 20 s", timed_out=True)
+    results = profiles.apply(full_profile(), z13ctl=Z)
+    assert results == [(
+        "profile", False,
+        "z13ctl write timed out after 20 s (kernel asus-wmi hang?)",
+    )]
+    assert fake_host.argvs == [[Z, "profile", "--set", "performance"]]
+    assert not max_fans_state.is_enabled()
 
 
 def test_null_fields_are_left_alone(profiles_env, fake_host):
@@ -473,8 +588,8 @@ def test_tdp_without_curve_resets_fans_after_tdp(profiles_env, fake_host):
 def test_brightness_has_short_timeout(profiles_env, fake_host):
     profiles.apply(bare_profile(brightness="low"), z13ctl=Z)
     seen = [(c.argv[1:3], c.timeout) for c in fake_host.calls]
-    assert (["--device", "keyboard"], 30) in seen
-    assert (["--device", "lightbar"], 30) in seen
+    assert (["--device", "keyboard"], profiles.Z13CTL_WRITE_TIMEOUT_S) in seen
+    assert (["--device", "lightbar"], profiles.Z13CTL_WRITE_TIMEOUT_S) in seen
 
 
 # ----------------------------------------------------------------------
@@ -743,6 +858,16 @@ def test_exit_hook_runs_first_when_switching(profiles_env, fake_host):
     profiles.apply(nxt, previous=prev, z13ctl=Z)
     assert fake_host.argvs[0] == ["bash", "-lc", "boondock off"]
     assert hook_calls(fake_host) == ["boondock off", "say hi"]
+
+
+def test_hooks_keep_120s_timeout_not_z13ctl_write_cap(profiles_env, fake_host):
+    prev = bare_profile("Boondock", hooks={"enter": "", "exit": "boondock off"})
+    nxt = bare_profile("Balanced", hooks={"enter": "say hi", "exit": ""})
+    profiles.apply(nxt, z13ctl=Z, previous=prev)
+    hooks = {c.argv[2]: c.timeout for c in fake_host.calls if c.argv[0] == "bash"}
+    assert hooks == {"boondock off": 120, "say hi": 120}
+    writes = [c.timeout for c in fake_host.calls if c.argv[0] == Z]
+    assert writes and all(t == profiles.Z13CTL_WRITE_TIMEOUT_S for t in writes)
 
 
 def test_exit_hook_skipped_when_reapplying_same_profile(profiles_env, fake_host):

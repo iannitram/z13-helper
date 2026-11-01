@@ -55,6 +55,11 @@ if os.path.isdir(_HOST_LIB) and _HOST_LIB not in sys.path:
     sys.path.append(_HOST_LIB)
 import host  # noqa: E402
 
+Z13CTL_WRITE_TIMEOUT_S = host.Z13CTL_WRITE_TIMEOUT_S
+# Enter/exit hooks are arbitrary host commands, not z13ctl writes: keep their
+# original generous bound instead of the short z13ctl write cap.
+HOOK_TIMEOUT_S = 120
+
 STORE_PATH = os.path.expanduser("~/.config/z13-helper/profiles.json")
 MAX_FANS_PATH = os.path.expanduser("~/.config/z13-helper/max-fans.json")
 # The z13-{max,balanced,cool} scripts and z13-restore-profile keep their own
@@ -66,6 +71,8 @@ Z13CTL = os.path.expanduser("~/.local/bin/z13ctl")
 BASES = ("quiet", "balanced", "performance")
 BRIGHTNESS_LEVELS = ("off", "low", "medium", "high")
 LIGHTING_DEVICES = ("keyboard", "lightbar")
+LIGHTING_MODES = ("static", "breathe", "cycle", "rainbow", "strobe")
+LIGHTING_COLORS = ("red", "orange", "yellow", "green", "cyan", "blue", "purple", "white")
 
 # Max Fans = every point at 100%. Must match the desktop app and the Decky plugin.
 MAX_FAN_TEMPS = (20, 30, 40, 50, 60, 70, 80, 90)   # Low anchor; firmware response still needs verification.
@@ -556,6 +563,32 @@ def set_active(name):
     _mirror_legacy(name)
 
 
+def set_profile_lighting(name, device, setting, brightness=None):
+    """Store one device's lighting intent in a profile; None clears its override."""
+    if device not in LIGHTING_DEVICES:
+        raise ValueError("bad lighting device")
+    with store_lock():
+        store = load_store()
+        profile = get_profile(name, store)
+        if profile is None:
+            raise ValueError(f"unknown profile: {name}")
+        lighting = profile.setdefault("lighting", {})
+        if setting is None:
+            lighting.pop(device, None)
+            if not lighting:
+                profile.pop("lighting", None)
+        else:
+            profile["lighting"] = {**lighting, device: dict(setting)}
+            # z13ctl apply defaults to high brightness. Capture the current
+            # UI choice when a profile first gains a mode so reapplying it
+            # cannot silently change brightness later.
+            if profile.get("brightness") is None:
+                profile["brightness"] = brightness or "high"
+        validate(profile)
+        save_store(store)
+    return get_profile(name)
+
+
 def _mirror_legacy(name):
     """Mirror the active name for the legacy restore script / z13-* scripts."""
     legacy = LEGACY_NAMES_REV.get(name)
@@ -627,6 +660,16 @@ def validate(p):
         raise ValueError("undervolt must be 0..-40")
     if p.get("brightness") not in (None, *BRIGHTNESS_LEVELS):
         raise ValueError("bad brightness level")
+    lighting = p.get("lighting", {})
+    if not isinstance(lighting, dict) or set(lighting) - set(LIGHTING_DEVICES):
+        raise ValueError("lighting must map keyboard/lightbar to settings")
+    for device, setting in lighting.items():
+        if not isinstance(setting, dict):
+            raise ValueError(f"lighting.{device} must be an object")
+        if setting.get("mode") not in LIGHTING_MODES:
+            raise ValueError(f"bad lighting.{device}.mode")
+        if setting.get("color") not in LIGHTING_COLORS:
+            raise ValueError(f"bad lighting.{device}.color")
     bl = p.get("battery_limit")
     if bl is not None and (not isinstance(bl, int) or not 40 <= bl <= 100):
         raise ValueError("battery_limit must be 40..100")
@@ -805,9 +848,12 @@ def apply_tdp(profile, *, z13ctl=Z13CTL):
             "--pl2", str(tdp["pl2"]), "--pl3", str(tdp["pl3"])]
     if tdp.get("force"):
         argv.append("--force")
-    rc, out, _ = host.run(argv, timeout=120)
+    rc, out, timed_out = host.run(argv, timeout=Z13CTL_WRITE_TIMEOUT_S)
     ok = rc == 0
-    return [("tdp", ok, f"{tdp['pl1']}/{tdp['pl2']}/{tdp['pl3']} W" if ok else (out or f"rc={rc}"))]
+    message = (f"{tdp['pl1']}/{tdp['pl2']}/{tdp['pl3']} W" if ok else
+               f"z13ctl write timed out after {Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)"
+               if timed_out else (out or f"rc={rc}"))
+    return [("tdp", ok, message)]
 
 
 def clear_z13ctl_default_custom_tdp(*, z13ctl=Z13CTL):
@@ -860,9 +906,13 @@ def clear_z13ctl_default_custom_tdp(*, z13ctl=Z13CTL):
     if not re.search(r"(?:^|,\s*)\d+W(?:,|$)", custom.group("description")):
         return True, None
 
-    rc, out, _ = host.run([z13ctl, "tdp", "--reset", "--profile", "custom"], timeout=20)
+    rc, out, timed_out = host.run([z13ctl, "tdp", "--reset", "--profile", "custom"],
+                                  timeout=Z13CTL_WRITE_TIMEOUT_S)
     ok = rc == 0
-    result = ("tdp", ok, "cleared saved z13ctl custom TDP" if ok else (out or f"rc={rc}"))
+    message = ("cleared saved z13ctl custom TDP" if ok else
+               f"z13ctl write timed out after {Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)"
+               if timed_out else (out or f"rc={rc}"))
+    result = ("tdp", ok, message)
     return ok, result
 
 
@@ -872,11 +922,26 @@ def apply_undervolt(profile, *, z13ctl=Z13CTL):
     uv = profile.get("undervolt")
     if uv is None:
         return []
-    rc, out, _ = host.run([z13ctl, "undervolt", "--set", str(uv)], timeout=120)
+    rc, out, timed_out = host.run([z13ctl, "undervolt", "--set", str(uv)], timeout=Z13CTL_WRITE_TIMEOUT_S)
     if rc == 0:
         return [("undervolt", True, f"{uv}")]
+    if timed_out:
+        return [("undervolt", False,
+                 f"z13ctl write timed out after {Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)")]
     return [("undervolt", False, "unavailable (ryzen_smu not loaded)"
              if "ryzen_smu" in out else out)]
+
+
+def lighting_argv(device, setting, brightness, z13ctl=Z13CTL):
+    """Build z13ctl's per-device lighting apply command from validated profile data."""
+    if device not in LIGHTING_DEVICES:
+        raise ValueError("bad lighting device")
+    candidate = {"name": "lighting", "base": "balanced", "lighting": {device: setting}}
+    validate(candidate)
+    if brightness not in BRIGHTNESS_LEVELS:
+        raise ValueError("bad brightness level")
+    return [z13ctl, "--device", device, "apply", "--mode", setting["mode"],
+            "--color", setting["color"], "--brightness", brightness]
 
 
 def apply(profile, *, previous=None, z13ctl=Z13CTL,
@@ -893,17 +958,26 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
     """
     results = []
 
-    def step(name, argv, ok_msg=None, timeout=120):
-        rc, out, _ = host.run(argv, timeout=timeout)
+    timed_out = False
+
+    def step(name, argv, ok_msg=None, timeout=Z13CTL_WRITE_TIMEOUT_S):
+        nonlocal timed_out
+        rc, out, hit_timeout = host.run(argv, timeout=timeout)
         ok = rc == 0
-        results.append((name, ok, ok_msg if (ok and ok_msg) else (out or f"rc={rc}")))
+        timed_out = hit_timeout
+        message = (ok_msg if ok and ok_msg else
+                   f"z13ctl write timed out after {Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)"
+                   if hit_timeout and os.path.basename(argv[0]) == os.path.basename(z13ctl)
+                   else (out or f"rc={rc}"))
+        results.append((name, ok, message))
         return ok
 
     # 1. Leave the previous profile (e.g. `boondock off` restores the screen).
     if not skip_hooks and previous and previous.get("name") != profile["name"]:
         exit_cmd = (previous.get("hooks") or {}).get("exit") or ""
         if exit_cmd.strip():
-            step("exit hook", ["bash", "-lc", exit_cmd], f"ran: {exit_cmd}")
+            step("exit hook", ["bash", "-lc", exit_cmd], f"ran: {exit_cmd}",
+                 timeout=HOOK_TIMEOUT_S)
 
     # Compute the desired state now, but suspend the shared Max Fans flag for
     # the whole apply. The watchdog must not re-pin a curve between the base
@@ -925,10 +999,18 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
 
     # 2. Base platform profile.
     base_ok = step("profile", [z13ctl, "profile", "--set", profile["base"]], profile["base"])
+    if timed_out:
+        # A timed-out write may still have reached the daemon. The Max Fans flag
+        # represents confirmed enforcement, so keep it suspended rather than
+        # letting the watchdog issue another curve write against uncertain state.
+        return results
 
     # 3. TDP (None = whatever the firmware profile dictates, restored by the
     #    profile write above).
     results.extend(apply_tdp(profile, z13ctl=z13ctl))
+    timed_out = any(msg.startswith("z13ctl write timed out after ") for _, _, msg in results)
+    if timed_out:
+        return results
 
     # 4. Fan curve. Max Fans wins while it is ON: keep 100% pinned, but remember
     #    the profile's curve as the one to restore when it's switched OFF.
@@ -949,6 +1031,8 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
             cleanup_ok, cleanup_result = clear_z13ctl_default_custom_tdp(z13ctl=z13ctl)
             if cleanup_result:
                 results.append(cleanup_result)
+                if cleanup_result[2].startswith("z13ctl write timed out after "):
+                    return results
     if curve_write_needed and not tdp and not cleanup_ok:
         # The base profile write releases a custom curve. Keep the shared flag
         # from asking the watchdog to re-enable Max Fans (which would write an
@@ -977,18 +1061,43 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
              "Max Fans OFF, firmware auto" if released else "firmware auto")
     else:
         results.append(("fans", True, "firmware auto"))
+    if timed_out:
+        return results
 
     # 5. Undervolt (needs ryzen_smu; absent on stock SteamOS -> reported, not fatal).
     results.extend(apply_undervolt(profile, z13ctl=z13ctl))
+    timed_out = any(msg.startswith("z13ctl write timed out after ") for _, _, msg in results)
+    if timed_out:
+        return results
 
-    # 6. Lighting, per device so one stalled hidraw endpoint can't block the other.
-    #    The keyboard goes first, so it is set before any lightbar recovery.
+    # 6. Lighting follows the repository's documented profile binding order.
+    # Each device is independent so a
+    #    stalled endpoint cannot block the other. A mode apply carries brightness
+    #    because z13ctl otherwise defaults it to high.
+    lighting = profile.get("lighting") or {}
     br = profile.get("brightness")
-    if br:
-        for dev in LIGHTING_DEVICES:
+    # Apply one write per device in the established keyboard-then-lightbar order,
+    # whether the profile requests a mode or only a brightness change.
+    for dev in LIGHTING_DEVICES:
+        setting = lighting.get(dev)
+        if setting:
+            level = br or "high"
+            argv = lighting_argv(dev, setting, level, z13ctl)
+            rc, out, timed_out = host.run(argv, timeout=Z13CTL_WRITE_TIMEOUT_S)
+            if timed_out:
+                out = f"z13ctl write timed out after {Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)"
+            results.append((f"lighting ({dev})", rc == 0,
+                            f"{setting['mode']} / {setting['color']} / {level}" if rc == 0
+                            else (out or f"rc={rc}")))
+            if timed_out:
+                return results
+        elif br:
             argv = [z13ctl, "--device", dev, "brightness", br]
-            rc, out, _ = host.run(argv, timeout=30)
-            if rc != 0 and dev == "lightbar":
+            rc, out, hit_timeout = host.run(argv, timeout=Z13CTL_WRITE_TIMEOUT_S)
+            timed_out = hit_timeout
+            if hit_timeout:
+                out = f"z13ctl write timed out after {Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)"
+            if not hit_timeout and rc != 0 and dev == "lightbar":
                 kind = lightbar_failure_kind(out)
                 if kind == "wedged":
                     rec_ok, rec_msg = recover_lightbar()
@@ -998,14 +1107,21 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
                     rec_ok = None
                 if rec_ok is not None:
                     if rec_ok:
-                        rc, out, _ = host.run(argv, timeout=30)
+                        rc, out, hit_timeout = host.run(argv, timeout=Z13CTL_WRITE_TIMEOUT_S)
+                        timed_out = hit_timeout
+                        if hit_timeout:
+                            out = f"z13ctl write timed out after {Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)"
                         if rc == 0:
-                            results.append((f"brightness ({dev})", True, f"{br} (lightbar recovered)"))
+                            results.append((f"brightness ({dev})", True,
+                                            f"{br} (lightbar recovered)"))
                             continue
-                        out = f"{out or f'rc={rc}'} (still failing after a {rec_msg})"
+                        if not hit_timeout:
+                            out = f"{out or f'rc={rc}'} (still failing after a {rec_msg})"
                     else:
                         out = f"{out}; {rec_msg}"
             results.append((f"brightness ({dev})", rc == 0, br if rc == 0 else (out or f"rc={rc}")))
+            if timed_out:
+                return results
 
     # 7. Battery charge limit.
     # A login restore passes login_battery_default=80: a profile that sets no limit
@@ -1016,12 +1132,15 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
         bl, note = login_battery_default, " (fallback: profile sets no limit)"
     if bl is not None:
         step("battery limit", [z13ctl, "batterylimit", "--set", str(bl)], f"{bl}%{note}")
+        if timed_out:
+            return results
 
     # 8. Enter hook.
     if not skip_hooks:
         enter_cmd = (profile.get("hooks") or {}).get("enter") or ""
         if enter_cmd.strip():
-            step("enter hook", ["bash", "-lc", enter_cmd], f"ran: {enter_cmd}")
+            step("enter hook", ["bash", "-lc", enter_cmd], f"ran: {enter_cmd}",
+                 timeout=HOOK_TIMEOUT_S)
 
     return results
 

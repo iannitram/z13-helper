@@ -3,7 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { switchProfile } from "../src/profileSwitch.ts";
 
-function deps(applyResult: boolean | Error) {
+function deps(applyResult: boolean | { ok: boolean; message: string } | Error) {
   const calls: string[] = [];
   return {
     calls,
@@ -65,4 +65,12 @@ test("success but refresh read fails: still ok, state fields absent", async () =
   const r = await switchProfile(d, "Turbo");
   assert.equal(r.ok, true);
   assert.equal(r.maxFans, undefined);
+});
+
+test("write timeout message is returned unchanged for the toast", async () => {
+  const message = "z13ctl write timed out after 20 s (kernel asus-wmi hang?)";
+  const { d } = deps({ ok: false, message });
+  const r = await switchProfile(d, "Turbo");
+  assert.equal(r.ok, false);
+  assert.equal(r.message, message);
 });

@@ -19,6 +19,7 @@ from fan_watchdog import FAN_RECOVERY_LABEL
 
 
 logger = logging.getLogger("z13.profiles")
+_WRITE_TIMEOUT_PREFIX = "z13ctl write timed out after "
 
 
 class ProfileControl(QObject):
@@ -222,15 +223,20 @@ class ProfileControl(QObject):
         if isinstance(result, Exception):
             logger.error("%s failed: %s", label, result,
                          exc_info=(type(result), result, result.__traceback__))
-            self.message.emit(f"{label}: {result}")
+            text = str(result)
+            self.message.emit(text if text.startswith(_WRITE_TIMEOUT_PREFIX) else f"{label}: {text}")
         elif isinstance(result, list) and result and isinstance(result[0], tuple):
             failed = [f"{s} ({m})" for s, ok, m in result if not ok]
+            timeout_message = next((m for _step, ok, m in result
+                                    if not ok and m.startswith(_WRITE_TIMEOUT_PREFIX)), None)
             if failed:
                 logger.warning("%s: %s", label, "; ".join(failed))
             else:
                 logger.info("%s ✓ (%s)", label, ", ".join(f"{s}: {m}" for s, _ok, m in result))
-            self.message.emit(label + (": " + "; ".join(failed) if failed else " ✓"))
+            self.message.emit(timeout_message or
+                              label + (": " + "; ".join(failed) if failed else " ✓"))
         else:
             logger.info("%s ✓ %s", label, result if isinstance(result, str) else "")
-            self.message.emit(f"{label} ✓")
+            text = result if isinstance(result, str) else ""
+            self.message.emit(text if text.startswith(_WRITE_TIMEOUT_PREFIX) else f"{label} ✓")
         self.changed.emit()

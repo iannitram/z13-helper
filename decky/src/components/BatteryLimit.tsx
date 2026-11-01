@@ -1,6 +1,7 @@
 import { PanelSectionRow, SliderField } from "@decky/ui";
+import { toaster } from "@decky/api";
 import { useEffect, useRef, useState } from "react";
-import { PowerState, safely, setBatteryLimit } from "../backend";
+import { isWriteTimeout, PowerState, safely, setBatteryLimit } from "../backend";
 import { useCommitOnRelease } from "../hooks";
 
 /** Battery charge limit 40..100 % in steps of 5, applied on release and saved to the active profile. */
@@ -17,6 +18,7 @@ export function BatteryLimit({ state }: { state: PowerState | null }) {
     setMsg("Applying…");
     const res = await safely(setBatteryLimit(v, state?.active ?? ""));
     setMsg(res.message);
+    if (isWriteTimeout(res.message)) toaster.toast({ title: "Z13-Helper", body: res.message });
   });
 
   useEffect(() => {

@@ -354,24 +354,24 @@ def test_repair_decky_dry_run_behind_latest(dry, monkeypatch, capsys, plugin_uni
 
 def test_repair_decky_ok(dry, monkeypatch, capsys, plugin_unit):
     dry.decky_version.parent.mkdir(parents=True)
-    dry.decky_version.write_text("v3.1.10\n")
-    monkeypatch.setattr(installers, "fetch", decky_fetch("3.1.10", []))
+    dry.decky_version.write_text("v3.3.0\n")
+    monkeypatch.setattr(installers, "fetch", decky_fetch("3.3.0", []))
     monkeypatch.setattr(installers, "install_decky", forbid("install_decky"))
     monkeypatch.setattr(subprocess, "run", Systemctl(active={"plugin_loader.service"}))
     assert installers.repair_decky() == 0
     assert "Decky Loader: OK" in logs(capsys)
 
 
-def test_repair_decky_offline_judges_local_state(dry, monkeypatch, capsys, plugin_unit):
+def test_repair_decky_offline_still_upgrades_below_minimum(dry, monkeypatch, capsys, plugin_unit):
     dry.decky_version.parent.mkdir(parents=True)
     dry.decky_version.write_text("3.0.0")
     monkeypatch.setattr(installers, "fetch", decky_fetch(None, []))
-    monkeypatch.setattr(installers, "install_decky", forbid("install_decky"))
     monkeypatch.setattr(subprocess, "run", Systemctl(active={"plugin_loader.service"}))
     assert installers.repair_decky() == 0
     out = logs(capsys)
     assert "Could not read the latest Decky release" in out
-    assert "Decky Loader: OK" in out
+    assert "Decky Loader 3.0.0 is older than 3.3.0" in out
+    assert "(dry run) would run the official Decky installer" in out
 
 
 def test_decky_installed_version(paths):

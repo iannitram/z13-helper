@@ -18,6 +18,7 @@ import re
 import time
 
 import host
+from versions import DECKY_MIN, older_than
 
 CACHE_PATH = os.path.expanduser("~/.config/z13-helper/updates.json")
 CHECK_INTERVAL_S = 24 * 3600
@@ -63,7 +64,8 @@ SOURCES = [
      "note": "Installable here: tarball, sha256-verified, daemon runs --no-button. Backup kept as z13ctl.bak-<ver>."},
     {"id": "decky", "label": "Decky Loader", "repo": "SteamDeckHomebrew/decky-loader",
      "kind": "release", "installed": _decky_version, "installer": "decky",
-     "note": "Installable here via the official Decky installer script (or Decky's own Settings → Update)."},
+     "note": "Installable here via the official Decky installer script (or Decky's own Settings → Update). "
+             "Needs 3.3.0 or newer since the 2026-10-13 Steam client."},
     {"id": "kernel", "label": "Linux kernel (mainline — reference only)", "kind": "kernel", "installed": _kernel_version,
      "note": "Not installable: SteamOS ships its own kernel (updates arrive via the SteamOS row). Watch for 7.0+: "
              "it fixes the Z13 keyboard-backlight init (-75) and adds the GZ302 power-limit table."},
@@ -276,6 +278,8 @@ def summary(cache=None):
         latest, installed, seen = it.get("latest"), it.get("installed"), it.get("seen")
         if src.get("installed"):
             new = is_newer(latest, installed) and latest != seen
+            if src["id"] == "decky" and older_than(installed, DECKY_MIN):
+                new = True
         else:
             new = bool(latest) and latest != seen
         rows.append({"id": src["id"], "label": src["label"], "repo": src.get("repo"),

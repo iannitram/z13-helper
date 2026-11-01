@@ -33,6 +33,8 @@ import time
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO, "src"))
 
+from versions import DECKY_MIN, older_than
+
 HOME = os.path.expanduser("~")
 BIN = os.path.join(HOME, ".local", "bin")
 LIB = os.path.join(HOME, ".local", "lib", "z13-helper")
@@ -69,6 +71,8 @@ MANIFEST = [
     ("tooling/z13-button-watcher", f"{BIN}/z13-button-watcher", "755", False),
     ("tooling/z13_cdp.py", f"{BIN}/z13_cdp.py", "644", False),
     ("tooling/z13_gamemode_report.py", f"{BIN}/z13-gamemode-report", "755", False),
+    ("packaging/host/gamescope/displays/asus.rogflowz13.lcd.lua",
+     f"{HOME}/.config/gamescope/scripts/00-gamescope/displays/asus.rogflowz13.lcd.lua", "644", False),
     ("tooling/diag/z13-memory-check", f"{BIN}/z13-memory-check", "755", False),
     ("tooling/diag/z13-storage-check", f"{BIN}/z13-storage-check", "755", False),
     ("tooling/diag/z13-whereami", f"{BIN}/z13-whereami", "755", False),
@@ -362,8 +366,14 @@ def check_decky(r):
         ver = open(os.path.join(HOME, "homebrew", "services", ".loader.version")).read().strip()
     except OSError:
         pass
+    ver = ver.strip().lstrip("v")
     st = _active("plugin_loader.service", user=False)
     r.add(GREEN if st == "active" else RED, "plugin_loader", f"{st}, Decky {ver}")
+    if older_than(ver, DECKY_MIN):
+        r.add(RED, "Decky version", f"Decky {ver} < {DECKY_MIN} "
+              "(Steam client 2026-10-13 needs 3.3.0+)")
+    else:
+        r.add(GREEN, "Decky version", ver)
     out = sh(["ss", "-Hltn", "sport = :1337"])[1]
     n = len([l for l in out.splitlines() if l.strip()])
     r.add(GREEN if n == 1 else RED, "one loader on :1337", str(n) if n != 1 else "yes")

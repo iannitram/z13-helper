@@ -6,7 +6,7 @@ active state is a 2 px accent border plus a faint top tint.
 """
 
 from PyQt6.QtCore import Qt, QRectF, QEvent
-from PyQt6.QtGui import QColor, QPainter, QPen, QLinearGradient, QFont, QFontMetrics
+from PyQt6.QtGui import QColor, QPainter, QPen, QLinearGradient, QFont, QFontMetrics, QPainterPath
 from PyQt6.QtWidgets import QPushButton, QLabel, QFrame, QVBoxLayout, QHBoxLayout, QWidget
 
 # Dark theme (RForm.cs)
@@ -81,10 +81,11 @@ class ModeTile(QPushButton):
     takes the custom mode's base colour).
     """
 
-    def __init__(self, text, accent=STANDARD, secondary=False, height=60, parent=None):
+    def __init__(self, text, accent=STANDARD, secondary=False, height=60, icon=None, parent=None):
         super().__init__(text, parent)
         self.accent = QColor(accent)
         self.secondary = secondary
+        self.icon_name = icon
         self.radius = 5
         self.setCheckable(True)
         # The stylesheet's generic QPushButton min-height/padding is applied at
@@ -130,11 +131,65 @@ class ModeTile(QPushButton):
             p.setBrush(Qt.BrushStyle.NoBrush)
             p.setPen(QPen(self.accent, 2))
             p.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), self.radius, self.radius)
-        p.setPen(QColor(TEXT if self.isEnabled() else "#6a6a6a"))
+        text_color = QColor(TEXT if self.isEnabled() else "#6a6a6a")
+        p.setPen(text_color)
         f = QFont(self.font())
         p.setFont(f)
-        p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self.text())
+        if self.icon_name:
+            p.drawText(self.rect().adjusted(3, 3, -3, -23),
+                       Qt.AlignmentFlag.AlignCenter, self.text())
+            self._draw_tile_icon(p, text_color)
+        else:
+            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self.text())
         p.end()
+
+    def _draw_tile_icon(self, painter, text_color):
+        """Draw a small theme-safe line icon centred along the tile's bottom edge."""
+        cx = self.width() / 2
+        cy = self.height() - 12
+        color = QColor(self.accent if self.isEnabled() else text_color)
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(color, 1.7, Qt.PenStyle.SolidLine,
+                            Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        path = QPainterPath()
+        if self.icon_name == "leaf":
+            path.moveTo(cx - 7, cy + 4)
+            path.cubicTo(cx - 9, cy - 4, cx + 1, cy - 10, cx + 7, cy - 7)
+            path.cubicTo(cx + 8, cy - 1, cx + 2, cy + 7, cx - 7, cy + 4)
+            painter.drawPath(path)
+            painter.drawLine(int(cx - 5), int(cy + 3), int(cx + 5), int(cy - 6))
+        elif self.icon_name == "balance":
+            painter.drawLine(int(cx), int(cy - 8), int(cx), int(cy + 6))
+            painter.drawLine(int(cx - 7), int(cy - 5), int(cx + 7), int(cy - 5))
+            painter.drawLine(int(cx - 5), int(cy - 5), int(cx - 8), int(cy + 1))
+            painter.drawLine(int(cx + 5), int(cy - 5), int(cx + 8), int(cy + 1))
+            painter.drawLine(int(cx - 4), int(cy + 6), int(cx + 4), int(cy + 6))
+            painter.drawLine(int(cx - 8), int(cy + 1), int(cx - 3), int(cy + 1))
+            painter.drawLine(int(cx + 3), int(cy + 1), int(cx + 8), int(cy + 1))
+        elif self.icon_name == "bolt":
+            path.moveTo(cx + 2, cy - 8)
+            path.lineTo(cx - 5, cy + 1)
+            path.lineTo(cx - 1, cy + 1)
+            path.lineTo(cx - 3, cy + 8)
+            path.lineTo(cx + 5, cy - 2)
+            path.lineTo(cx + 1, cy - 2)
+            path.closeSubpath()
+            painter.drawPath(path)
+        elif self.icon_name == "fan":
+            painter.drawEllipse(int(cx - 1.4), int(cy - 1.4), 3, 3)
+            for angle in (0, 120, 240):
+                painter.save()
+                painter.translate(cx, cy)
+                painter.rotate(angle)
+                path.moveTo(0, -2)
+                path.cubicTo(1, -4, 7, -8, 6, -3)
+                path.cubicTo(5, -1, 2, 0, 0, 1)
+                painter.drawPath(path)
+                path = QPainterPath()
+                painter.restore()
+        painter.restore()
 
 
 def pill(text, orange=False, checkable=True):
