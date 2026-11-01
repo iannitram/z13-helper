@@ -73,6 +73,35 @@ The desktop Fans + Power window and Decky `power_state()` display stored profile
 
 `decky/main.py` exposes callable methods to the QAM panel and imports shared `fan_watchdog.py`, `sensor_reader.py`, `host.py` and `power_range.py` from the plugin's installed `py_modules/` copies. It serializes its writes with an asyncio lock and runs blocking host work in threads. In Game Mode it runs the shared fan watchdog; in Desktop Mode it stands down while the resident PyQt app owns that watchdog. App-profile selection invokes the installed `z13-profile` CLI, which is the same engine used by the desktop app. Direct performance-profile, TDP, charge-limit, brightness and telemetry calls remain separate Decky API methods. See [`decky.md`](decky.md) for the flow and persisted state details.
 
+## Planned (after 1.0)
+
+Modules planned by Phases 15 and 16 (`docs/ROADMAP.md` §10a, §10b). Each moves from planned to present in the PR that builds it. None writes hardware except through `z13ctl` (via `hardware_controller.py`).
+
+| Module | Status | Responsibility and connections | Issue |
+|---|---|---|---|
+| `src/goal_control.py` | planned | Pure goal decision: goal + hwmon/fps readings + current setpoints → next TDP and curve, bounded by `power_range.py`. No I/O. | #123 |
+| `src/profiles.py` (`goal` field) | planned | Optional per-profile goal; `max_fans` migrates to goal `max`. | #124 |
+| `src/goal_runner.py` | planned | The one curve/TDP writer while a goal is active; reads `sensor_reader.py` and `fps_source.py`, writes through `apply_worker.py` (desktop) or `decky/main.py` (Game Mode), coordinated by the #23 state owner; takes over `fan_watchdog.py`'s curve-drop recovery. | #125 |
+| `src/fps_source.py` | planned | Read-only frame-rate reading in Game Mode (source chosen by the probe). | #126 |
+| `src/hw_signals.py` | planned | Event → lightbar pattern mapping with priority, rate limit and restore; played through `hardware_controller.py`. | #129, #130 |
+| `src/evdev_listener.py` (gestures) | planned | Hold or double-press on the side button cycles profiles/goals. | #131 |
+| shared touch UI | planned | Desktop window and QAM from one set of parts; shape decided in `docs/adr/0002-shared-touch-ui.md`. | #132, #133 |
+| `src/timeline.py` | planned | Append-only `~/.local/state/z13-helper/timeline.jsonl` of hardware and host changes with Phase 12c rollback records; written by `profiles.py`, `goal_runner.py`, `install.sh`. | #134 |
+| timeline view | planned | Compare and roll back, beside `updates_dialog.py` and in the QAM. | #135 |
+
+```mermaid
+flowchart LR
+    Sensors[sensor_reader.py] --> Goal[goal_control.py]
+    FPS[fps_source.py] --> Goal
+    Goal --> Runner[goal_runner.py]
+    Owner["#23 state owner"] --> Runner
+    Runner --> HC[hardware_controller.py] --> CLI[z13ctl]
+    Events[app events] --> Sig[hw_signals.py] --> HC
+    Button[evdev_listener.py gestures] --> Runner
+    Runner --> TL[(timeline.jsonl)]
+    Prof[profiles.py] --> TL
+```
+
 ## Host installation, tests and references
 
 | Path | Responsibility |

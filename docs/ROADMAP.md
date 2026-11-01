@@ -501,6 +501,47 @@ Not issues (checked, nothing to do): the RDNA1/2 dedicated-GPU resume fix (Strix
 
 ---
 
+## 10a. Phase 15 — Goal control 💤 after 1.0 (added 2026-11-01, the owner's pick)
+**Why:** today the owner drives the firmware directly: four mode tiles, three wattage sliders and a hand-drawn RPM-per-°C chart, plus a Max Fans switch that several writers fight over (#86, #94, #96). Phase 15 lets the owner say what they want and has one controller deliver it.
+
+**Goals:** **Quiet** (fan RPM ceiling), **Comfort** (keep the tablet comfortable to hold; the Z13 has no skin sensor, so #127 finds a proxy), **Hold FPS** (a frame-rate target in Game Mode, if #126 finds a dependable source), **Max** (today's Max Fans, now a goal), and **Custom** (today's fixed profiles, unchanged).
+
+**Shape:** a pure decision function (#123) turns goal + readings + current setpoints into the next TDP and curve, with hysteresis, a maximum step and a minimum dwell. A runner (#125) is the only curve and TDP writer while a goal is active, in whichever mode owns hardware, through the #23 state owner (#120). The fan watchdog's curve-drop recovery becomes "re-assert the goal's setpoint", which retires the race class behind #86/#94/#96 once it lands (and overlaps #66). Profiles gain an optional `goal` (#124). The UI swaps the mode tiles for goal tiles that show whether the goal is met; the chart and sliders move to an Expert section (#128).
+
+**Principles kept:** 1 (writes through `z13ctl` only), 4 (fixed order on a full profile apply), 5 (hwmon only, never Armoury `current_value`), 6 (Max wins: it is the top goal).
+
+| Step | Issue | Blocked by |
+|---|---|---|
+| 15a decision function | #123 | — |
+| 15b `goal` in the profile schema | #124 | — |
+| 15c runner, single writer | #125 | #123, #124, #120, #79 |
+| 15d frame-rate source (probe) | #126 | — |
+| 15e Comfort sensor (probe) | #127 | — |
+| 15f goal picker, Expert section | #128 | #125, #126 |
+
+**Done when:** Quiet and Max are verified on the Z13 across a Desktop↔Game Mode switch and resume; Comfort and Hold FPS are verified or recorded as a no-go with the reason; no other code path writes a curve while a goal is active.
+
+## 10b. Phase 16 — Hardware as the interface 💤 after 1.0 (added 2026-11-01, the owner's pick)
+**Why:** the Z13 is mostly a tablet, and the app is a dense mouse-sized form. Phase 16 makes the machine's own lights and button carry the everyday interactions, and gives the windows one touch-first look shared by the desktop and Game Mode.
+
+**Pieces:**
+- **Signal language** (#129, #130): the lightbar confirms a profile change, pulses while thermal throttling, glows when charging stops at the limit, and turns amber when a SteamOS update needs attention (Phase 12c). Priorities, a strict rate limit (the lightbar wedges under bursts, Phase 7), restore of the owner's lighting, and an off switch.
+- **Side-button gestures** (#131): hold or double-press cycles profiles (goals, after Phase 15) with a lightbar confirmation, in both modes. InputPlumber stays masked (principle 2).
+- **One touch-first interface** (#132, #133): an ADR picks between hosting the Decky React components in the desktop window and shared tokens with a large-tile Qt layout; then the desktop window is rebuilt to match. This is where the R04 design pass's shared design system lands.
+- **Machine timeline** (#134, #135): every hardware or host change is one append-only entry (principle 7's journal line comes from the same call), with Phase 12c's rollback records; a view compares states and rolls back reversible entries. A SteamOS update shows as one entry listing what it changed.
+
+| Step | Issue | Blocked by |
+|---|---|---|
+| 16a signal language | #129 | — |
+| 16b signal runner + off switch | #130 | #129 |
+| 16c side-button gestures | #131 | #130 |
+| 16d ADR: shared touch UI | #132 | — |
+| 16e touch-first layout | #133 | #132 |
+| 16f timeline store | #134 | #109 |
+| 16g timeline view | #135 | #134 |
+
+**Done when:** on the Z13, signals run an hour with no lightbar wedge; the gesture cycles profiles in both modes with no double-fire; the desktop window and the QAM share one look in tablet use; a SteamOS update appears in the timeline and a reversible entry rolls back.
+
 ## 11. Upstream watch (what the Updates panel checks, and what to look for)
 Installed/pinned versions as of **2026-10-12**; SteamOS, kernel and Decky rows updated **2026-10-26** for SteamOS 3.9 (§9c). "Watch for" is what would change our plan.
 
