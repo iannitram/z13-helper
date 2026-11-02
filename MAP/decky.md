@@ -1,6 +1,6 @@
 # Decky / Game Mode code map
 
-This describes the Decky source in the current checkout (`8c857cd`, 2026-10-30). It is not a claim that the open review stack has merged or that all Game Mode behavior has been verified on the device. The current code map is [`README.md`](README.md); the pending verification checklist is in [`docs/ROADMAP.md`](../docs/ROADMAP.md).
+This describes the Decky source on `main` at `e575835` (2026-11-02). It is not a claim that all Game Mode behavior has been verified on the device. The current code map is [`README.md`](README.md); the pending verification checklist is in [`docs/ROADMAP.md`](../docs/ROADMAP.md).
 
 ## Runtime and data flow
 
@@ -30,7 +30,7 @@ Decky re-reads shared state when its methods need it rather than holding a long-
 
 | Path | Responsibility |
 |---|---|
-| `decky/main.py` | Decky backend and callable API. Profile reads/switches, Max Fans, direct performance profile, power, battery limit, brightness, telemetry, desktop-app check and Game Mode watchdog lifecycle. |
+| `decky/main.py` | Decky backend and callable API. Profile reads/switches, Max Fans, direct performance profile, power, battery limit, brightness, telemetry, desktop-app check and Game Mode watchdog lifecycle. Each z13ctl write uses `host.Z13CTL_WRITE_TIMEOUT_S` (20 s); a profile apply gets its own 180 s budget (`PROFILE_APPLY_TIMEOUT_S`). Write callables (`set_app_profile`, `set_profile`, `set_max_fans`) return `{ok, message}`, so a timeout reaches the panel as text. |
 | `decky/src/index.tsx` | QAM panel composition and profile switch flow. |
 | `decky/src/backend.ts` | Typed Decky callable names, results and shared TDP clamping rule. |
 | `decky/src/profileSwitch.ts` | Pure async flow for profile changes: apply, then re-read profile and Max Fans whether apply succeeds or fails. |
@@ -43,6 +43,7 @@ Decky re-reads shared state when its methods need it rather than holding a long-
 | Installed plugin `py_modules/sensor_reader.py` | Root-owned installed copy of `src/sensor_reader.py`; read-only hwmon collection. |
 | Installed plugin `py_modules/power_range.py` | Root-owned installed copy of `src/power_range.py`; per-rail metadata bounds matching z13ctl backend selection. |
 | Installed plugin `py_modules/host.py` | Root-owned installed copy of `src/host.py`; host command mode and environment handling. |
+| `decky/rollup.config.js` | Bundle build for the plugin front end. |
 | `decky/tests/test_backend.py` | Backend tests, run with `python3 -m unittest discover -s decky/tests`. |
 | `decky/tests/profileSwitch.test.ts` | Node tests for the pure profile switch helper; run manually with `node --test decky/tests/profileSwitch.test.ts` (not part of CI). |
 
