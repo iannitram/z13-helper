@@ -18,6 +18,12 @@ the device but not yet verified on the Z13. Plan and status: `docs/ROADMAP.md`.
 
 ## Unreleased
 
+- **Automatic crash reporting (#82; live upload check pending).** Configured builds
+  queue scrubbed exception and fatal reports from the desktop app and Decky plugin
+  for background upload to the shared bug drop. Help → Error log has a default-on
+  toggle, independent of local logging. Both frontends share the ten-report queue
+  and five-attempt daily limit. Without private build configuration, reporting
+  does nothing. See `docs/crash-reporting.md` for packaging and verification.
 - Profile apply timeout messages in Decky and the desktop status bar now include the failed step when available.
 - **Decky Loader minimum is 3.3.0.** The repair path reinstalls older loaders even when the latest release cannot be read; install verification and the Updates panel flag the same minimum required by the 2026-10-13 Steam client (#77).
 - **Decky repair avoids live file-watcher reload storms (#100).** Stage and byte-verify the

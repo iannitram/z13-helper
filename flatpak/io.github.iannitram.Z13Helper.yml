@@ -21,6 +21,8 @@ sdk: org.kde.Sdk
 command: z13-helper-flatpak
 
 finish-args:
+  # Background crash reports use the build-time bug-drop configuration.
+  - --share=network
   # GUI
   - --share=ipc
   - --socket=fallback-x11

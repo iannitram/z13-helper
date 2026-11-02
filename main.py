@@ -10,6 +10,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
 import app_log
+import crash_report
 import install_record
 import single_instance
 
@@ -47,15 +48,23 @@ def main():
     # under ~/.local/state/z13-helper/ (see app_log.py, Help -> Error log) --
     # if the user opted in (install.json "logging"; missing = on).
     app_log.setup(to_disk=install_record.logging_enabled())
+    reporter = crash_report.install(
+        log_text=lambda: "\n".join(app_log.ring().lines()),
+        previous_fatal=app_log.previous_fatal(),
+        fatal_active=lambda: not app_log.to_disk(),
+    )
+    if reporter:
+        app_log.set_fatal_fallback(reporter.activate_fatal)
     single_instance.clear_user_quit()
 
     from PyQt6.QtCore import QTimer
     from PyQt6.QtGui import QSessionManager
     from PyQt6.QtWidgets import QApplication
-    from dashboard_ui import APP_VERSION, DashboardUI, _CONFIG_PATH
+
+    from config_manager import ConfigManager
+    from dashboard_ui import _CONFIG_PATH, APP_VERSION, DashboardUI
     from hardware_controller import HardwareController
     from sensor_reader import SensorReader
-    from config_manager import ConfigManager
 
     app_log.set_version(APP_VERSION)
     app_log.install_qt_handler()
@@ -98,6 +107,8 @@ def main():
     app.aboutToQuit.connect(server.close)
     app.aboutToQuit.connect(lambda: logging.getLogger("z13").info("Quitting"))
     app.aboutToQuit.connect(app_log.shutdown)
+    if reporter:
+        app.aboutToQuit.connect(reporter.close)
 
     # SIGTERM/SIGINT -> clean quit, so aboutToQuit teardown (host side-button
     # reader) runs. Python only runs signal handlers between bytecodes, so a

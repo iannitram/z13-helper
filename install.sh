@@ -82,10 +82,19 @@ INSTALLERS="$REPO/src/installers.py"
 PLUGIN_DIR="$HOME/homebrew/plugins/z13-helper"
 PLUGIN_FILES=(plugin.json package.json main.py dist/index.js dist/index.js.map
               py_modules/fan_watchdog.py py_modules/sensor_reader.py py_modules/host.py
-              py_modules/power_range.py)
+              py_modules/power_range.py py_modules/crash_report.py py_modules/crash_queue.py
+              py_modules/crash_scrub.py py_modules/_crash_build.json)
 # py_modules/X comes from src/X (shared with the desktop app, installed root-owned:
 # docs/adr/0001-decky-imports-root-owned-copies.md); everything else from decky/.
-plugin_src() { [[ $1 == py_modules/* ]] && echo "$REPO/src/${1#py_modules/}" || echo "$REPO/decky/$1"; }
+plugin_src() {
+    if [[ $1 == py_modules/_crash_build.json && ! -f $REPO/src/_crash_build.json ]]; then
+        echo "$REPO/src/crash_build_defaults.json"
+    elif [[ $1 == py_modules/* ]]; then
+        echo "$REPO/src/${1#py_modules/}"
+    else
+        echo "$REPO/decky/$1"
+    fi
+}
 export Z13_INSTALL_DRY_RUN=$DRY
 
 FAILED=() CHANGED=()

@@ -49,11 +49,14 @@ DECKY_PLUGIN = os.path.join(HOME, "homebrew", "plugins", "z13-helper")
 DECKY_LOGS = os.path.join(HOME, "homebrew", "logs", "z13-helper")
 DECKY_FILES = ["plugin.json", "package.json", "main.py", "dist/index.js",
                "py_modules/fan_watchdog.py", "py_modules/sensor_reader.py", "py_modules/host.py",
-               "py_modules/power_range.py"]
+               "py_modules/power_range.py", "py_modules/crash_report.py", "py_modules/crash_queue.py",
+               "py_modules/crash_scrub.py", "py_modules/_crash_build.json"]
 
 
 def decky_source(f):
     """Repo copy of an installed plugin file: py_modules/X is src/X, the rest decky/."""
+    if f == "py_modules/_crash_build.json" and not os.path.isfile(os.path.join(REPO, "src", "_crash_build.json")):
+        return os.path.join(REPO, "src", "crash_build_defaults.json")
     if f.startswith("py_modules/"):
         return os.path.join(REPO, "src", f[len("py_modules/"):])
     return os.path.join(REPO, "decky", f)
@@ -105,7 +108,7 @@ _COL = {GREEN: "\033[32m", YELLOW: "\033[33m", RED: "\033[31m", SKIP: "\033[90m"
 
 def sh(argv, timeout=60):
     try:
-        p = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+        p = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, check=False)
         return p.returncode, ((p.stdout or "") + (p.stderr or "")).strip()
     except (OSError, subprocess.TimeoutExpired) as e:
         return 127, str(e)
@@ -189,9 +192,10 @@ def check_system(r):
     r.head("System")
     osr = {}
     try:
-        for line in open("/etc/os-release"):
-            k, _, v = line.strip().partition("=")
-            osr[k] = v.strip('"')
+        with open("/etc/os-release") as release_file:
+            for line in release_file:
+                k, _, v = line.strip().partition("=")
+                osr[k] = v.strip('"')
     except OSError:
         pass
     r.add(GREEN, "SteamOS", f"{osr.get('VERSION_ID', '?')} (build {osr.get('BUILD_ID', '?')})")
@@ -229,7 +233,8 @@ def check_z13ctl(r):
     svc = _active("z13ctl.service")
     r.add(GREEN if svc == "active" else YELLOW, "daemon", svc if svc == "active" else f"{svc} (socket-activated on first use)")
     try:
-        ovr = open(os.path.join(UNITS, "z13ctl.service.d", "override.conf")).read()
+        with open(os.path.join(UNITS, "z13ctl.service.d", "override.conf")) as override_file:
+            ovr = override_file.read()
     except OSError:
         ovr = ""
     r.add(GREEN if "--no-button" in ovr else RED, "daemon --no-button override",
@@ -267,7 +272,8 @@ def check_units(r):
     st = _enabled("z13-fan-resume.service", user=False)
     r.add(GREEN if st == "enabled" else RED, "resume hook enabled", st)
     try:
-        listed = {l.strip() for l in open(KEEP_LIST_FILE) if l.strip() and not l.startswith("#")}
+        with open(KEEP_LIST_FILE) as keep_file:
+            listed = {line.strip() for line in keep_file if line.strip() and not line.startswith("#")}
     except OSError:
         listed = set()
     missing = [p for p in KEEP_LIST if p not in listed]
@@ -363,7 +369,8 @@ def check_decky(r):
     r.head("Decky (Game Mode)")
     ver = "?"
     try:
-        ver = open(os.path.join(HOME, "homebrew", "services", ".loader.version")).read().strip()
+        with open(os.path.join(HOME, "homebrew", "services", ".loader.version")) as version_file:
+            ver = version_file.read().strip()
     except OSError:
         pass
     ver = ver.strip().lstrip("v")
@@ -382,7 +389,8 @@ def check_decky(r):
     r.add(GREEN if not bad else RED, "z13-helper == repo build", "yes" if not bad else "differs: " + ", ".join(bad))
     try:
         newest = max((os.path.join(DECKY_LOGS, f) for f in os.listdir(DECKY_LOGS)), key=os.path.getmtime)
-        up = "z13-helper up" in open(newest, errors="replace").read()
+        with open(newest, errors="replace") as backend_log:
+            up = "z13-helper up" in backend_log.read()
         r.add(GREEN if up else RED, "backend log says up", os.path.basename(newest) if up else
               f"no 'z13-helper up' in {os.path.basename(newest)}")
     except (OSError, ValueError):

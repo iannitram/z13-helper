@@ -4,6 +4,7 @@ __pycache__/
 .flatpak-builder/
 build-flatpak/
 scratch/
+src/_crash_build.json
 
 # Maintainer-only notes (Claude Code loads it next to CLAUDE.md)
 CLAUDE.local.md

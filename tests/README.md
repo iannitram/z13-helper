@@ -8,12 +8,13 @@ python3 -m pytest -k watchdog -v
 Runs anywhere (CI, a laptop, the Deck itself) without the Z13: no PyQt6, no
 `z13ctl`, no sysfs, no network, no sudo. `conftest.py` puts `src/` and
 `tooling/` on `sys.path` and installs an autouse guard that makes
-`subprocess.run`/`Popen` and `urllib.request.urlopen` raise, so a test that
+`subprocess.run`/`Popen`, `urllib.request.urlopen` and HTTP opener calls raise, so a test that
 forgets to fake something fails instead of touching the machine (`host.run`
 lets that error through rather than turning it into an rc).
 
 | File | Covers |
 |---|---|
+| `test_crash_wiring.py` | exception hooks, scrubbed uploads, consent, shared queue/rate limit, fatal recovery and build configuration; see `docs/crash-reporting.md` |
 | `test_profiles_apply.py` | `profiles.apply()`: write order, step independence, hooks, Max Fans state suspension, undervolt |
 | `test_profiles_store.py` | store seeding/CRUD, `validate`, `apply_by_name`, the `z13-profile` CLI |
 | `test_fan_watchdog.py` | recovery rules, throttle, stale queued recovery cancellation, in-flight Max Fans cancellation, and "profile rewrite before curve" |

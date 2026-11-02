@@ -7,14 +7,14 @@ _MAC = re.compile(
     re.IGNORECASE,
 )
 _SECRET = re.compile(
-    r"(?<![A-Za-z0-9_])(password|passwd|psk|token|secret|api_key|api-key|apikey)(\s*[=:]\s*)\S+",
+    r'''(?<![A-Za-z0-9_])(password|passwd|psk|token|secret|api_key|api-key|apikey)(["']?\s*[=:]\s*)(?:"[^"]*"|'[^']*'|\S+)''',
     re.IGNORECASE,
 )
 _SERIAL = re.compile(
-    r"(?<![A-Za-z0-9_])(serial(?:[ _]?number)?)(\s*[=:]\s*)\S+",
+    r'''(?<![A-Za-z0-9_])(serial(?:[ _]?number)?)(["']?\s*[=:]\s*)(?:"[^"]*"|'[^']*'|\S+)''',
     re.IGNORECASE,
 )
-_BEARER = re.compile(r"\b(Bearer\s+)\S+", re.IGNORECASE)
+_BEARER = re.compile(r"\b((?:Bearer|Basic)\s+)\S+", re.IGNORECASE)
 
 
 def _whole_word(word: str) -> "re.Pattern[str]":

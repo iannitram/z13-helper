@@ -23,7 +23,14 @@ class CrashQueue:
     def add(self, name: str, data: bytes) -> None:
         """Write a crash report to the queue."""
         file_path = self.directory / name
-        file_path.write_bytes(data)
+        # The caller holds the shared queue lock. Interrupted writes must never
+        # become a pending (and subsequently uploaded) truncated zip.
+        tmp = file_path.with_suffix(".tmp")
+        try:
+            tmp.write_bytes(data)
+            tmp.replace(file_path)
+        finally:
+            tmp.unlink(missing_ok=True)
 
         # Clean up old items if needed
         self._cleanup_old_items()
@@ -86,8 +93,12 @@ class CrashQueue:
 
         # Increment and write back
         count += 1
-        with sent_file.open("w") as f:
-            json.dump({"date": today, "count": count}, f)
+        tmp = sent_file.with_suffix(".tmp")
+        try:
+            tmp.write_text(json.dumps({"date": today, "count": count}))
+            tmp.replace(sent_file)
+        finally:
+            tmp.unlink(missing_ok=True)
 
     def _cleanup_old_items(self) -> None:
         """Remove old items if we exceed max_items."""
@@ -95,8 +106,9 @@ class CrashQueue:
             f for f in self.directory.iterdir() if f.is_file() and f.suffix == ".zip"
         ]
         if len(files) > self.max_items:
-            # Sort by name (which starts with timestamp) to get oldest first
-            files.sort(key=lambda f: f.name)
+            # Several reports can share a second; their random suffixes do not
+            # encode age. Use arrival time when dropping the oldest report.
+            files.sort(key=lambda f: (f.stat().st_mtime_ns, f.name))
             # Remove the oldest files
             for f in files[: -self.max_items]:
                 f.unlink()
