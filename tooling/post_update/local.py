@@ -81,7 +81,7 @@ def load_dir(path: str) -> tuple[list[dict[str, object]], list[str]]:
 
         file_path = os.path.join(path, filename)
         try:
-            with open(file_path, encoding="utf-8") as f:
+            with open(file_path, encoding="utf-8-sig") as f:
                 content = f.read()
         except (OSError, UnicodeDecodeError):
             errors.append(f"{filename}: unable to read file")
