@@ -48,45 +48,26 @@ def add_grub_args(line: str, args: Sequence[str]) -> str:
     quoted_part = match.group(2)
     trailing = match.group(3)
 
-    # Parse existing tokens
-    existing_tokens = quoted_part.split() if quoted_part else []
-
-    # Build result preserving the order of existing tokens, replacing keys as needed
-    result_tokens = []
-    processed_keys = set()
-
-    # Process existing tokens in order, replacing keys with new values when found
-    for token in existing_tokens:
-        if '=' in token:
-            key, _ = token.split('=', 1)
-            # Check if this key is being replaced by any new arg
-            replacement_found = False
-            for arg in args:
-                if arg.startswith(key + '='):
-                    result_tokens.append(arg)
-                    replacement_found = True
-                    processed_keys.add(key)
-                    break
-            if not replacement_found:
-                result_tokens.append(token)
-        else:
-            # Simple token without equals sign
-            result_tokens.append(token)
-
-    # Add new args that don't already exist (preserve order)
+    # An arg with whitespace or a shell-special character would break the quoted value.
     for arg in args:
-        if '=' in arg:
-            key, _ = arg.split('=', 1)
-            # If we already have a token with this key, don't add it again (already handled above)
-            if key not in [t.split('=', 1)[0] if '=' in t else t for t in result_tokens]:
-                result_tokens.append(arg)
-        else:
-            # Simple token without equals sign
-            if arg not in result_tokens:
-                result_tokens.append(arg)
+        if not arg or any(c.isspace() or c in '"\\$`' for c in arg):
+            raise ValueError(f"Not a single kernel argument: {arg!r}")
 
-    # Rejoin tokens
-    new_quoted = " ".join(result_tokens) if result_tokens else ""
+    def key_of(token):
+        return token.split("=", 1)[0]
+
+    # Each arg in turn: skip an exact token, replace same-key tokens in place, else append.
+    tokens = quoted_part.split()
+    for arg in args:
+        if arg in tokens:
+            continue
+        key = key_of(arg)
+        if any(key_of(t) == key for t in tokens):
+            tokens = [arg if key_of(t) == key else t for t in tokens]
+        else:
+            tokens.append(arg)
+
+    new_quoted = " ".join(tokens)
 
     # Reconstruct line, keeping leading whitespace and text after the closing quote
     return f'{leading}GRUB_CMDLINE_LINUX_DEFAULT="{new_quoted}"{trailing}'
