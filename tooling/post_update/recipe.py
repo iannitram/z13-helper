@@ -19,21 +19,20 @@ KEYRING_ID = "keyring"
 
 def order_tasks(recipes: Sequence[Recipe]) -> list:
     """Order recipes with keyring first, then non-reboot, then reboot."""
-    keyring_recipe = None
+    keyring_recipes = []
     non_reboot_recipes = []
     reboot_recipes = []
 
     for recipe in recipes:
         if recipe.id == KEYRING_ID:
-            keyring_recipe = recipe
+            keyring_recipes.append(recipe)
         elif recipe.reboot:
             reboot_recipes.append(recipe)
         else:
             non_reboot_recipes.append(recipe)
 
     result = []
-    if keyring_recipe:
-        result.append(keyring_recipe)
+    result.extend(keyring_recipes)
     result.extend(non_reboot_recipes)
     result.extend(reboot_recipes)
 
