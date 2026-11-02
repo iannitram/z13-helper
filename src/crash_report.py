@@ -52,11 +52,11 @@ def log_tail(text: str, n: int = LOG_LINES) -> str:
     Returns:
         The last n lines, each ending with \n
     """
-    if not text:
+    if not text or n <= 0:
         return ""
 
-    lines = text.splitlines(keepends=True)
-    return "".join(lines[-n:])
+    lines = text.splitlines()
+    return "".join(line + "\n" for line in lines[-n:])
 
 
 def build_report(
