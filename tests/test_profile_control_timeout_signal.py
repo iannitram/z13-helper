@@ -27,5 +27,5 @@ def test_profile_control_emits_write_timeout_exactly_to_ui():
     control._on_done("Profile → Turbo", [("tdp", False, message)])
 
     assert len(spy) == 1
-    assert spy[0][0] == message
+    assert spy[0][0] == f"{message} (step: tdp)"
     assert app is not None
