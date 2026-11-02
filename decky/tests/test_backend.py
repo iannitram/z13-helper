@@ -235,7 +235,7 @@ class StoreTest(unittest.TestCase):
         run.fail("z13-profile", rc=1, out=output)
         result = m.apply_tdp(False, 20, 30, 40)
         self.assertEqual(result["message"],
-                         "z13ctl write timed out after 20 s (kernel asus-wmi hang?)")
+                         "z13ctl write timed out after 20 s (kernel asus-wmi hang?) (step: fans)")
 
     def test_set_app_profile_preserves_formatted_profile_timeout(self):
         run = fake_host(self)
@@ -243,6 +243,11 @@ class StoreTest(unittest.TestCase):
         run.fail("z13-profile", rc=1, out=output)
         result = asyncio.run(m.Plugin().set_app_profile("Boondock"))
         self.assertEqual(result["message"],
+                         "z13ctl write timed out after 20 s (kernel asus-wmi hang?) (step: fans)")
+
+    def test_profile_timeout_without_step_keeps_bare_message(self):
+        output = "z13ctl write timed out after 20 s (kernel asus-wmi hang?)\n"
+        self.assertEqual(m._extract_z13ctl_timeout(output),
                          "z13ctl write timed out after 20 s (kernel asus-wmi hang?)")
 
     def test_apply_tdp_hw_failure_still_saved(self):

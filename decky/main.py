@@ -803,12 +803,20 @@ def apply_tdp(enabled, pl1, pl2, pl3, profile=None):
 
 
 def _extract_z13ctl_timeout(output):
-    """Return the exact per-write timeout embedded in z13-profile CLI output."""
+    """Return the per-write timeout, including its profile step when available."""
     prefix = "z13ctl write timed out after "
     for line in output.splitlines():
         index = line.find(prefix)
         if index >= 0:
-            return line[index:].strip()
+            message = line[index:].strip()
+            # _print_results emits: "  ERR  {step:<22}  {message}".
+            row = line[:index]
+            marker = row.find("ERR  ")
+            if marker >= 0:
+                step = row[marker + len("ERR  "):].strip()
+                if step:
+                    return f"{message} (step: {step})"
+            return message
     return ""
 
 

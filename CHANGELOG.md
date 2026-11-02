@@ -18,6 +18,7 @@ the device but not yet verified on the Z13. Plan and status: `docs/ROADMAP.md`.
 
 ## Unreleased
 
+- Profile apply timeout messages in Decky and the desktop status bar now include the failed step when available.
 - **Decky Loader minimum is 3.3.0.** The repair path reinstalls older loaders even when the latest release cannot be read; install verification and the Updates panel flag the same minimum required by the 2026-10-13 Steam client (#77).
 - **Decky repair avoids live file-watcher reload storms (#100).** Stage and byte-verify the
   complete plugin outside the watched directory, quiesce the loader, then swap the root-owned
