@@ -382,6 +382,20 @@ resume_loader() {
     start_loader
 }
 
+decky_frontend_check() {
+    if ((DRY)); then
+        info "Decky frontend: not checked — dry run"
+        return 0
+    fi
+    local result rc=0
+    result=$($PY "$REPO/tooling/z13_cdp.py" --decky-frontend-check --since "$1" 2>&1) || rc=$?
+    case $rc in
+        0) info "$result" ;;
+        3) warn "$result" ;;
+        *) fail "Decky frontend check failed: $result"; return 1 ;;
+    esac
+}
+
 decky_plugin() {
     say "Decky plugin (z13-helper)"
     local pnpm old_plugin=0 live_plugin=0
@@ -419,6 +433,11 @@ decky_plugin() {
         return 0
     fi
     info "differs: ${diff[*]}"
+
+    # CEF timestamps are epoch milliseconds. Include the entire replacement,
+    # not just errors emitted after the backend announces startup.
+    local frontend_since
+    frontend_since=$(date +%s.%N) || { fail "could not timestamp Decky frontend check"; return 1; }
 
     # Prepare a complete, checked tree outside Decky's watched plugins directory.
     # A failed build/copy cannot expose a partial frontend or backend to the loader.
@@ -601,7 +620,9 @@ decky_plugin() {
             warn "new plugin is installed, but rollback tree remains at $old_dir"
         fi
     fi
-    return 0
+    # Keep frontend failures separate from backend rollback: the new files are
+    # complete, and an absent Steam UI cannot prove or disprove their import.
+    decky_frontend_check "$frontend_since"
 }
 
 # ----------------------------------------------------------------------

@@ -31,10 +31,18 @@ import json
 import os
 import socket
 import struct
+import time
+import urllib.error
+import urllib.parse
 import urllib.request
 
 CDP_JSON = "http://127.0.0.1:8080/json"
 TARGET_TITLE = "SharedJSContext"
+
+
+class SteamUIUnavailable(RuntimeError):
+    """Steam's gamepad UI is absent from the debug target list."""
+
 
 # ---------------------------------------------------------------------------
 # Minimal stdlib RFC 6455 WebSocket client (text frames, one request/response).
@@ -53,7 +61,7 @@ def _discover_ws_url(timeout):
             url = tgt.get("webSocketDebuggerUrl")
             if url:
                 return url
-    raise RuntimeError(
+    raise SteamUIUnavailable(
         f"CDP target {TARGET_TITLE!r} not found — is the Steam gamepad UI running?")
 
 
@@ -128,13 +136,18 @@ def _ws_recv(sock):
     return opcode, payload
 
 
-def eval_js(expression, timeout=3.0, await_promise=True):
+def eval_js(expression, timeout=3.0, await_promise=True, events=None):
     """Evaluate JS in SharedJSContext; return the JSON-serializable result value.
 
     Raises on transport/target errors; returns {"error": "..."} on a JS exception.
     """
     sock = _ws_connect(_discover_ws_url(timeout), timeout)
     try:
+        deadline = time.monotonic() + timeout
+        if events is not None:
+            # Runtime.enable replays buffered console/exception events, including
+            # imports that failed before this connection. Never clear the console.
+            _ws_send(sock, 0x1, b'{"id":2,"method":"Runtime.enable"}')
         _ws_send(sock, 0x1, json.dumps({
             "id": 1,
             "method": "Runtime.evaluate",
@@ -146,6 +159,10 @@ def eval_js(expression, timeout=3.0, await_promise=True):
             },
         }).encode())
         while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("CDP evaluation timed out")
+            sock.settimeout(remaining)
             opcode, payload = _ws_recv(sock)
             if opcode == 0x8:  # close
                 raise ConnectionError("WebSocket closed by server")
@@ -155,6 +172,10 @@ def eval_js(expression, timeout=3.0, await_promise=True):
             if opcode != 0x1:  # ignore non-text (pong/binary)
                 continue
             msg = json.loads(payload.decode("utf-8"))
+            if "error" in msg:
+                raise RuntimeError(f"CDP request failed: {msg['error']}")
+            if events is not None and msg.get("method", "").startswith("Runtime."):
+                events.append(msg)
             if msg.get("id") != 1:
                 continue
             result = msg.get("result", {})
@@ -167,6 +188,78 @@ def eval_js(expression, timeout=3.0, await_promise=True):
             sock.close()
         except OSError:
             pass
+
+
+# Decky currently exposes this registry on window.DeckyPluginLoader. Validate
+# the plugin's real exports too: Decky registers an error placeholder on failure.
+_JS_DECKY_CHECK = """(() => {
+    const l = window.DeckyPluginLoader;
+    if (!l || !Array.isArray(l.plugins))
+        return {ready: false, reason: 'Decky frontend registry unavailable'};
+    const p = l.plugins.find(p => p.name === 'Z13-Helper');
+    if (!p) return {ready: false, reason: 'Z13-Helper frontend registration missing'};
+    if (!p.content || p.content.type?.name !== 'Content' || !p.titleView ||
+        typeof p.onDismount !== 'function')
+        return {ready: false, reason: 'Z13-Helper registration is incomplete or an error placeholder'};
+    return {ready: l.reloadLock === false && Array.isArray(l.pluginReloadQueue) &&
+                   l.pluginReloadQueue.length === 0,
+            reason: 'Decky frontend reload still pending'};
+})()"""
+
+
+def decky_frontend_check(since, wait=30.0):
+    """Return (exit code, reason): pass=0, fail=1, not checked=3.
+
+    `since` is a Unix timestamp captured BEFORE quiescing the loader. CDP Runtime
+    timestamps use milliseconds since the epoch. Only this repair's errors count.
+    No imports, reloads, menu actions or persistent JS hooks are performed here.
+    """
+    entry = "http://127.0.0.1:1337/plugins/" + urllib.parse.quote("Z13-Helper") + "/dist/index.js"
+    try:
+        request = urllib.request.Request(entry + f"?t={time.time_ns()}",
+                                         headers={"Cache-Control": "no-cache"})
+        with urllib.request.urlopen(request, timeout=3) as response:
+            mime = response.headers.get_content_type()
+            if response.status != 200 or mime not in ("application/javascript", "text/javascript"):
+                return 1, f"entry URL {entry}: HTTP {response.status}, {mime}; expected 200 JavaScript"
+            sample = response.read(512).strip().lower()
+            if not sample or sample.startswith((b"<!doctype html", b"<html")):
+                return 1, f"entry URL {entry}: empty or HTML response instead of JavaScript"
+    except (OSError, ValueError) as exc:
+        return 1, f"entry URL {entry}: {exc}"
+
+    deadline = time.monotonic() + wait
+    seen_ui = False
+    reason = "Steam CEF debug socket unavailable"
+    while True:
+        events = []
+        try:
+            state = eval_js(_JS_DECKY_CHECK, timeout=3, events=events)
+            seen_ui = True
+            for event in events:
+                params = event.get("params", {})
+                if event.get("method") not in ("Runtime.consoleAPICalled", "Runtime.exceptionThrown"):
+                    continue
+                message = json.dumps(params).lower()
+                if params.get("timestamp", 0) >= since * 1000 and any(text in message for text in (
+                    "failed to fetch dynamically imported module", "error loading dynamically imported module",
+                    "importing a module script failed")):
+                    return 1, "new CEF dynamic-import error during this repair"
+            if not isinstance(state, dict) or "error" in state:
+                return 1, f"CEF registry probe failed: {state}"
+            if state.get("ready") is True:
+                return 0, f"{entry}: HTTP 200 JavaScript; Z13-Helper registered; no new CEF dynamic-import errors"
+            reason = state.get("reason", "unrecognized Decky frontend registry")
+        except urllib.error.HTTPError as exc:
+            return 1, f"CEF target discovery failed: {exc}"
+        except (SteamUIUnavailable, urllib.error.URLError) as exc:
+            reason = f"Steam gamepad UI / CEF unavailable: {exc}"
+        except (OSError, ValueError, RuntimeError) as exc:
+            # A broken CDP exchange must not be mistaken for an absent UI.
+            return 1, f"CEF registry probe failed: {exc}"
+        if time.monotonic() >= deadline:
+            return (1 if seen_ui else 3), reason
+        time.sleep(1)
 
 
 # ---------------------------------------------------------------------------
@@ -243,6 +336,19 @@ def focused_window_present(timeout=3.0):
 
 if __name__ == "__main__":
     import sys
+    if sys.argv[1:2] == ["--decky-frontend-check"]:
+        import argparse
+        import math
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--decky-frontend-check", action="store_true")
+        parser.add_argument("--since", required=True, type=float)
+        args = parser.parse_args()
+        if not math.isfinite(args.since) or args.since <= 0:
+            parser.error("--since must be a positive Unix timestamp")
+        rc, reason = decky_frontend_check(args.since)
+        status = {0: 'pass', 1: 'fail', 3: 'not checked'}[rc]
+        print(f"Decky frontend: {status} — {reason}")
+        sys.exit(rc)
     actions = {
         "tap": tap, "qam": open_qam, "menu": open_main_menu,
         "close": close_side_menus, "focus": focused_window_present,
