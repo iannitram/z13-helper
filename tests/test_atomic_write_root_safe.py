@@ -24,7 +24,7 @@ REPO = Path(__file__).resolve().parent.parent
 
 
 @pytest.fixture
-def dmain(monkeypatch):
+def dmain(monkeypatch, tmp_path):
     stub = types.ModuleType("decky")
     stub.logger = logging.getLogger("decky.test")
     stub.DECKY_PLUGIN_SETTINGS_DIR = "/nonexistent-settings-dir"
@@ -32,6 +32,9 @@ def dmain(monkeypatch):
     spec = importlib.util.spec_from_file_location("decky_main_atomic", REPO / "decky" / "main.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
+    # The target owner need not have a passwd entry on the test host.
+    monkeypatch.setattr(pwd, "getpwuid", lambda uid: types.SimpleNamespace(
+        pw_dir=str(tmp_path / "owner-home"), pw_uid=mod.DECK_UID, pw_gid=mod.DECK_GID))
     return mod
 
 
@@ -137,9 +140,15 @@ def test_fake_root_chowns_the_fd_never_the_path(case, dmain, tmp_path, monkeypat
     assert len(calls["fchown"]) == (0 if cid in ("decky-state", "profiles-stamp") else 1)
 
 
-def test_temp_name_is_not_predictable(dmain, tmp_path, monkeypatch):
+@pytest.mark.parametrize("pid", [None, 1, 42, 54321])
+def test_temp_name_is_not_predictable(dmain, tmp_path, monkeypatch, pid):
     seen = []
     real = os.replace
+    if pid is not None:
+        monkeypatch.setattr(os, "getpid", lambda: pid)
+        # Valid random segments may contain the pid digits; force that coincidence.
+        tokens = iter(f"{pid:014d}{i:02x}" for i in range(3))
+        monkeypatch.setattr(dmain.secrets, "token_hex", lambda n: next(tokens))
     monkeypatch.setattr(os, "replace", lambda a, b, **kw: (seen.append(os.path.basename(a)), real(a, b, **kw)))
     for _ in range(3):
         dmain.write_store_atomic({"active": "A", "profiles": []}, str(tmp_path / "p.json"))
@@ -180,17 +189,26 @@ def test_symlinked_store_dir_is_refused(dmain, tmp_path):
     assert list(real.iterdir()) == []
 
 
-def test_store_owner_comes_from_the_dir_fd(dmain, tmp_path, monkeypatch):
+@pytest.mark.parametrize("dir_owner, expected", [
+    ((1234, 1235), (1234, 1235)),
+    ((0, 0), (4242, 4243)),
+])
+def test_store_owner_comes_from_the_dir_fd(dmain, tmp_path, monkeypatch, dir_owner, expected):
     got = []
+    real_fstat = os.fstat
+
+    def fstat(fd):
+        fields = list(real_fstat(fd))
+        fields[4:6] = dir_owner
+        return os.stat_result(fields)
+
     monkeypatch.setattr(os, "geteuid", lambda: 0)
     monkeypatch.setattr(os, "fchown", lambda fd, u, g: got.append((u, g)))
     monkeypatch.setattr(os, "chown", lambda *a, **k: pytest.fail("path chown"))
     monkeypatch.setattr(dmain, "DECK_UID", 4242)
     monkeypatch.setattr(dmain, "DECK_GID", 4243)
-    monkeypatch.setattr(pwd, "getpwuid", lambda uid: types.SimpleNamespace(pw_dir="/nonexistent-home"))
+    monkeypatch.setattr(os, "fstat", fstat)
     dmain.write_store_atomic({"active": "A", "profiles": []}, str(tmp_path / "p.json"))
-    st = os.stat(tmp_path)
-    expected = (st.st_uid, st.st_gid) if st.st_uid != 0 else (4242, 4243)
     assert got == [expected]
 
 
