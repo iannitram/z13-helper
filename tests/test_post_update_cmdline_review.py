@@ -32,3 +32,13 @@ def test_add_grub_args_rejects_unquoted_assignment():
 def test_missing_args_duplicate_wanted_entries_are_reported_per_entry():
     assert missing_args("quiet", ("a=1", "a=1")) == ["a=1", "a=1"]
     assert missing_args("quiet a=1", ("a=1", "a=1")) == []
+
+
+def test_add_grub_args_escaped_quote_stays_inside_the_value():
+    line = 'GRUB_CMDLINE_LINUX_DEFAULT="quiet \\"x y\\" splash" # c'
+    assert add_grub_args(line, ("a=1",)) == 'GRUB_CMDLINE_LINUX_DEFAULT="quiet \\"x y\\" splash a=1" # c'
+
+
+def test_add_grub_args_single_quoted_value_is_rejected_not_mangled():
+    with pytest.raises(ValueError):
+        add_grub_args("GRUB_CMDLINE_LINUX_DEFAULT='quiet'", ("a=1",))

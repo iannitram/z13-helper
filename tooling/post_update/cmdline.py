@@ -39,8 +39,8 @@ def add_grub_args(line: str, args: Sequence[str]) -> str:
         ValueError: If line is not a GRUB_CMDLINE_LINUX_DEFAULT assignment.
     """
     # Leading whitespace, the quoted value and any trailing text are kept apart;
-    # only the quoted value is edited. Anything else is not the assignment.
-    match = re.match(r'(\s*)GRUB_CMDLINE_LINUX_DEFAULT="([^"]*)"(.*)$', line, re.DOTALL)
+    # only the quoted value is edited (an escaped quote stays inside the value). Anything else is not the assignment.
+    match = re.match(r'(\s*)GRUB_CMDLINE_LINUX_DEFAULT="((?:[^"\\]|\\.)*)"(.*)$', line, re.DOTALL)
     if not match:
         raise ValueError("Not a GRUB_CMDLINE_LINUX_DEFAULT line")
 
