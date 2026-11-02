@@ -114,6 +114,7 @@ flowchart LR
 | `tooling/diag/`, `tooling/z13_gamemode_report.py`, `tooling/z13_fanlog.sh` | Read-only or explicitly invoked diagnostics, Game Mode reporting and the fan/thermal logger. |
 | `tooling/z13_cdp.py`, `tooling/z13_qam.py`, `tooling/spike1_qam_test.py` | Dependency-free CDP bridge to Steam's Game Mode UI (opens the side menus without input emulation) used by `z13-button-watcher`; `z13_qam.py` is its back-compat alias and `spike1_qam_test.py` is the by-hand Game Mode check. |
 | `tooling/rss_watch.py`, `tooling/screenshots.py` | Bounded RSS sampler for one identified process (used on the Decky backend); renders the README screenshots offscreen from the real app code inside the Flatpak. |
+| `tooling/post_update/recipe.py` | Post-update recipe format: ordering (keyring first, reboot last), keyring insertion and plan text. Pure functions; never runs a recipe's `check` or `apply`. |
 | `tests/`, `decky/tests/` | Pytest logic tests, Decky `unittest` tests, and the separate Node test for `profileSwitch.ts`. `tests/conftest.py` blocks subprocess and network calls and `tests/fake_host.py` fakes `host.run`; the per-module test files are listed in `tests/README.md`. |
 | `.github/workflows/tests.yml` | CI on every push and PR: pytest and the Decky unittest suite on Linux; it does not run the Node test. |
 | `decky/rollup.config.js`, `decky/src/` | Decky bundle build; `index.tsx`, `hooks.ts` and `components/` (`PowerLimits`, `BatteryLimit`, `KeyboardBrightness`, `Telemetry`) are the QAM panel, mapped in [`decky.md`](decky.md). |
