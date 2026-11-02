@@ -125,4 +125,16 @@ flowchart LR
 Decky's file watcher must be stopped before changing installed plugin files: otherwise every
 individual copy can trigger a reload against a partial bundle (#100). `install.sh` quiesces the loader, stages and byte-verifies the files, then restarts it (`quiesce_loader`, `start_loader`, `resume_loader`). It leaves an
 unchanged plugin running and starts the loader after changed files are installed. It also enforces the Decky Loader minimum from `src/versions.py`. Its backend
-startup check must be supplemented by a Steam frontend check when investigating import errors.
+startup log alone is not frontend evidence. After a changed-plugin install/repair (#122),
+`decky_frontend_check` runs `tooling/z13_cdp.py --decky-frontend-check --since <repair timestamp>`:
+the loader's `/plugins/Z13-Helper/dist/index.js` must serve HTTP 200 JavaScript (the ES-module
+route is auth-exempt), and Steam's `SharedJSContext` must have the real plugin registered in
+`window.DeckyPluginLoader.plugins`, with no pending reload or new buffered CEF dynamic-import
+errors since before quiescence. Entry/registration errors fail the installer separately from
+backend startup; absent Steam UI/debug access reports **not checked** with a reason. The probe
+does not import or reload the plugin. An unchanged repair skips it; a dry run reports not checked.
+The route and registry assumptions follow Decky's upstream
+[`loader.py`](https://github.com/SteamDeckHomebrew/decky-loader/blob/main/backend/decky_loader/loader.py)
+and [`plugin-loader.tsx`](https://github.com/SteamDeckHomebrew/decky-loader/blob/main/frontend/src/plugin-loader.tsx).
+The route, registry/export shape and buffered error replay still need confirmation on the device,
+including one changed-plugin repair passing with Steam's gamepad UI running.

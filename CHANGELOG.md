@@ -24,6 +24,13 @@ the device but not yet verified on the Z13. Plan and status: `docs/ROADMAP.md`.
   tree and start it once. A failed swap restores the previous tree; staging failures leave the
   live plugin untouched. An unchanged repair leaves the loader running. Failures are reported;
   backend startup alone is not evidence that Steam's frontend imported successfully.
+- **Decky repair checks the Steam frontend separately (#122; on-device check pending).**
+  After a changed-plugin install, check the loader entry URL for HTTP 200 JavaScript and
+  the registered plugin component over Steam's CEF debug socket. New buffered dynamic-import
+  errors since the repair started or missing registration fail the installer. An absent Steam
+  UI/debug socket reports **not checked**, with a reason, rather than frontend success.
+  Unchanged repairs skip the probe. Live route/auth, registry and CEF error replay verification,
+  and one passing Z13 repair, remain pending.
 
 ## 0.5.1 — 2026-10-30
 

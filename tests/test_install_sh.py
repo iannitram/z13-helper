@@ -104,7 +104,8 @@ def test_dry_run_repair_writes_nothing(tmp_path, real_subprocess):
         (stubs / name).write_text(body)
         (stubs / name).chmod(0o755)
     log = tmp_path / "stub.log"
-    repo_skip = {str(REPO / "decky" / "node_modules"), str(REPO / "decky" / "dist")}
+    repo_skip = {str(REPO / "decky" / "node_modules"), str(REPO / "decky" / "dist"),
+                 str(tmp_path.parent)}  # --basetemp may be inside the checkout
     before_repo, before_home = snapshot(REPO, repo_skip), snapshot(home)
 
     env = {"HOME": str(home), "PATH": f"{stubs}:/usr/bin:/bin", "STUB_LOG": str(log),
@@ -158,7 +159,7 @@ def _decky_plugin_harness(tmp_path, *, changed=False, stop_fail=False, install_f
                           old_plugin=False, dry_run=False, first_install=False,
                           backup_fail=False, start_fail=False, rollback_fail=False,
                           journal_cursor=True, journal_fail=False, stop_state="inactive",
-                          rollback_rm_fail=False, legacy_rm_fail=False):
+                          rollback_rm_fail=False, legacy_rm_fail=False, frontend_rc=0):
     """Run the actual Decky installer functions against temporary paths and a sudo stub."""
     source = SCRIPT.read_text()
     start = source.index("find_pnpm() {")
@@ -190,6 +191,15 @@ def _decky_plugin_harness(tmp_path, *, changed=False, stop_fail=False, install_f
         (old_dir / "plugin.json").write_text("old plugin")
 
     events = tmp_path / "events.log"
+    probe = source_repo / "tooling" / "z13_cdp.py"
+    probe.parent.mkdir()
+    probe.write_text("""import os, sys
+with open(os.environ['EVENTS'], 'a') as log:
+    log.write('frontend probe ' + ' '.join(sys.argv[1:]) + '\\n')
+rc = int(os.environ['FRONTEND_RC'])
+print('Decky frontend: ' + {0: 'pass', 1: 'fail', 3: 'not checked'}[rc] + ' — stub reason')
+sys.exit(rc)
+""")
     sudo = tmp_path / "sudo"
     sudo.write_text("""#!/bin/sh
 printf 'sudo %s\\n' \"$*\" >> \"$EVENTS\"
@@ -265,6 +275,7 @@ esac
         "LEGACY_RM_FAIL": "1" if legacy_rm_fail else "0",
         "JOURNAL_CURSOR": "1" if journal_cursor else "0",
         "JOURNAL_FAIL": "1" if journal_fail else "0",
+        "FRONTEND_RC": str(frontend_rc),
         "INSTALL_FAIL_DEST": "dist/index.js" if install_fail else "never-match",
         "MOVE_FAIL_DEST": str(home / "homebrew/plugins/z13-helper") if swap_fail else "",
         "LISTENER_FILE": str(listener_file),
@@ -284,10 +295,10 @@ esac
         lines.append(f"{key}={shlex.quote(str(value))}")
     lines += [
         "PLUGIN_FILES=(plugin.json package.json main.py dist/index.js dist/index.js.map py_modules/fan_watchdog.py py_modules/sensor_reader.py py_modules/host.py py_modules/power_range.py)",
-        "NET=0 PLUGIN_CHANGED=0", "CHANGED=() FAILED=()",
+        "NET=0 PLUGIN_CHANGED=0 PY=python3", "CHANGED=() FAILED=()",
         f"source {shlex.quote(str(function_file))}",
         "plugin_src() { case $1 in py_modules/*) printf '%s/src/%s\\n' \"$REPO\" \"${1#py_modules/}\" ;; *) printf '%s/decky/%s\\n' \"$REPO\" \"$1\" ;; esac; }",
-        "say() { :; }", "info() { printf '%s\\n' \"$*\"; }", "warn() { :; }",
+        "say() { :; }", "info() { printf '%s\\n' \"$*\"; }", "warn() { printf '%s\\n' \"$*\"; }",
         "fail() { FAILED+=(\"$*\"); printf 'FAIL: %s\\n' \"$*\" >&2; }",
         "act() { if ((DRY)); then printf '(dry run) %s\\n' \"$*\"; else \"$@\"; fi; }",
         "backup() { :; }", "find_pnpm() { return 1; }", "sleep() { :; }",
@@ -321,6 +332,24 @@ def test_decky_plugin_unchanged_repair_does_not_restart_loader(tmp_path, real_su
     p = real_subprocess(["bash", "-c", script], env=env, capture_output=True, text=True, timeout=15)
     assert p.returncode == 0, p.stdout + p.stderr
     assert not events.exists() or "systemctl stop" not in events.read_text()
+    assert not events.exists() or "frontend probe" not in events.read_text()
+
+
+@needs_bash[1]
+@pytest.mark.parametrize("rc, status", [(0, "pass"), (1, "fail"), (3, "not checked")])
+def test_decky_repair_reports_separate_frontend_result(tmp_path, real_subprocess, rc, status):
+    script, env, events, _, _, _ = _decky_plugin_harness(tmp_path, changed=True, frontend_rc=rc)
+    p = real_subprocess(["bash", "-c", script], env=env, capture_output=True, text=True, timeout=15)
+    assert p.returncode == (1 if rc == 1 else 0), p.stdout + p.stderr
+    assert f"Decky frontend: {status} — stub reason" in p.stdout + p.stderr
+    assert "z13-helper backend started" in p.stdout
+    calls = events.read_text().splitlines()
+    probe = next(c for c in calls if c.startswith("frontend probe"))
+    assert "--decky-frontend-check --since " in probe
+    assert calls.index("sudo systemctl start plugin_loader.service") < calls.index(probe)
+    # A frontend failure is recorded for the install summary, not a backend rollback.
+    if rc == 1:
+        assert "FAIL: Decky frontend check failed" in p.stderr
 
 
 @needs_bash[1]
@@ -539,3 +568,4 @@ def test_decky_plugin_dry_run_only_prints_loader_lifecycle(tmp_path, real_subpro
     assert not events.exists()
     assert "(dry run) sudo systemctl stop/kill plugin_loader.service" in p.stdout
     assert "(dry run) sudo systemctl start plugin_loader.service" in p.stdout
+    assert "Decky frontend: not checked — dry run" in p.stdout
