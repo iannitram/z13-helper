@@ -38,17 +38,15 @@ def add_grub_args(line: str, args: Sequence[str]) -> str:
     Raises:
         ValueError: If line is not a GRUB_CMDLINE_LINUX_DEFAULT assignment.
     """
-    # Check if this is a valid GRUB_CMDLINE_LINUX_DEFAULT line
-    if not line.startswith('GRUB_CMDLINE_LINUX_DEFAULT='):
+    # Leading whitespace, the quoted value and any trailing text are kept apart;
+    # only the quoted value is edited. Anything else is not the assignment.
+    match = re.match(r'(\s*)GRUB_CMDLINE_LINUX_DEFAULT="([^"]*)"(.*)$', line, re.DOTALL)
+    if not match:
         raise ValueError("Not a GRUB_CMDLINE_LINUX_DEFAULT line")
 
-    # Extract the quoted part and any trailing text
-    match = re.match(r'GRUB_CMDLINE_LINUX_DEFAULT="([^"]*)"(.*$)', line)
-    if not match:
-        raise ValueError("Malformed GRUB_CMDLINE_LINUX_DEFAULT line")
-
-    quoted_part = match.group(1)
-    trailing = match.group(2)
+    leading = match.group(1)
+    quoted_part = match.group(2)
+    trailing = match.group(3)
 
     # Parse existing tokens
     existing_tokens = quoted_part.split() if quoted_part else []
@@ -90,8 +88,5 @@ def add_grub_args(line: str, args: Sequence[str]) -> str:
     # Rejoin tokens
     new_quoted = " ".join(result_tokens) if result_tokens else ""
 
-    # Reconstruct line
-    if trailing:
-        return f'GRUB_CMDLINE_LINUX_DEFAULT="{new_quoted}"' + trailing
-    else:
-        return f'GRUB_CMDLINE_LINUX_DEFAULT="{new_quoted}"'
+    # Reconstruct line, keeping leading whitespace and text after the closing quote
+    return f'{leading}GRUB_CMDLINE_LINUX_DEFAULT="{new_quoted}"{trailing}'
