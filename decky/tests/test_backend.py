@@ -26,12 +26,13 @@ for _p in (SRC, TESTS):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-import fan_watchdog  # noqa: E402
-import host  # noqa: E402
-import power_range  # noqa: E402
-import sensor_reader  # noqa: E402
-import profiles  # noqa: E402
-from fake_host import FakeHost  # noqa: E402
+from fake_host import FakeHost
+
+import fan_watchdog
+import host
+import power_range
+import profiles
+import sensor_reader
 
 _SETTINGS = tempfile.mkdtemp(prefix="z13-helper-settings-")
 # main.py does `import decky` at import time; give it a stand-in.
@@ -54,6 +55,15 @@ for _name in ("SHARED_CONFIG", "MAX_FANS_STATE", "PROFILES_STORE", "FAN_TRACE",
     if hasattr(m, _name):
         REAL[_name] = getattr(m, _name)
         setattr(m, _name, os.path.join(_HOME, _name.lower()))
+
+
+def setUpModule():
+    # Backend writes target a fixed owner, independent of the runner's account.
+    owner = types.SimpleNamespace(pw_uid=m.DECK_UID, pw_gid=m.DECK_GID,
+                                  pw_dir=os.path.join(_HOME, "owner-home"))
+    patcher = mock.patch("pwd.getpwuid", return_value=owner)
+    patcher.start()
+    unittest.addModuleCleanup(patcher.stop)
 
 
 def _store(active="Balanced"):
@@ -360,16 +370,14 @@ class FileLockSafetyTest(unittest.TestCase):
 
     def test_symlinked_lock_is_refused(self):
         os.symlink(self.victim, self.store + ".lock")
-        with self.assertRaises(m.StoreLockError):
-            with m._file_lock(self.store):
-                pass
+        with self.assertRaises(m.StoreLockError), m._file_lock(self.store):
+            pass
         self._untouched()
 
     def test_hardlinked_lock_is_refused(self):
         os.link(self.victim, self.store + ".lock")
-        with self.assertRaises(m.StoreLockError):
-            with m._file_lock(self.store):
-                pass
+        with self.assertRaises(m.StoreLockError), m._file_lock(self.store):
+            pass
         self._untouched()
 
     def test_held_lock_times_out(self):
@@ -386,28 +394,41 @@ class FileLockSafetyTest(unittest.TestCase):
         self.assertTrue(held.wait(5))
         with mock.patch.object(m, "LOCK_TIMEOUT", 0.2):
             try:
-                with self.assertRaisesRegex(m.StoreLockError, "timed out"):
-                    with m._file_lock(self.store):
-                        pass
+                with self.assertRaisesRegex(m.StoreLockError, "timed out"), m._file_lock(self.store):
+                    pass
             finally:
                 release.set()
                 t.join(5)
 
     def test_lock_file_owned_by_current_user_is_accepted(self):
-        # Root creates a Deck-owned lock; unprivileged runners own their lock.
-        # Use an explicit owner in each case so this test is independent of the
-        # account running pytest (including uid 54321 with no passwd entry).
-        euid = os.geteuid()
-        expected_owner = m.DECK_UID if euid == 0 else euid
-        # Use uid 0 as the alternate account for unprivileged tests: it has a
-        # passwd entry, unlike an arbitrary euid + 1 on uid-less CI runners.
-        deck_uid = m.DECK_UID if euid == 0 else 0
-        with mock.patch.object(m, "DECK_UID", deck_uid):
-            with m._file_lock(self.store):
-                pass
-            self.assertEqual(os.stat(self.store + ".lock").st_uid, expected_owner)
-            with m._file_lock(self.store):   # now it exists: the owner check runs
-                pass
+        real_fstat = os.fstat
+        for uid in (0, 1000, 54321):
+            with self.subTest(uid=uid):
+                store = self.store + f".{uid}"
+                expected_owner = m.DECK_UID if uid == 0 else uid
+
+                def getpwuid(account_uid):
+                    if account_uid != m.DECK_UID:
+                        raise KeyError(account_uid)  # uid 54321 has no passwd entry
+                    return types.SimpleNamespace(pw_dir=os.path.join(self.dir, "owner-home"))
+
+                def fstat(fd, owner=expected_owner):
+                    fields = list(real_fstat(fd))
+                    fields[4] = owner
+                    return os.stat_result(fields)
+
+                with mock.patch.object(os, "getuid", return_value=uid), \
+                        mock.patch.object(os, "geteuid", return_value=uid), \
+                        mock.patch("pwd.getpwuid", side_effect=getpwuid), \
+                        mock.patch.object(os, "fstat", side_effect=fstat), \
+                        mock.patch.object(os, "fchown") as chown:
+                    with m._file_lock(store):
+                        pass
+                    self.assertTrue(os.path.isfile(store + ".lock"))
+                    self.assertEqual([call.args[1:] for call in chown.call_args_list],
+                                     [(m.DECK_UID, m.DECK_GID)] if uid == 0 else [])
+                    with m._file_lock(store):  # existing lock checks the owner
+                        pass
 
     def test_normal_use_creates_plain_lock_file(self):
         with m._file_lock(self.store):
@@ -558,20 +579,20 @@ class LightbarRecoveryTest(unittest.TestCase):
         self.assertEqual(len(run.calls), 2)
 
     def test_reset_unit_failure_is_reported(self):
-        run = fake_host(self, fail_if=("systemctl start",))
+        fake_host(self, fail_if=("systemctl start",))
         ok, msg = self.recover()
         self.assertFalse(ok)
         self.assertIn("reset failed", msg)
         self.assertEqual(self.slept, [])
 
     def test_daemon_restart_failure_is_reported_but_reset_still_counts_as_ok(self):
-        run = fake_host(self, fail_if=("systemctl --user restart",))
+        fake_host(self, fail_if=("systemctl --user restart",))
         ok, msg = self.recover()
         self.assertTrue(ok)      # the USB reset itself succeeded
         self.assertIn("daemon restart failed", msg)
 
     def test_stale_daemon_restart_failure_means_not_ok(self):
-        run = fake_host(self, fail_if=("systemctl --user restart",))
+        fake_host(self, fail_if=("systemctl --user restart",))
         ok, msg = self.recover_stale()
         self.assertFalse(ok)
         self.assertIn("daemon restart failed", msg)
@@ -870,7 +891,8 @@ class FanWatchdogLoopTest(unittest.TestCase):
             asyncio.run(m.fan_watchdog_tick(wd))
         for h in trace.log.handlers:
             h.flush()
-        text = open(path).read()
+        with open(path) as f:
+            text = f.read()
         self.assertIn("fan trace started (gamemode", text)
         self.assertIn("*** ACT stall", text)
         self.assertTrue(REAL["FAN_TRACE"].endswith("z13-helper/fan-trace-gamemode.log"))
