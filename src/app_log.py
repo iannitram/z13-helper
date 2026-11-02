@@ -20,6 +20,8 @@ a checkbox, and the choice lives in install.json (install_record.py). With
 logging off (setup(to_disk=False) or set_to_disk(False)) nothing is written
 here: crash reports stay in memory for the Error log window, faulthandler
 writes to stderr, and stderr/the journal still get warnings.
+Automatic reporting (crash_report.py) has a separate preference and may keep its
+own crash state with local logging off; see docs/crash-reporting.md.
 
 What is caught: sys.excepthook (main thread; with it set, PyQt6 also routes
 exceptions raised in slots here instead of aborting), threading.excepthook
@@ -46,7 +48,6 @@ import time
 import traceback
 import types
 from collections.abc import Callable
-from typing import List, Tuple
 
 LOG_DIR = os.path.expanduser("~/.local/state/z13-helper")
 LOG_NAME = "app.log"
@@ -120,10 +121,10 @@ class RingHandler(logging.Handler):
         for fn in list(self._listeners):
             try:
                 fn(item)
-            except Exception:  # noqa: BLE001  (a broken listener must not break logging)
+            except Exception:  # noqa: BLE001, S110 -- logging a listener failure would recurse
                 pass
 
-    def lines(self, min_level=logging.DEBUG) -> List[str]:
+    def lines(self, min_level=logging.DEBUG) -> list[str]:
         """Return every stored formatted log line whose level is at least *min_level*,
         in insertion order."""
         return [t for lv, _c, t in list(self.records) if lv >= min_level]
@@ -249,18 +250,26 @@ def _open_fatal() -> None:
     try:
         # Opened for the life of the process: faulthandler writes to the fd
         # from a signal handler, so it can't open anything itself.
-        _state["fatal_file"] = open(fatal_path(), "w", encoding="utf-8")
+        _state["fatal_file"] = open(fatal_path(), "w", encoding="utf-8")  # noqa: SIM115 -- lifetime fd
         faulthandler.enable(file=_state["fatal_file"], all_threads=True)
     except OSError:
         pass
 
 
 def _stderr_fatal() -> None:
-    """Logging off: a hard crash's traceback still reaches the journal."""
+    """Logging off: use the automatic report target, or the journal."""
+    fallback = _state.get("fatal_fallback")
+    if fallback and fallback():
+        return
     try:
         faulthandler.enable(file=sys.__stderr__, all_threads=True)
     except (AttributeError, ValueError, OSError):   # no usable stderr
         pass
+
+
+def set_fatal_fallback(fn) -> None:
+    """Crash reporting may keep a fatal target independently of local logging."""
+    _state["fatal_fallback"] = fn
 
 
 def shutdown() -> None:
@@ -332,7 +341,7 @@ def report_exception(exc_type: type[BaseException], exc: BaseException,
     for fn in list(_state["crash_listeners"]):
         try:
             fn(path, summary)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, S110 -- listeners cannot break crash handling
             pass
     return path
 
@@ -405,7 +414,7 @@ def _prune_crashes() -> None:
 # reading (the log window, install_check)
 # ----------------------------------------------------------------------
 
-def list_crash_reports() -> List[Tuple[str, float, str]]:
+def list_crash_reports() -> list[tuple[str, float, str]]:
     """[(path, mtime, one-line summary)], newest first. Reports kept in memory
     (logging off) are listed too, keyed MEMORY_PREFIX + name."""
     out = [(k, m, _summary_of(k, t.splitlines())) for k, m, t in _state["memory_reports"]]
@@ -436,7 +445,7 @@ def _summary(path: str) -> str:
     return _summary_of(path, lines)
 
 
-def _summary_of(path: str, lines: List[str]) -> str:
+def _summary_of(path: str, lines: list[str]) -> str:
     if os.path.basename(path).startswith("fatal-"):
         for ln in lines:
             if ln.startswith("Fatal Python error"):

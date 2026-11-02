@@ -8,18 +8,18 @@ CLIs — the same hardware backend the desktop PyQt app uses — so Game Mode an
 Mode share one contract.
 """
 
-import os
-import re
-import json
-import time
 import asyncio
-import sys
 import contextlib
-import stat
 import errno
 import fcntl
-import threading
+import json
+import os
+import re
 import secrets
+import stat
+import sys
+import threading
+import time
 
 import decky  # modern API (NOT decky_plugin)
 
@@ -29,10 +29,11 @@ import decky  # modern API (NOT decky_plugin)
 _PY_MODULES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "py_modules")
 if os.path.isdir(_PY_MODULES) and _PY_MODULES not in sys.path:
     sys.path.insert(0, _PY_MODULES)
-from fan_watchdog import FanTrace, FanWatchdog  # noqa: E402
-import host  # noqa: E402
-import power_range  # noqa: E402
-from sensor_reader import SensorReader  # noqa: E402
+import crash_report
+import host
+import power_range
+from fan_watchdog import FanTrace, FanWatchdog
+from sensor_reader import SensorReader
 
 # This process is always a Decky backend. host.detect() spots that from the loader's
 # env, but the deck env it implies (the host's LD_LIBRARY_PATH above all) is too
@@ -455,7 +456,7 @@ def clamp_tdp(pl1, pl2, pl3, ranges=None):
 
     def one(v, k):
         lo, hi = r.get(k, (PL_MIN, PL_MAX))
-        return max(lo, min(hi, int(round(float(v)))))
+        return max(lo, min(hi, round(float(v))))
     a = one(pl1, "pl1")
     b = max(one(pl2, "pl2"), a)
     c = max(one(pl3, "pl3"), b)
@@ -1153,13 +1154,22 @@ class Plugin:
     # ---- Lifecycle ----
     async def _main(self):
         self.loop = asyncio.get_event_loop()
+        self._crash_reporter = crash_report.install(
+            config_path=INSTALL_JSON, logger=decky.logger, loop=self.loop,
+            fatal_name="fatal-decky.log",
+        )
         self._enforce_task = self.loop.create_task(self._enforce_max_fans())
         self._desktop_task = self.loop.create_task(self._watch_desktop_app())
+        if self._crash_reporter:
+            for task in (self._enforce_task, self._desktop_task):
+                task.add_done_callback(self._crash_reporter.task_done)
         decky.logger.info("z13-helper up. z13ctl=%s exists=%s max_fans=%s",
                           Z13CTL, os.path.exists(Z13CTL),
                           _load_max_fans().get("enabled"))
 
     async def _unload(self):
+        if getattr(self, "_crash_reporter", None):
+            self._crash_reporter.close()
         for task in (getattr(self, "_enforce_task", None), getattr(self, "_desktop_task", None)):
             if task:
                 task.cancel()

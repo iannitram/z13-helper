@@ -11,7 +11,6 @@ Nothing here touches hardware, the network, sudo, or the real ~/.config:
   into tmp_path.
 """
 
-import os
 import subprocess
 import sys
 import types
@@ -70,6 +69,7 @@ def no_external_calls(monkeypatch):
     monkeypatch.setattr(subprocess, "run", _refuse("subprocess.run"))
     monkeypatch.setattr(subprocess, "Popen", _refuse("subprocess.Popen"))
     monkeypatch.setattr(urllib.request, "urlopen", _refuse("urllib.request.urlopen"))
+    monkeypatch.setattr(urllib.request.OpenerDirector, "open", _refuse("urllib opener.open"))
 
 
 # ----------------------------------------------------------------------

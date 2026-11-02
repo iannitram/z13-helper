@@ -8,11 +8,24 @@ import time
 from PyQt6.QtCore import Qt, QUrl, pyqtSignal
 from PyQt6.QtGui import QDesktopServices, QFont, QGuiApplication
 from PyQt6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMessageBox,
-    QPlainTextEdit, QPushButton, QSplitter, QTabWidget, QVBoxLayout, QWidget,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QHBoxLayout,
+    QLabel,
+    QListWidget,
+    QListWidgetItem,
+    QMessageBox,
+    QPlainTextEdit,
+    QPushButton,
+    QSplitter,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
 )
 
 import app_log
+import crash_report
 
 _LEVELS = [("Warnings and errors", logging.WARNING), ("Errors only", logging.ERROR),
            ("Everything", logging.INFO)]
@@ -46,13 +59,23 @@ class LogDialog(QDialog):
         self.logging_box = QCheckBox(
             "Save logs to disk (app log, crash reports, fan traces) to help with development")
         self.logging_box.setToolTip(
-            f"Writes to {app_log.LOG_DIR}. Off: nothing is written there; this window still "
+            f"Writes to {app_log.LOG_DIR}. Off: local logs stay in memory; this window still "
             "shows this run's log and errors. Stored in ~/.config/z13-helper/install.json; "
             "the Game Mode plugin picks it up on its next start.")
         self.logging_box.setChecked(app_log.to_disk())
         self.logging_box.toggled.connect(self._toggle_logging)
         self.logging_box.setVisible(on_logging is not None)
         v.addWidget(self.logging_box)
+
+        self.reporting_box = QCheckBox("Send crash reports automatically")
+        self.reporting_box.setToolTip(
+            "Send scrubbed crash details and recent app logs to the shared bug drop. "
+            "Offline reports are queued for the next start. Applies to the desktop app "
+            "and Decky plugin. Requires a build with reporting configured.")
+        self._reporting_path = os.path.expanduser("~/.config/z13-helper/install.json")
+        self.reporting_box.setChecked(crash_report.reporting_enabled(self._reporting_path))
+        self.reporting_box.toggled.connect(self._toggle_reporting)
+        v.addWidget(self.reporting_box)
 
         self.tabs = QTabWidget()
         v.addWidget(self.tabs, 1)
@@ -176,6 +199,15 @@ class LogDialog(QDialog):
             self.logging_box.blockSignals(False)
             QMessageBox.warning(self, "Logging", err)
         self._fill_log()
+
+    def _toggle_reporting(self, enabled):
+        try:
+            crash_report.set_reporting(self._reporting_path, enabled)
+        except (OSError, ValueError, TypeError):
+            self.reporting_box.blockSignals(True)
+            self.reporting_box.setChecked(not enabled)
+            self.reporting_box.blockSignals(False)
+            QMessageBox.warning(self, "Crash reports", "Could not save the reporting choice.")
 
     def _append(self, levelno, text):
         if levelno < self._min_level():
