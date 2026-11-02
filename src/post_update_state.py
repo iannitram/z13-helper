@@ -7,8 +7,9 @@ def read_build_id(os_release_text: str) -> Optional[str]:
         if line.startswith("BUILD_ID="):
             # Remove the BUILD_ID= prefix
             value = line[9:]  # Remove "BUILD_ID="
-            # Remove surrounding quotes if present
-            if value.startswith('"') and value.endswith('"'):
+            value = value.strip()
+            # Remove a matching pair of surrounding quotes (os-release allows "x" and 'x')
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
                 value = value[1:-1]
             # Return None if value is empty
             return value if value else None
