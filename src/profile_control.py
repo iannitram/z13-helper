@@ -13,9 +13,15 @@ from PyQt6.QtCore import QObject, pyqtSignal
 
 import profiles
 import max_fans_state
+import state_events
 from hardware_controller import HardwareController
 from apply_worker import ApplyWorker
 from fan_watchdog import FAN_RECOVERY_LABEL
+
+
+def dispatch_event(name: str, gui_toggle_selected: bool) -> str:
+    """Return the action for one z13ctl event (see state_events.event_action)."""
+    return state_events.event_action(name, gui_toggle_selected)
 
 
 logger = logging.getLogger("z13.profiles")
