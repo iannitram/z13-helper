@@ -11,6 +11,9 @@
 #   ./install.sh --dry-run  show what would change, write nothing (combine with either)
 #   ./install.sh --yes      full install without prompts (logging: yes)
 #   ./install.sh --rebuild  rebuild the Flatpak even if it matches the repo
+#   ./install.sh --post-update [--only amdgpu,rocm]
+#                           after a SteamOS update: pick tasks from a list, or run only
+#                           the named ones; --repair then lists tasks still pending
 #
 # Order (each step independent; a failure is reported, the rest still runs):
 #   1. preflight     SteamOS/kernel, `users` group, sudo, network
@@ -36,17 +39,27 @@
 set -uo pipefail
 
 REPO=$(cd "$(dirname "$0")" && pwd)
-MODE=install DRY=0 YES=0 REBUILD=0
-for a in "$@"; do
+MODE=install DRY=0 YES=0 REBUILD=0 POST_UPDATE=0
+PU_ARGS=()      # --post-update / --only, handed to `python3 -m post_update` (tooling/post_update/cli.py)
+while (($#)); do
+    a=$1; shift
     case "$a" in
         --repair) MODE=repair ;;
         --dry-run) DRY=1 ;;
         --yes|-y) YES=1 ;;
         --rebuild) REBUILD=1 ;;
-        -h|--help) sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        --post-update) POST_UPDATE=1; PU_ARGS+=(--post-update) ;;
+        --only)
+            PU_ARGS+=(--only)
+            if (($#)) && [[ $1 != --* ]]; then PU_ARGS+=("$1"); shift; fi ;;
+        -h|--help) sed -n '2,36p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown option: $a (try --help)" >&2; exit 2 ;;
     esac
 done
+if ((!POST_UPDATE)) && [[ ${#PU_ARGS[@]} -gt 0 ]]; then
+    echo "--only needs --post-update" >&2
+    exit 2
+fi
 if [[ $EUID -eq 0 ]]; then
     echo "Run as deck, not root (it uses sudo where it must)." >&2
     exit 2
@@ -79,6 +92,8 @@ export PYTHONDONTWRITEBYTECODE=1
 PY="python3"
 CHECK="$REPO/tooling/install_check.py"
 INSTALLERS="$REPO/src/installers.py"
+# post_update_py ARGS: the post-update runner (tooling/post_update/), as this user.
+post_update_py() { PYTHONPATH="$REPO/tooling:$REPO/src" $PY -m post_update "$@"; }
 PLUGIN_DIR="$HOME/homebrew/plugins/z13-helper"
 PLUGIN_FILES=(plugin.json package.json main.py dist/index.js dist/index.js.map
               py_modules/fan_watchdog.py py_modules/sensor_reader.py py_modules/host.py
@@ -823,6 +838,12 @@ EOF
 
 # ----------------------------------------------------------------------
 main() {
+    if ((POST_UPDATE)); then
+        say "Post-update tasks"
+        local pu=("${PU_ARGS[@]}"); ((DRY)) && pu+=(--dry-run)
+        post_update_py "${pu[@]}"
+        return $?
+    fi
     rename_migration
     logging_choice
     if preflight; then
@@ -850,6 +871,11 @@ main() {
     fi
     if ((${#FAILED[@]})); then
         info "failed steps:"; printf '    - %s\n' "${FAILED[@]}"
+    fi
+    if [[ $MODE == repair ]]; then
+        say "Post-update tasks"
+        post_update_py --list-pending || warn "could not list post-update tasks"
+        info "run ./install.sh --post-update to pick and run them"
     fi
     info "log: $LOG"
     if ((vrc == 0 && ${#FAILED[@]} == 0)); then
