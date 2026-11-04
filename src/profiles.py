@@ -132,7 +132,7 @@ LIGHTBAR_DAEMON_RESTART_WAIT_S = 2  # wait for the daemon socket before retrying
 def _profile(name, base, *, builtin=False, tdp=None, fan_curve=None,
              undervolt=None, brightness=None, battery_limit=None,
              max_fans=False, enter="", exit_=""):
-    return {
+    p = {
         "name": name, "builtin": builtin, "base": base,
         "tdp": tdp, "fan_curve": fan_curve, "undervolt": undervolt,
         "brightness": brightness, "battery_limit": battery_limit,
@@ -141,6 +141,65 @@ def _profile(name, base, *, builtin=False, tdp=None, fan_curve=None,
         "max_fans": max_fans,
         "hooks": {"enter": enter, "exit": exit_},
     }
+    if max_fans:
+        p["goal"] = {"kind": "max"}     # max_fans is the back-compat mirror of this goal
+    return p
+
+
+# ----------------------------------------------------------------------
+# Goal (Phase 15b): optional {"kind": ..., <target>} on a profile
+# ----------------------------------------------------------------------
+
+# kind -> (target key, low, high); Max has no target. A profile without a goal
+# keeps today's fixed curve and TDP. `max_fans` stays on the profile as the
+# back-compat mirror of goal "max" (older readers, the apply engine).
+GOAL_TARGETS = {
+    "quiet": ("max_rpm", 1000, 10000),
+    "comfort": ("target_c", 25, 60),
+    "fps": ("target_fps", 20, 240),
+    "max": None,
+}
+
+
+def validate_goal(goal):
+    if goal is None:
+        return
+    if not isinstance(goal, dict) or goal.get("kind") not in GOAL_TARGETS:
+        raise ValueError(f"goal needs a kind: one of {tuple(GOAL_TARGETS)}")
+    target = GOAL_TARGETS[goal["kind"]]
+    if target is None:
+        return
+    key, low, high = target
+    v = goal.get(key)
+    if isinstance(v, bool) or not isinstance(v, int) or not low <= v <= high:
+        raise ValueError(f"goal {goal['kind']} needs {key} {low}..{high}")
+
+
+def goal_kind(p):
+    """The profile's goal kind, treating a bare max_fans profile as "max"."""
+    goal = p.get("goal")
+    if isinstance(goal, dict) and goal.get("kind") in GOAL_TARGETS:
+        return goal["kind"]
+    return "max" if p.get("max_fans") else None
+
+
+def _sync_goal(p):
+    """Keep goal and max_fans consistent: max_fans -> goal max, and back.
+
+    The `goal` key is only ever written when a goal is set; an invalid one
+    from a hand-edited file is dropped (the profile keeps its fixed values).
+    """
+    try:
+        validate_goal(p.get("goal"))
+    except ValueError as e:
+        print(f"z13-profile: ignoring invalid goal on {p.get('name')!r}: {e}", file=sys.stderr)
+        p.pop("goal", None)
+    if p.get("goal") is None:
+        p.pop("goal", None)
+        if p.get("max_fans"):
+            p["goal"] = {"kind": "max"}
+    else:
+        p["max_fans"] = p["goal"]["kind"] == "max"
 
 
 def default_profiles():
@@ -457,6 +516,8 @@ def _sanitize_store(store):
     good, seen = [], set()
     curve_migrated = False
     for p in store["profiles"]:
+        if isinstance(p, dict):
+            _sync_goal(p)   # a bad goal is dropped, not the whole profile
         if _loaded_profile_ok(p) and p["name"] not in seen:
             seen.add(p["name"])
             curve_migrated = _migrate_builtin_fan_curve(p) or curve_migrated
@@ -534,6 +595,7 @@ def load_store(create=True):
     for p in store["profiles"]:
         if "max_fans" not in p:
             p["max_fans"] = bool(p.get("builtin") and shipped.get(p["name"], {}).get("max_fans"))
+        _sync_goal(p)
         _migrate_boondock_hooks(p)
     if create:
         _migrate_enabled_max_fans_snapshot(store)
@@ -541,6 +603,9 @@ def load_store(create=True):
 
 
 def save_store(store):
+    for p in store.get("profiles", []):
+        if isinstance(p, dict):
+            _sync_goal(p)
     _write_json(STORE_PATH, store)
 
 
@@ -660,6 +725,7 @@ def validate(p):
         if tdp["pl1"] > 75 and not tdp.get("force"):
             raise ValueError("PL1 above 75 W needs force=true")
     validate_curve(p.get("fan_curve"))
+    validate_goal(p.get("goal"))
     uv = p.get("undervolt")
     if uv is not None and (not isinstance(uv, int) or not -40 <= uv <= 0):
         raise ValueError("undervolt must be 0..-40")
@@ -1036,9 +1102,12 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
     initial_max_fans_on = bool(_max_fans_state().get("enabled"))
     planned_max_fans_on = initial_max_fans_on
     released = False
-    if switching and profile.get("max_fans"):
+    # A goal profile's runner (Phase 15c) is not built yet, so every goal is
+    # applied as its fixed values; goal "max" is Max Fans.
+    wants_max = goal_kind(profile) == "max"
+    if switching and wants_max:
         planned_max_fans_on = True
-    elif switching and previous and previous.get("max_fans") and not profile.get("max_fans") \
+    elif switching and previous and goal_kind(previous) == "max" and not wants_max \
             and initial_max_fans_on:
         planned_max_fans_on = False
         released = True
