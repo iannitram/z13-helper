@@ -189,11 +189,6 @@ def test_performance_cpu_boost_edits_the_shown_pending_profile(boost_ui):
     assert b.jobs == [] and b.writes == []
 
 
-@pytest.fixture
-def two_cpus(monkeypatch):
-    monkeypatch.setattr(profiles.os, "cpu_count", lambda: 2)  # the write no longer depends on it
-
-
 # ----------------------------------------------------------------------
 # profile field
 # ----------------------------------------------------------------------
@@ -240,7 +235,7 @@ def test_epp_argv_refuses_an_unknown_value():
         profiles.epp_argv("performance; reboot")
 
 
-def test_write_epp_reports_success_failure_and_timeout(fake_host, two_cpus):
+def test_write_epp_reports_success_failure_and_timeout(fake_host):
     assert profiles.write_epp("power") == (True, "power")
     assert fake_host.calls[-1].argv == profiles.epp_argv("power")
     assert fake_host.calls[-1].timeout == profiles.Z13CTL_WRITE_TIMEOUT_S
@@ -257,7 +252,7 @@ def test_write_epp_reports_success_failure_and_timeout(fake_host, two_cpus):
 # apply() ordering and independence
 # ----------------------------------------------------------------------
 
-def test_apply_writes_epp_after_the_platform_profile_and_before_tdp(profiles_env, fake_host, two_cpus):
+def test_apply_writes_epp_after_the_platform_profile_and_before_tdp(profiles_env, fake_host):
     p = full_profile(epp="power")
 
     results = profiles.apply(p, z13ctl=Z)
@@ -269,14 +264,14 @@ def test_apply_writes_epp_after_the_platform_profile_and_before_tdp(profiles_env
         f"{Z} profile --set performance") + 1
 
 
-def test_apply_without_epp_runs_no_epp_write(profiles_env, fake_host, two_cpus):
+def test_apply_without_epp_runs_no_epp_write(profiles_env, fake_host):
     results = profiles.apply(full_profile(), z13ctl=Z)
 
     assert "cpu boost" not in names(results)
     assert not any(argv[:2] == ["sh", "-c"] for argv in fake_host.argvs)
 
 
-def test_failed_epp_write_does_not_stop_the_other_steps(profiles_env, fake_host, two_cpus):
+def test_failed_epp_write_does_not_stop_the_other_steps(profiles_env, fake_host):
     fake_host.fail("printf", rc=1, out="Permission denied")
 
     results = profiles.apply(full_profile(epp="balance_power"), z13ctl=Z)
@@ -334,13 +329,13 @@ def test_get_epp_choices_falls_back_to_all_when_unreadable(monkeypatch, tmp_path
     assert HardwareController(z13ctl_path="z13ctl").get_epp_choices() == list(epp.EPP_CHOICES)
 
 
-def test_set_epp_writes_through_the_host_helper(fake_host, two_cpus):
+def test_set_epp_writes_through_the_host_helper(fake_host):
     c = HardwareController(z13ctl_path="z13ctl")
     assert c.set_epp("balance_performance") == "balance_performance"
     assert fake_host.calls[-1].argv == profiles.epp_argv("balance_performance")
 
 
-def test_set_epp_raises_with_the_host_message(fake_host, two_cpus):
+def test_set_epp_raises_with_the_host_message(fake_host):
     fake_host.fail("printf", rc=1, out="Permission denied")
     with pytest.raises(RuntimeError, match="CPU Boost not set: Permission denied"):
         HardwareController(z13ctl_path="z13ctl").set_epp("power")

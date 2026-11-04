@@ -709,7 +709,7 @@ host_files() {
 }
 
 apply_epp_permissions() {
-    # Reapply even on an unchanged repair: recreated sysfs nodes lose their grants.
+    # Only when our EPP rule was (re)installed; boot's systemd-tmpfiles covers the rest.
     # Use only our EPP rule, never every installed tmpfiles configuration.
     act sudo systemd-tmpfiles --create /etc/tmpfiles.d/z13-helper-epp.conf \
         || fail "apply EPP sysfs permissions"
@@ -731,7 +731,6 @@ etc_files() {
 
     if ((${#todo[@]} == 0 && ${#keep_missing[@]} == 0 && enabled)); then
         info "resume hook installed + enabled; keep-list complete"
-        apply_epp_permissions
         return 0
     fi
     local t
@@ -749,7 +748,7 @@ etc_files() {
         CHANGED+=("$dest")
         [[ $dest == *.service ]] && units_changed=1
     done
-    apply_epp_permissions
+    [[ " ${todo[*]} " == *"/etc/tmpfiles.d/z13-helper-epp.conf"* ]] && apply_epp_permissions
     # polkitd picks up rules.d changes by itself; systemd needs a reload for units.
     ((units_changed)) && act sudo systemctl daemon-reload
     if ((!enabled)); then

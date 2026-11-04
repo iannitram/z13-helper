@@ -199,8 +199,11 @@ class HardwareController:
     # --- CPU Boost (amd-pstate EPP); host helper, not z13ctl ---
 
     def set_epp(self, value: str):
-        """Writes one EPP value to every CPU (profiles.write_epp). RuntimeError on failure."""
-        ok, message = profiles.write_epp(value)
+        """Writes one EPP value to every cpufreq policy (profiles.write_epp). RuntimeError on failure."""
+        try:
+            ok, message = profiles.write_epp(value)
+        except ValueError as e:
+            raise RuntimeError(f"CPU Boost not set: {e}") from e
         if not ok:
             raise RuntimeError(f"CPU Boost not set: {message}")
         return message

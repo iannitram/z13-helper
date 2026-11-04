@@ -573,7 +573,7 @@ def test_decky_plugin_dry_run_only_prints_loader_lifecycle(tmp_path, real_subpro
 
 @pytest.mark.parametrize("changed,dry,apply_rc", [(False, False, 0), (True, False, 0),
                                                   (False, False, 1), (True, True, 0)])
-def test_etc_applies_epp_permissions_even_on_unchanged_repair(
+def test_etc_applies_epp_permissions_only_when_the_rule_changed(
         tmp_path, real_subprocess, changed, dry, apply_rc):
     source = SCRIPT.read_text()
     start = source.index("apply_epp_permissions() {")
@@ -616,9 +616,9 @@ printf 'FAILURES %s\n' "${FAILED[*]}"
     p = real_subprocess(["bash", "-c", harness], env=env, capture_output=True, text=True)
     assert p.returncode == 0, p.stderr
     command = "systemd-tmpfiles --create /etc/tmpfiles.d/z13-helper-epp.conf"
-    assert command in p.stdout
+    assert (command in p.stdout) == changed
     if changed:
         assert p.stdout.index("install -D -m 644") < p.stdout.index(command)
     if dry:
         assert "DRY sudo " + command in p.stdout
-    assert ("FAILURES apply EPP sysfs permissions" in p.stdout) == bool(apply_rc)
+    assert ("FAILURES apply EPP sysfs permissions" in p.stdout) == (changed and bool(apply_rc))
