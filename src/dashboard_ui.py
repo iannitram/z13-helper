@@ -81,6 +81,7 @@ _SERVICE = "z13-helper.service"
 
 TICK_VISIBLE_MS, TICK_HIDDEN_MS = 2000, 6000     # G-Helper: 2 s shown, 6 s hidden
 UPDATE_CHECK_MS = 24 * 3600 * 1000
+CAPABILITY_REPROBE_S = 30       # re-read platform capabilities this often (#22)
 SCREEN_WRITE_MS = 40            # coalesce slider steps into one backlight write
 SCREEN_FOLLOW_GRACE_S = 1.5     # after our own write, don't snap the slider back to a stale read
 
@@ -109,6 +110,7 @@ class DashboardUI(QMainWindow):
         self.worker = ApplyWorker(self)
         self.control = ProfileControl(controller, self.worker, self)
         self.control.message.connect(self._on_control_message)
+        self.control.writes_allowed = lambda: bool(self._support and self._support["supported"])
         self._log_dialog = None
         self._errors_unseen = 0
         self._last_crash_notice = 0.0
@@ -119,7 +121,8 @@ class DashboardUI(QMainWindow):
         self._sensors = sensors
         self._fan_watchdog = FanWatchdog(sensors, controller,
                                          max_fans_on=max_fans_state.is_enabled,
-                                         may_act=lambda: not self.control._pending,
+                                         may_act=lambda: not self.control._pending
+                                         and self.control.writes_allowed(),
                                          active_tdp=lambda: self.control.active().get("tdp"),
                                          trace=self._make_fan_trace())
         self._fan_runner = FanWatchdogRunner(self._fan_watchdog, self.worker.submit)
@@ -436,16 +439,12 @@ class DashboardUI(QMainWindow):
         self.batt_100.clicked.connect(self._battery_100)
         srow.addWidget(self.batt_100)
         self.batt.body.addLayout(srow)
-        support = platform_support.detect()
-        batt_cap = support["capabilities"]["battery_limit"]
-        if not batt_cap["available"]:
-            self.battery_slider.setEnabled(False)
-            self.batt_100.setEnabled(False)
-            self.batt.right.setText("unavailable")
-            self.batt.setToolTip(batt_cap["reason"])
-            logging.getLogger("z13.platform").info("Battery limit disabled: %s", batt_cap["reason"])
         col.addWidget(self.batt)
-        col.addWidget(self._sep())
+        self._batt_sep = self._sep()
+        col.addWidget(self._batt_sep)
+        self._support = None
+        self._support_probed = 0.0
+        self.reprobe_capabilities()
 
         # 5. Run on Startup · power source
         row4 = QHBoxLayout()
@@ -509,6 +508,48 @@ class DashboardUI(QMainWindow):
         self.startup.blockSignals(True)
         self.startup.setChecked(rc == 0 and out.strip() == "enabled")
         self.startup.blockSignals(False)
+
+    # ------------------------------------------------------------------
+    # Platform capabilities (#22)
+    # ------------------------------------------------------------------
+
+    def reprobe_capabilities(self):
+        """Read the capabilities again (sysfs only) and enable/disable the controls."""
+        self._support_probed = time.monotonic()
+        self._apply_capabilities(platform_support.detect())
+
+    def _apply_capabilities(self, support):
+        log = logging.getLogger("z13.platform")
+        previous = self._support
+        self._support = support
+        ok = support["supported"]
+        if previous is None or previous["supported"] != ok:
+            if not ok:
+                log.info("Unsupported machine, controls disabled: %s", support["reason"])
+        # Profile, fan, lighting and brightness writes are Z13-only; on any other
+        # machine none of them may be offered or issued.
+        for w in (*self._tiles.values(), self.fans_tile, self.profile_combo,
+                  self.maxfans_pill, self.light_target, *self._bright_tiles.values(),
+                  *(c for pair in self._lighting_combos.values() for c in pair)):
+            w.setEnabled(ok)
+        self._refresh_lighting_ui(self.control.shown())   # colour combos follow their mode
+        if not ok:
+            self.perf.setToolTip(support["reason"])
+            self.light.setToolTip(support["reason"])
+        else:
+            self.perf.setToolTip("")
+            self.light.setToolTip("")
+        # Battery: no battery at all hides the controls; a missing threshold only disables them.
+        cap = support["capabilities"]["battery_limit"]
+        has_battery = support["battery_present"] or not ok
+        for w in (self.batt, self._batt_sep):
+            w.setVisible(has_battery)
+        on = cap["available"]
+        self.battery_slider.setEnabled(on)
+        self.batt_100.setEnabled(on)
+        self.batt.setToolTip("" if on else cap["reason"])
+        if not on and (previous is None or previous["capabilities"]["battery_limit"]["available"]):
+            log.info("Battery limit disabled: %s", cap["reason"])
 
     # ------------------------------------------------------------------
     # Profiles
@@ -629,7 +670,7 @@ class DashboardUI(QMainWindow):
             color_combo.blockSignals(True)
             mode_combo.setCurrentIndex(max(0, mode_combo.findData(mode)))
             color_combo.setCurrentIndex(max(0, color_combo.findData(color)))
-            color_combo.setEnabled(mode is not None)
+            color_combo.setEnabled(mode is not None and bool(self._support and self._support['supported']))
             mode_combo.blockSignals(False)
             color_combo.blockSignals(False)
         self._lighting_syncing = False
@@ -823,6 +864,11 @@ class DashboardUI(QMainWindow):
     # ------------------------------------------------------------------
 
     def _tick(self):
+        if time.monotonic() - self._support_probed >= CAPABILITY_REPROBE_S:
+            try:
+                self.reprobe_capabilities()
+            except Exception:
+                logging.getLogger("z13.platform").exception("capability reprobe failed")
         try:
             apu = self.sensors.get_apu_temp()
             gpu = self.sensors.get_gpu_temp()
