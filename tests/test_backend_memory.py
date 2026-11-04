@@ -109,16 +109,16 @@ def test_plugin_lifecycle_starts_and_stops_guard(main, monkeypatch):
     assert calls == ['start', 'close']
 
 
-def test_default_trip_is_not_fatal(main, monkeypatch):
-    monkeypatch.delenv('Z13_RSS_GUARD_EXIT', raising=False)
+def test_opt_out_trip_is_not_fatal(main, monkeypatch):
+    monkeypatch.setenv('Z13_RSS_GUARD_EXIT', '0')
     monkeypatch.setattr(main.os, '_exit', lambda c: pytest.fail('unexpected exit'))
     guard = main.BackendMemoryGuard(lambda: main.BACKEND_RSS_LIMIT_KIB)
     assert guard.check()
     assert guard.check()
 
 
-def test_opt_in_termination_is_process_exit(main, monkeypatch):
-    monkeypatch.setenv('Z13_RSS_GUARD_EXIT', '1')
+def test_default_termination_is_process_exit(main, monkeypatch):
+    monkeypatch.delenv('Z13_RSS_GUARD_EXIT', raising=False)
     exits = []
     monkeypatch.setattr(main.os, '_exit', exits.append)
     guard = main.BackendMemoryGuard(lambda: main.BACKEND_RSS_LIMIT_KIB)

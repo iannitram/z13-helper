@@ -25,8 +25,10 @@ the Flatpak, flatpak-spawn reports a missing host binary as rc 1).
 import collections
 import os
 import re
+import select
 import subprocess
 import threading
+import time
 
 DECK_HOME = "/home/deck"
 DECK_RUNTIME_DIR = "/run/user/1000"
@@ -34,6 +36,7 @@ DECK_BUS = f"unix:path={DECK_RUNTIME_DIR}/bus"
 
 RC_TIMEOUT = 124
 RC_NOT_FOUND = 127
+PIPE_GRACE_S = 1.0               # extra wait for pipe EOF after the child exits
 MAX_OUTPUT_BYTES = 1024 * 1024   # captured child output kept in memory (issue #30)
 
 Result = collections.namedtuple("Result", "rc out timed_out")
@@ -109,11 +112,34 @@ def holo_or_steamos(name: str) -> str:
     return _HOLO_TOOLS[name]
 
 
-def _drain(stream, chunks, cap):
-    """Read to EOF, keeping at most `cap` bytes; the rest is read and dropped."""
+def _drain(stream, chunks, cap, stop):
+    """Read to EOF or until `stop` is set and nothing is pending; keep at most `cap`
+    bytes, drop the rest. Returns whatever is available instead of waiting for a full
+    block, and polls `stop` so a grandchild holding the pipe cannot pin the thread."""
     kept = 0
+    try:
+        fd = stream.fileno()
+    except (OSError, ValueError, AttributeError):    # no real fd (in-memory stream)
+        while True:
+            block = stream.read(65536)
+            if not block:
+                return
+            if kept < cap:
+                chunks.append(block[:cap - kept])
+                kept += len(chunks[-1])
     while True:
-        block = stream.read(65536)
+        try:
+            ready = select.select([fd], [], [], 0.1)[0]
+        except (OSError, ValueError):
+            return
+        if not ready:
+            if stop.is_set():
+                return
+            continue
+        try:
+            block = os.read(fd, 65536)
+        except OSError:
+            return
         if not block:
             return
         if kept < cap:
@@ -149,9 +175,13 @@ def run(argv, timeout=30, *, as_deck=False, input=None):
 
     Output is stdout followed by stderr (as before); each stream keeps only its first
     MAX_OUTPUT_BYTES in memory. Text is UTF-8, undecodable bytes replaced.
+    `timeout` bounds the child; after it exits (or is killed) the pipes get at most
+    PIPE_GRACE_S more to reach EOF, so a grandchild that keeps them open cannot delay
+    the return, and every thread and fd is released before returning.
     """
     cmd, env = command(argv, as_deck=as_deck)
     out_chunks, err_chunks, threads = [], [], []
+    stop = threading.Event()
     try:
         p = subprocess.Popen(cmd, env=env, stdin=None if input is None else subprocess.PIPE,
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -161,9 +191,9 @@ def run(argv, timeout=30, *, as_deck=False, input=None):
         return Result(1, str(e), False)
     timed_out = False
     try:
-        threads.append(threading.Thread(target=_drain, args=(p.stdout, out_chunks, MAX_OUTPUT_BYTES),
+        threads.append(threading.Thread(target=_drain, args=(p.stdout, out_chunks, MAX_OUTPUT_BYTES, stop),
                                         daemon=True))
-        threads.append(threading.Thread(target=_drain, args=(p.stderr, err_chunks, MAX_OUTPUT_BYTES),
+        threads.append(threading.Thread(target=_drain, args=(p.stderr, err_chunks, MAX_OUTPUT_BYTES, stop),
                                         daemon=True))
         if input is not None:
             threads.append(threading.Thread(target=_feed, args=(p.stdin, input.encode()),
@@ -176,17 +206,19 @@ def run(argv, timeout=30, *, as_deck=False, input=None):
             timed_out = True
             _reap(p)
             return Result(RC_TIMEOUT, f"timed out after {timeout} s", True)
+        deadline = time.monotonic() + PIPE_GRACE_S
         for t in threads:
-            t.join(5)
+            t.join(max(0.0, deadline - time.monotonic()))
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as e:
         _reap(p)
         return Result(1, str(e), False)
     finally:
-        if timed_out:
-            for t in threads:
-                t.join(0.5)
-        # Closing a pipe a drain thread is still blocked on (a grandchild holds it open)
-        # can hang; leave those to the daemon threads.
+        # Drain threads poll `stop`, so they end within ~0.1 s even if a grandchild
+        # still holds the pipe; only then close the pipes (no close-while-reading).
+        stop.set()
+        for t in threads:
+            if t.ident is not None:      # never started if thread creation failed
+                t.join(1)
         for pipe in (p.stdout, p.stderr, p.stdin):
             if pipe is not None and not any(t.is_alive() for t in threads):
                 try:

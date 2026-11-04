@@ -175,6 +175,18 @@ def test_run_timeout_with_grandchild_holding_pipe(real_subprocess, monkeypatch):
     assert time.monotonic() - t0 < 4
 
 
+def test_run_normal_exit_with_grandchild_keeps_output_and_threads(real_subprocess, monkeypatch):
+    import threading, time
+    monkeypatch.setattr(host, "MODE", "host")
+    before = threading.active_count()
+    for _ in range(3):
+        t0 = time.monotonic()
+        r = host.run(["sh", "-c", "sleep 4 & echo started"], timeout=30)
+        assert r.rc == 0 and r.out == "started" and not r.timed_out
+        assert time.monotonic() - t0 < host.PIPE_GRACE_S + 2
+    assert threading.active_count() <= before
+
+
 def test_run_thread_start_failure_never_raises(recorded, monkeypatch):
     proc = FakeProc()
     recorded.answer[0] = lambda cmd, kw: proc
