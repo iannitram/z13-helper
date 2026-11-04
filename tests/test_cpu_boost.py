@@ -18,7 +18,8 @@ import profiles
 from hardware_controller import HardwareController
 from test_profiles_apply import Z, bare_profile, full_profile, names
 
-PATHS2 = [epp.EPP_PATH.format(n=0), epp.EPP_PATH.format(n=1)]
+PATHS2 = [f"/sys/devices/system/cpu/cpufreq/policy{i}/energy_performance_preference"
+          for i in range(2)]
 
 
 def _methods(module, class_name, method_names, namespace):
@@ -327,3 +328,11 @@ def test_epp_script_fails_when_no_node_exists_and_writes_when_one_does(tmp_path,
     node.write_text("x")
     assert real_subprocess(["sh", "-c", script, "sh", "power", missing, str(node)]).returncode == 0
     assert node.read_text() == "power"
+
+
+def test_epp_route_runs_unelevated_in_flatpak_and_on_host():
+    import host
+    argv = profiles.epp_argv("power", 2)
+    assert argv[5:] == PATHS2
+    assert host.command(argv, mode="host") == (argv, None)
+    assert host.command(argv, mode="flatpak") == (["flatpak-spawn", "--host", *argv], None)

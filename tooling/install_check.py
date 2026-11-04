@@ -87,6 +87,7 @@ MANIFEST = [
     ("packaging/host/systemd/system/z13-lightbar-reset.sh", f"{ETC_UNITS}/z13-lightbar-reset.sh", "755", True),
     ("packaging/host/systemd/system/z13-lightbar-reset.service", f"{ETC_UNITS}/z13-lightbar-reset.service", "644", True),
     ("packaging/host/polkit/50-z13-lightbar-reset.rules", POLKIT_RULE, "644", True),
+    ("packaging/host/tmpfiles/z13-helper-epp.conf", "/etc/tmpfiles.d/z13-helper-epp.conf", "644", True),
 ]
 USER_UNITS_ENABLED = ["z13-button-watcher.service",
                       "z13-helper.service", "z13-restore-profile.service", "z13ctl.socket"]
@@ -98,6 +99,7 @@ KEEP_LIST = [
     f"{ETC_UNITS}/z13-lightbar-reset.sh",
     f"{ETC_UNITS}/z13-lightbar-reset.service",
     POLKIT_RULE,
+    "/etc/tmpfiles.d/z13-helper-epp.conf",
     f"{ETC_UNITS}/z13ctl-perms.service",
     "/etc/udev/rules.d/99-z13ctl.rules",
 ]

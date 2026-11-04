@@ -77,7 +77,7 @@ LIGHTING_COLORS = ("red", "orange", "yellow", "green", "cyan", "blue", "purple",
 # CPU Boost: amd-pstate energy_performance_preference, display order. Same list as
 # src/epp.py (the app's copy); kept here too because z13-profile runs without it.
 EPP_CHOICES = ("power", "balance_power", "balance_performance", "performance")
-EPP_SYSFS = "/sys/devices/system/cpu/cpu{n}/cpufreq/energy_performance_preference"
+EPP_SYSFS = "/sys/devices/system/cpu/cpufreq/policy{n}/energy_performance_preference"
 
 # Max Fans = every point at 100%. Must match the desktop app and the Decky plugin.
 MAX_FAN_TEMPS = (20, 30, 40, 50, 60, 70, 80, 90)   # Low anchor; firmware response still needs verification.
@@ -941,10 +941,12 @@ def apply_undervolt(profile, *, z13ctl=Z13CTL):
 
 
 def epp_argv(value, cpu_count):
-    """Host command that writes one EPP value to every CPU's cpufreq node.
+    """Host command that writes one EPP value to every cpufreq policy node.
 
     z13ctl has no EPP command, so this goes through host.run like the rest of the
-    host seam. The value is checked against EPP_CHOICES and travels as an argv item
+    host seam. install.sh installs z13-helper-epp.conf to grant the users group
+    write access to these policy nodes; no runtime elevation is needed.
+    The value is checked against EPP_CHOICES and travels as an argv item
     (never spliced into the script). Offline CPUs have no node and are skipped; the
     script stops at the first write that fails and fails when no node was written
     (e.g. a kernel without amd-pstate), so that never reads as success.
