@@ -48,7 +48,8 @@ def test_preflight_never_signs_off_physical_acceptance(device):
     assert all(row["result"] == "pending" and row["vrr"] == "on" for row in checks)
     assert all(row[k] is None for row in checks
                for k in ("slider_reach", "panel_stable", "measured_fps"))
-    assert [row["requested_limit_hz"] for row in checks] == [row["refresh_hz"] for row in checks]
+    assert [row["requested_limit_hz"] for row in checks] == [
+        None if row["disable_frame_limiter"] else row["refresh_hz"] for row in checks]
     assert "serial" not in json.dumps(report).lower().replace("serial_number", "")
     assert "serial" not in json.dumps(report["panels"]).lower()
 
@@ -88,12 +89,16 @@ def test_cli_reports_blockers_without_writing(monkeypatch, capsys, device):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(home / "elsewhere"))
     collect = verify.collect
     seen = []
-    monkeypatch.setattr(verify, "collect", lambda config, gamescope_version=None: seen.append(config) or collect(
-        **{**device, "config_home": config}))
+    def fake_collect(config, gamescope_version=None):
+        seen.append((config, gamescope_version))
+        return collect(**{**device, "config_home": config,
+                          "gamescope_version": gamescope_version})
+
+    monkeypatch.setattr(verify, "collect", fake_collect)
     monkeypatch.setattr(verify, "installed_gamescope_version", lambda: verify.GAMESCOPE_VERSION)
     before = sorted(home.parent.rglob("*"))
     assert verify.main([]) == 0
-    assert seen == [device["config_home"]]
+    assert seen == [(device["config_home"], verify.GAMESCOPE_VERSION)]
     assert json.loads(capsys.readouterr().out)["device_acceptance"].startswith("pending")
     (device["config_home"] / verify.PROFILE).unlink()
     assert verify.main([]) == 1
@@ -116,6 +121,7 @@ def test_gamescope_version_mismatch_blocks(device, version):
 def test_missing_checkout_source_is_not_blamed_on_installed(device, tmp_path):
     report = verify.collect(**device, source=tmp_path / "nope.lua")
     assert report["installed_profile"] == "checkout source missing"
+    assert "Installed display script does not match this checkout" not in report["preflight_blockers"]
 
 
 @pytest.mark.parametrize("value,blocked", [

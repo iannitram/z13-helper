@@ -97,7 +97,7 @@ def collect(config_home, drm=Path("/sys/class/drm"),
     running = any(read_text(path / "comm") in ("gamescope", "gamescope-wl")
                   for path in proc.glob("[0-9]*"))
     blockers = []
-    if profile_state != "matches":
+    if profile_state not in ("matches", "checkout source missing"):
         blockers.append("Installed display script does not match this checkout")
     if not any(panel["matches_profile"] for panel in panels):
         blockers.append("No connected eDP panel with the exact profile EDID identity")
@@ -121,7 +121,8 @@ def collect(config_home, drm=Path("/sys/class/drm"),
         "device_acceptance": "pending owner-device verification",
         "manual_checks": [
             {"vrr": "on", "disable_frame_limiter": disabled, "refresh_hz": hz,
-             "requested_limit_hz": hz, "slider_reach": None, "panel_stable": None,
+             "requested_limit_hz": None if disabled else hz,
+             "slider_reach": None, "panel_stable": None,
              "measured_fps": None, "result": "pending"}
             for disabled in (False, True) for hz in (48, 60, 120, 180)
         ],
