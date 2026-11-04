@@ -6,6 +6,10 @@ caching:
 
     {"enabled": bool, "saved_curve": [[temp, pwm], ... 8 points]}
 
+A `suspended` string is present only while an apply is holding Max Fans off
+after a timed-out hardware write; the UI can show it and the watchdog must not
+guess the hardware state.
+
 decky/main.py carries a copy of this logic (it can't import from the app).
 The legacy config.json keys `fans_max` / `fan_curve_saved` are read only to
 seed this file the first time.
@@ -28,7 +32,7 @@ STATE_PATH = os.path.expanduser("~/.config/z13-helper/max-fans.json")
 # serialises threads and processes alike (flock is per open file). Copy of profiles.file_lock
 # (z13-profile is a single installed file, so it can't import this).
 _lock_state = threading.local()
-LOCK_TIMEOUT = 10.0   # seconds to wait for another writer before giving up
+LOCK_TIMEOUT = 10.0  # seconds to wait for another writer before giving up
 
 
 class StoreLockError(OSError):
@@ -57,7 +61,9 @@ def _open_lock(lock_path):
     try:
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
-            raise StoreLockError(f"{lock_path} is not a plain single-link file; refusing")
+            raise StoreLockError(
+                f"{lock_path} is not a plain single-link file; refusing"
+            )
         if created:
             os.fchmod(fd, 0o660)
         elif st.st_uid not in {0, os.geteuid()}:
@@ -103,16 +109,14 @@ def file_lock(path):
     except OSError:
         if fd is not None:
             os.close(fd)
-        fd = None   # can't lock (read-only dir?): behave as before, unlocked
+        fd = None  # can't lock (read-only dir?): behave as before, unlocked
     held[path] = 1
     try:
         yield
     finally:
         held.pop(path, None)
         if fd is not None:
-            os.close(fd)   # closing releases the flock
-
-
+            os.close(fd)  # closing releases the flock
 
 
 def load() -> dict | None:
@@ -179,5 +183,7 @@ def migrate_legacy(config):
             return
         seed = {"enabled": bool(config.get("fans_max", False))}
         if config.get("fan_curve_saved") is not None:
-            seed["saved_curve"] = config["fan_curve_saved"]   # absent = unknown, null = auto
+            seed["saved_curve"] = config[
+                "fan_curve_saved"
+            ]  # absent = unknown, null = auto
         save(**seed)
