@@ -50,6 +50,7 @@ The desktop Flatpak and Decky are two frontends to the same profile and Max Fans
 | `src/max_fans_state.py` | Shared Max Fans intent and saved-curve snapshot in `max-fans.json`, with inter-process locking and atomic writes. |
 | `src/fan_watchdog.py` | Shared Desktop/Game Mode recovery rules. In the desktop app, recoveries use the worker queue; stale dropped-curve recoveries are canceled if the queued profile operation has already changed Max Fans intent or restored a curve. |
 | `src/sensor_reader.py` | Read-only hwmon temperatures, fan RPM, custom-curve mode and points. It does not write hardware. |
+| `src/telemetry_history.py`, `src/history_chart.py` | In-memory ring buffer of CPU/GPU temperature and both fan RPMs (last hour, one sample per tick at least 1.5 s apart, gaps kept as `None`, nothing written to disk) and the QPainter line chart the Fans + Power window draws from it. `dashboard_ui.py` feeds it from the telemetry tick. |
 | `src/power_range.py` | Determines per-rail slider bounds from kernel min/max metadata and z13ctl's backend selection rules. It never reads a live PPT `current_value`. |
 | `src/hardware_controller.py` | z13ctl command wrappers for profile, fan, power, battery, lighting and Curve Optimizer operations. Every write is bounded by `host.Z13CTL_WRITE_TIMEOUT_S` (20 s); a timeout is reported, not retried. |
 | `src/host.py` | Shared command seam for Flatpak, host, and Decky contexts; owns `Z13CTL_WRITE_TIMEOUT_S`. |

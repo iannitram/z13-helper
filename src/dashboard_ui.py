@@ -27,6 +27,7 @@ from PyQt6.QtGui import QFont, QIcon, QPainter, QColor, QPixmap, QAction
 
 from hardware_controller import HardwareController
 from sensor_reader import SensorReader
+from telemetry_history import TelemetryHistory
 from config_manager import ConfigManager
 import app_log
 import host
@@ -95,6 +96,7 @@ class DashboardUI(QMainWindow):
         self.controller = controller
         self.sensors = sensors
         self.config = config
+        self.history = TelemetryHistory()     # last hour, memory only (#31)
         max_fans_state.migrate_legacy(config)
 
         self.setWindowTitle("Z13-Helper")
@@ -547,7 +549,7 @@ class DashboardUI(QMainWindow):
 
     def _toggle_fans_window(self):
         if self._fans_window is None:
-            self._fans_window = FansWindow(self.control, self.controller, self.sensors, self)
+            self._fans_window = FansWindow(self.control, self.controller, self.sensors, self, history=self.history)
         w = self._fans_window
         if w.isVisible():
             w.hide()
@@ -818,6 +820,10 @@ class DashboardUI(QMainWindow):
             apu = self.sensors.get_apu_temp()
             gpu = self.sensors.get_gpu_temp()
             fan1, fan2 = self.sensors.get_fan_speeds()
+            self.history.add(time.monotonic(), apu, gpu, fan1, fan2)
+            fw = self._fans_window
+            if fw is not None and fw.isVisible() and hasattr(fw, "history_chart"):
+                fw.history_chart.update()
             parts = []
             if apu is not None:
                 parts.append(f"CPU {apu:.0f}°C")
