@@ -52,9 +52,5 @@ if [ -x "$Z13CTL" ] && as_deck "$Z13CTL" fancurve --set "$CURVE" >/dev/null 2>&1
     logger -t z13-fan-resume "profile restore unavailable; re-applied curve after resume ($CURVE)"
 else
     [ -x "$Z13CTL" ] && as_deck "$Z13CTL" fancurve --reset >/dev/null 2>&1
-    for h in /sys/class/hwmon/hwmon*; do
-        [ "$(cat "$h/name" 2>/dev/null)" = "asus_custom_fan_curve" ] || continue
-        for e in "$h"/pwm*_enable; do echo 2 > "$e" 2>/dev/null || true; done
-    done
-    logger -t z13-fan-resume "WARN curve re-apply FAILED; forced firmware-auto fallback after resume"
+    logger -t z13-fan-resume "WARN curve re-apply FAILED; firmware-auto reset after resume"
 fi
