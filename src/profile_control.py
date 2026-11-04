@@ -203,8 +203,13 @@ class ProfileControl(QObject):
             bl = profile.get("battery_limit")
             return c.set_battery_limit(bl) if bl is not None else "unchanged"
 
+        def push_epp():
+            value = profile.get("epp")
+            return c.set_epp(value) if value is not None else "unchanged"
+
         return {"tdp": push_tdp, "fan_curve": push_curve, "undervolt": push_uv,
-                "brightness": push_brightness, "battery_limit": push_battery}.get(field, full)
+                "brightness": push_brightness, "battery_limit": push_battery,
+                "epp": push_epp}.get(field, full)
 
     def _submit(self, label, fn):
         self._pending += 1
