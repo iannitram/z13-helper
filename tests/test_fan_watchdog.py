@@ -839,3 +839,26 @@ def test_rule5_auto_stall_runs_on_the_worker_when_deferred(env):
     msg = runner.on_done(FAN_RECOVERY_LABEL, jobs[0][1]())
     assert ns.ctl.calls == [("rewrite_profile",), ("apply_tdp", BOONDOCK_TDP), ("reset_fancurve",)]
     assert msg.startswith("Fans stopped in auto mode") and not runner.pending
+
+
+@pytest.mark.parametrize("change", ["max_fans", "curve"])
+def test_queued_auto_recovery_skips_if_state_changed(env, change):
+    # The auto-mode decision is made on an earlier tick. A profile apply queued
+    # since then may turn Max Fans on or enable a curve; the worker must not
+    # rewrite the profile and reset that newer state.
+    ns = auto(env, tdp=BOONDOCK_TDP)
+    jobs = []
+    runner = FanWatchdogRunner(ns.wd, lambda label, fn: jobs.append(fn))
+    for _ in range(AUTO_TICKS):
+        ns.clock.advance(TICK)
+        runner.tick()
+    assert len(jobs) == 1
+
+    if change == "max_fans":
+        ns.set_max(True)
+    else:
+        ns.sensors.enabled = True
+    msg = runner.on_done(FAN_RECOVERY_LABEL, jobs[0]())
+
+    assert "skipped" in msg
+    assert ns.ctl.calls == []

@@ -106,8 +106,17 @@ class FanWatchdog:
     trace        optional FanTrace: gets every tick's readings and decisions.
     """
 
-    def __init__(self, sensors, fans, *, max_fans_on, may_act=lambda: True,
-                 active_tdp=lambda: None, clock=time.monotonic, trace=None):
+    def __init__(
+        self,
+        sensors,
+        fans,
+        *,
+        max_fans_on,
+        may_act=lambda: True,
+        active_tdp=lambda: None,
+        clock=time.monotonic,
+        trace=None,
+    ):
         self.sensors = sensors
         self.fans = fans
         self._max_fans_on = max_fans_on
@@ -118,23 +127,28 @@ class FanWatchdog:
         self._stall_ticks = 0
         self._last_reapply = float("-inf")
         self._last_auto = float("-inf")
-        self._auto_zero_since = None   # when both fans first read 0 RPM, hot, in auto
+        self._auto_zero_since = None  # when both fans first read 0 RPM, hot, in auto
         self._last_rpm = [None, None]
         now = clock()
         self._rpm_changed_at = [now, now]
-        self._temp_at_change = [None, None]   # APU temp when each reading last changed
-        self._zero_since = [None, None]       # when each fan started reading 0 under demand
-        self._alive_since = [None, None]      # start of an unbroken run of moving positive readings
-        self._attempts = [0, 0]               # detection recoveries per fan, until it shows life
-        self._grace_until = float("-inf")     # after our writes / a resume: don't judge yet
+        self._temp_at_change = [None, None]  # APU temp when each reading last changed
+        self._zero_since = [None, None]  # when each fan started reading 0 under demand
+        self._alive_since = [
+            None,
+            None,
+        ]  # start of an unbroken run of moving positive readings
+        self._attempts = [0, 0]  # detection recoveries per fan, until it shows life
+        self._grace_until = float(
+            "-inf"
+        )  # after our writes / a resume: don't judge yet
         self._last_tick_at = None
         self._suspect_logged = [False, False]
-        self._declared = None                 # message for a fault declared this tick
-        self.fault = None                     # unresolved fault text for the UI/Decky, else None
+        self._declared = None  # message for a fault declared this tick
+        self.fault = None  # unresolved fault text for the UI/Decky, else None
         self._fault_fans = set()
-        self._holding = False   # may_act refused the last due recovery
-        self._tick = None       # this tick's readings + events, for the trace
-        self._defer = None      # tick(defer=...): hand recoveries to a worker
+        self._holding = False  # may_act refused the last due recovery
+        self._tick = None  # this tick's readings + events, for the trace
+        self._defer = None  # tick(defer=...): hand recoveries to a worker
         self._inflight = False  # a deferred recovery has not finished yet
 
     def _ready(self, why: str, last=None, gap=RETRY_S) -> bool:
@@ -161,8 +175,10 @@ class FanWatchdog:
             if new:
                 self._fault_fans.update(fans)
                 names = " and ".join(f"fan {i + 1}" for i in sorted(self._fault_fans))
-                self.fault = (f"Fault: {names} not recovering after {MAX_RECOVERY_ATTEMPTS} "
-                              f"recovery attempts ({why}); the fans may be failing")
+                self.fault = (
+                    f"Fault: {names} not recovering after {MAX_RECOVERY_ATTEMPTS} "
+                    f"recovery attempts ({why}); the fans may be failing"
+                )
                 self._declared = self.fault
                 self._event(f"FAULT {self.fault}")
             return False
@@ -217,8 +233,10 @@ class FanWatchdog:
         (the frozen-tach rule only tracks readings under a custom curve)."""
         if self._tick.get("enabled") is not True:
             return [None, None]
-        return [None if r is None else now - t
-                for r, t in zip(self._last_rpm, self._rpm_changed_at)]
+        return [
+            None if r is None else now - t
+            for r, t in zip(self._last_rpm, self._rpm_changed_at)
+        ]
 
     def _check(self, now) -> str | None:
         t = self._tick
@@ -240,9 +258,14 @@ class FanWatchdog:
             self._last_reapply = now
             self._grace_until = now + RETRY_S
             self._event("ACT dropped curve with Max Fans on")
-            return self._dispatch(True, lambda msg: msg.replace(
-                "Fans were stalled at 0 RPM;", "Max Fans re-applied after a profile change;"),
-                cancel_if_max_fans_drop=True)
+            return self._dispatch(
+                True,
+                lambda msg: msg.replace(
+                    "Fans were stalled at 0 RPM;",
+                    "Max Fans re-applied after a profile change;",
+                ),
+                cancel_if_max_fans_drop=True,
+            )
 
         if enabled is False and not max_on:
             self._stall_ticks = 0
@@ -288,17 +311,24 @@ class FanWatchdog:
                     frozen = (i + 1, rpm)
                 elif demand and not self._suspect_logged[i]:
                     self._suspect_logged[i] = True
-                    self._event(f"SUSPECT fan {i + 1} reading constant at {rpm} RPM for "
-                                f"{FROZEN_S}s; not corroborated (partner moving: {partner_moving}, "
-                                f"warmed: {warmed})")
+                    self._event(
+                        f"SUSPECT fan {i + 1} reading constant at {rpm} RPM for "
+                        f"{FROZEN_S}s; not corroborated (partner moving: {partner_moving}, "
+                        f"warmed: {warmed})"
+                    )
         # Forgive attempts and clear a fault only after sustained health: an
         # unbroken run of moving readings as long as the zero rule needs to
         # condemn a fan (ONE_FAN_ZERO_S). A fan that spins briefly after each
         # recovery and dies again never gets there, so the bound holds.
         for i, rpm in enumerate((fan1, fan2)):
-            if rpm == 0 or (rpm == self._last_rpm[i] and now - self._rpm_changed_at[i] >= RETRY_S):
+            if rpm == 0 or (
+                rpm == self._last_rpm[i] and now - self._rpm_changed_at[i] >= RETRY_S
+            ):
                 self._alive_since[i] = None
-            elif self._alive_since[i] is not None and now - self._alive_since[i] >= ONE_FAN_ZERO_S:
+            elif (
+                self._alive_since[i] is not None
+                and now - self._alive_since[i] >= ONE_FAN_ZERO_S
+            ):
                 self._attempts[i] = 0
                 self._clear_fault(i)
         # 4. Per-fan zero under demand, after the grace.
@@ -311,10 +341,16 @@ class FanWatchdog:
         if frozen and demand and self._gate(now, [frozen[0] - 1], "frozen tach"):
             self._rpm_changed_at = [now, now]
             self._temp_at_change = [None, None]
-            self._event(f"ACT frozen tach: fan {frozen[0]} at {frozen[1]} RPM for {FROZEN_S}s")
-            return self._dispatch(max_on, lambda msg: msg.replace(
-                "Fans were stalled at 0 RPM;",
-                f"Fan {frozen[0]} reading frozen at {frozen[1]} RPM for {FROZEN_S}s (stale tach, fan likely stopped);"))
+            self._event(
+                f"ACT frozen tach: fan {frozen[0]} at {frozen[1]} RPM for {FROZEN_S}s"
+            )
+            return self._dispatch(
+                max_on,
+                lambda msg: msg.replace(
+                    "Fans were stalled at 0 RPM;",
+                    f"Fan {frozen[0]} reading frozen at {frozen[1]} RPM for {FROZEN_S}s (stale tach, fan likely stopped);",
+                ),
+            )
         if self._declared:
             return self._pop_declared()
         if demand and fan1 == 0 and fan2 == 0:
@@ -328,15 +364,25 @@ class FanWatchdog:
             return self._dispatch(max_on)
         if self._declared:
             return self._pop_declared()
-        zero = [i for i in (0, 1) if self._zero_since[i] is not None
-                and now - self._zero_since[i] >= ONE_FAN_ZERO_S]
+        zero = [
+            i
+            for i in (0, 1)
+            if self._zero_since[i] is not None
+            and now - self._zero_since[i] >= ONE_FAN_ZERO_S
+        ]
         if zero and self._gate(now, zero, "one fan at 0 RPM"):
             self._zero_since = [None, None]
             who = " and ".join(str(i + 1) for i in zero)
-            self._event(f"ACT one fan stalled: fan {who} at 0 RPM for {ONE_FAN_ZERO_S:.0f}s")
-            return self._dispatch(max_on, lambda msg: msg.replace(
-                "Fans were stalled at 0 RPM;",
-                f"Fan {who} stuck at 0 RPM for {ONE_FAN_ZERO_S:.0f}s while the curve asks for cooling;"))
+            self._event(
+                f"ACT one fan stalled: fan {who} at 0 RPM for {ONE_FAN_ZERO_S:.0f}s"
+            )
+            return self._dispatch(
+                max_on,
+                lambda msg: msg.replace(
+                    "Fans were stalled at 0 RPM;",
+                    f"Fan {who} stuck at 0 RPM for {ONE_FAN_ZERO_S:.0f}s while the curve asks for cooling;",
+                ),
+            )
         if self._declared:
             return self._pop_declared()
         if not frozen and not self._stall_ticks and not zero:
@@ -354,19 +400,22 @@ class FanWatchdog:
                 self.fault = None
                 self._event("FAULT cleared: fan reading alive again")
 
-    def _dispatch(self, max_on: bool, fix=lambda msg: msg, *,
-                  cancel_if_max_fans_drop=False) -> str | None:
+    def _dispatch(
+        self, max_on: bool, fix=lambda msg: msg, *, cancel_if_max_fans_drop=False
+    ) -> str | None:
         """Act on a decided recovery: inline, or handed to tick()'s defer."""
         if self._defer is None:
             return fix(self._recover(max_on))
+
         def recover():
             # Re-read Max Fans on the worker: a profile apply queued after this
             # decision may have changed it, and max_on would be stale. A dropped
             # curve is only actionable if it is still dropped and Max Fans is
             # still on; a completed profile apply already handled that change.
             live_max_on = self._max_fans_on()
-            if cancel_if_max_fans_drop and (not live_max_on or
-                                            self.sensors.custom_fan_curve_enabled() is not False):
+            if cancel_if_max_fans_drop and (
+                not live_max_on or self.sensors.custom_fan_curve_enabled() is not False
+            ):
                 return "Max Fans recovery skipped; state changed before the worker ran"
             return fix(self._recover(live_max_on))
 
@@ -387,8 +436,9 @@ class FanWatchdog:
         if msg and self.trace is not None and self._tick is not None:
             now = self._clock()
             try:
-                self.trace.record(now, dict(self._tick, events=[f"RESULT {msg}"]),
-                                  self._ages(now))
+                self.trace.record(
+                    now, dict(self._tick, events=[f"RESULT {msg}"]), self._ages(now)
+                )
             except Exception:  # noqa: BLE001
                 pass
 
@@ -397,8 +447,14 @@ class FanWatchdog:
         t = self._tick
         temp = t["temp"] = self.sensors.get_apu_temp()
         fan1, fan2 = t["rpm"] = self.sensors.get_fan_speeds()
-        if temp is None or fan1 is None or fan2 is None or temp < AUTO_STALL_TEMP_C \
-                or fan1 != 0 or fan2 != 0:
+        if (
+            temp is None
+            or fan1 is None
+            or fan2 is None
+            or temp < AUTO_STALL_TEMP_C
+            or fan1 != 0
+            or fan2 != 0
+        ):
             # Any spin, a cool APU or a sensor dropout breaks the streak.
             self._auto_zero_since = None
             self._holding = False
@@ -407,20 +463,35 @@ class FanWatchdog:
             self._auto_zero_since = now
         stalled_s = now - self._auto_zero_since
         t["stall"] = int(stalled_s)
-        if stalled_s < AUTO_STALL_S or not self._ready("auto stall", self._last_auto, AUTO_RETRY_S):
+        if stalled_s < AUTO_STALL_S or not self._ready(
+            "auto stall", self._last_auto, AUTO_RETRY_S
+        ):
             return None
         self._last_auto = now
         self._auto_zero_since = None
-        self._event(f"ACT auto stall: both fans 0 RPM at {temp:.0f} C for {stalled_s:.0f}s")
+        self._event(
+            f"ACT auto stall: both fans 0 RPM at {temp:.0f} C for {stalled_s:.0f}s"
+        )
+        max_on = self._max_fans_on()
+        curve_enabled = self.sensors.custom_fan_curve_enabled()
         if self._defer is None:
-            return self._recover_auto(temp)
-        return self._defer_run(lambda: self._recover_auto(temp))
+            return self._recover_auto(temp, max_on, curve_enabled)
+        return self._defer_run(lambda: self._recover_auto(temp, max_on, curve_enabled))
 
     @authority.serialized
-    def _recover_auto(self, temp) -> str:
+    def _recover_auto(self, temp, max_on=None, curve_enabled=None) -> str:
         """Rewrite the platform profile, then put the active profile's TDP back
         (the rewrite dropped it to the firmware's limits) and reset the curve
-        (`tdp --set` re-applies z13ctl's last stored curve). No profile hooks."""
+        (`tdp --set` re-applies z13ctl's last stored curve). No profile hooks.
+
+        The decision was made on an earlier tick; a profile apply queued since
+        then can have turned Max Fans on or enabled a custom curve, so re-read
+        both and skip rather than overwrite a newer state."""
+        if max_on is not None and (
+            self._max_fans_on() != max_on
+            or self.sensors.custom_fan_curve_enabled() != curve_enabled
+        ):
+            return "Auto fan recovery skipped; fan state changed before it ran"
         named = authority.recover_performance()
         if named is not None:
             return named
@@ -452,7 +523,7 @@ class FanWatchdog:
         problems = []
 
         def restore(name):
-            fn = getattr(self.fans, name, None)   # optional on a fans object
+            fn = getattr(self.fans, name, None)  # optional on a fans object
             if fn is None:
                 return
             try:
@@ -520,6 +591,7 @@ class FanWatchdogRunner:
 # Fan trace: what the watchdog saw, for troubleshooting (both frontends)
 # ----------------------------------------------------------------------
 
+
 class FanTrace:
     """Writes the watchdog's readings to a log, at a rate that stays small.
 
@@ -542,9 +614,9 @@ class FanTrace:
 
     def __init__(self, logger, sensors=None, wall=time.time):
         self.log = logger
-        self.sensors = sensors      # for the extra reads (ACPI fan, profile)
+        self.sensors = sensors  # for the extra reads (ACPI fan, profile)
         self._wall = wall
-        self._history = collections.deque()   # [mono, line, written], last HISTORY_S
+        self._history = collections.deque()  # [mono, line, written], last HISTORY_S
         self._last_sample = float("-inf")
         self._after_until = float("-inf")
 
@@ -555,26 +627,38 @@ class FanTrace:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         logger = logging.getLogger(f"z13.fans.trace.{name}")
         logger.setLevel(logging.INFO)
-        logger.propagate = False   # its own file; never floods app.log
+        logger.propagate = False  # its own file; never floods app.log
         for h in list(logger.handlers):
             logger.removeHandler(h)
             h.close()
         try:
-            handler = _OwnedRotatingHandler(path, owner, maxBytes=TRACE_MAX_BYTES,
-                                            backupCount=TRACE_BACKUPS, encoding="utf-8")
-        except OSError as e:   # e.g. a symlink planted at the path: refuse, don't follow
-            print(f"z13 fan trace: refusing to open {path}: {e}; file logging disabled",
-                  file=sys.stderr)
+            handler = _OwnedRotatingHandler(
+                path,
+                owner,
+                maxBytes=TRACE_MAX_BYTES,
+                backupCount=TRACE_BACKUPS,
+                encoding="utf-8",
+            )
+        except OSError as e:  # e.g. a symlink planted at the path: refuse, don't follow
+            print(
+                f"z13 fan trace: refusing to open {path}: {e}; file logging disabled",
+                file=sys.stderr,
+            )
             handler = logging.NullHandler()
         handler.setFormatter(logging.Formatter("%(message)s"))
         logger.addHandler(handler)
         trace = cls(logger, sensors)
-        logger.info("%s --- fan trace started (%s, pid %d)", trace._stamp(), name, os.getpid())
+        logger.info(
+            "%s --- fan trace started (%s, pid %d)", trace._stamp(), name, os.getpid()
+        )
         return trace
 
     def _stamp(self):
         w = self._wall()
-        return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(w)) + f".{int(w * 10) % 10}"
+        return (
+            time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(w))
+            + f".{int(w * 10) % 10}"
+        )
 
     def _extra(self, method):
         fn = getattr(self.sensors, method, None)
@@ -588,13 +672,15 @@ class FanTrace:
         enabled = tick.get("enabled")
         temp = tick.get("temp")
         same = "/".join("-" if a is None else f"{a:.0f}" for a in ages)
-        return (f"{self._stamp()} temp={'-' if temp is None else f'{temp:.1f}'}"
-                f" rpm={_v(rpm[0])}/{_v(rpm[1])} acpi={_v(self._extra('get_acpi_fan_rpm'))}"
-                f" curve={ {True: 'custom', False: 'auto'}.get(enabled, '?') }"
-                f" want={_v(tick.get('want'))} max={'on' if tick.get('max_on') else 'off'}"
-                f" prof={_v(self._extra('get_platform_profile'))}"
-                f" stall={tick.get('stall', 0)} same={same}s"
-                + (f" FAULT={tick['fault']!r}" if tick.get("fault") else ""))
+        return (
+            f"{self._stamp()} temp={'-' if temp is None else f'{temp:.1f}'}"
+            f" rpm={_v(rpm[0])}/{_v(rpm[1])} acpi={_v(self._extra('get_acpi_fan_rpm'))}"
+            f" curve={ {True: 'custom', False: 'auto'}.get(enabled, '?') }"
+            f" want={_v(tick.get('want'))} max={'on' if tick.get('max_on') else 'off'}"
+            f" prof={_v(self._extra('get_platform_profile'))}"
+            f" stall={tick.get('stall', 0)} same={same}s"
+            + (f" FAULT={tick['fault']!r}" if tick.get("fault") else "")
+        )
 
     def record(self, now, tick, ages):
         text = self.line(tick, ages)
@@ -604,8 +690,9 @@ class FanTrace:
             self._history.popleft()
         events = tick.get("events") or []
         rpm = tick.get("rpm") or (None, None)
-        suspect = any(a is not None and a >= self.SUSPECT_S and r
-                      for a, r in zip(ages, rpm))
+        suspect = any(
+            a is not None and a >= self.SUSPECT_S and r for a, r in zip(ages, rpm)
+        )
         if events:
             for e in events:
                 self.log.info("%s *** %s", self._stamp(), e)
@@ -614,7 +701,12 @@ class FanTrace:
                     self.log.info("< %s", old[1])
                     old[2] = True
             self._after_until = now + self.AFTER_S
-        if events or suspect or now <= self._after_until or now - self._last_sample >= self.SAMPLE_S:
+        if (
+            events
+            or suspect
+            or now <= self._after_until
+            or now - self._last_sample >= self.SAMPLE_S
+        ):
             self.log.info("%s", text)
             self._last_sample = now
             entry[2] = True
@@ -632,7 +724,7 @@ class _OwnedRotatingHandler(logging.handlers.RotatingFileHandler):
     """RotatingFileHandler that hands each file it creates to `owner`."""
 
     def __init__(self, path, owner, **kw):
-        self._owner = owner          # set before super() opens the first file
+        self._owner = owner  # set before super() opens the first file
         super().__init__(path, **kw)
 
     def _open(self):
@@ -642,16 +734,25 @@ class _OwnedRotatingHandler(logging.handlers.RotatingFileHandler):
         planted symlink must not be followed: O_NOFOLLOW makes that an ELOOP, which
         is raised (fail closed, no fallback to a path open). Mode, owner and the
         regular-file and single-link checks all act on the fd. Created 0600 from the first byte."""
-        flags = (os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW
-                 | os.O_CLOEXEC | os.O_NONBLOCK)   # NONBLOCK: a FIFO can't hang the open
+        flags = (
+            os.O_WRONLY
+            | os.O_APPEND
+            | os.O_CREAT
+            | os.O_NOFOLLOW
+            | os.O_CLOEXEC
+            | os.O_NONBLOCK
+        )  # NONBLOCK: a FIFO can't hang the open
         fd = os.open(self.baseFilename, flags, 0o600)
         try:
             st = os.fstat(fd)
             if not stat.S_ISREG(st.st_mode):
                 raise OSError(errno.EINVAL, "not a regular file", self.baseFilename)
-            if st.st_nlink != 1:   # a hard link would let us append to/chown another file
-                raise OSError(errno.EINVAL, "log file has multiple hard links",
-                              self.baseFilename)
+            if (
+                st.st_nlink != 1
+            ):  # a hard link would let us append to/chown another file
+                raise OSError(
+                    errno.EINVAL, "log file has multiple hard links", self.baseFilename
+                )
             try:
                 os.fchmod(fd, 0o600)
             except OSError:
