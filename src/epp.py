@@ -1,6 +1,12 @@
+import glob
 from typing import Optional, Sequence
 
 EPP_CHOICES = ("power", "balance_power", "balance_performance", "performance")
+EPP_LABELS = {"power": "Power", "balance_power": "Balance power",
+              "balance_performance": "Balance performance", "performance": "Performance"}
+# Both the read and the write use the cpufreq policy directories (one per policy, which
+# on amd-pstate is usually one per CPU but is not guaranteed to be), never cpu{n}.
+EPP_POLICY_GLOB = "/sys/devices/system/cpu/cpufreq/policy*/energy_performance_preference"
 EPP_PATH = "/sys/devices/system/cpu/cpu{n}/cpufreq/energy_performance_preference"
 
 
@@ -48,3 +54,44 @@ def epp_paths(cpu_count: int) -> list:
         EPP_PATH.format(n=i)
         for i in range(cpu_count)
     ]
+
+
+def policy_paths(pattern: str = EPP_POLICY_GLOB) -> list:
+    """The EPP node of every cpufreq policy present, in policy-number order."""
+    def key(path):
+        digits = "".join(c for c in path.rsplit("policy", 1)[-1].split("/")[0] if c.isdigit())
+        return int(digits) if digits else -1
+    return sorted(glob.glob(pattern), key=key)
+
+
+# ----------------------------------------------------------------------
+# CPU Boost combo, shared by the dashboard and the Fans window. Duck-typed on the
+# QComboBox methods used, so it needs no Qt import and tests can drive it.
+# ----------------------------------------------------------------------
+
+def fill_combo(combo, choices) -> None:
+    """"Unchanged" (no override) first, then one labelled item per choice."""
+    combo.addItem("Unchanged", "")
+    for key in choices:
+        combo.addItem(EPP_LABELS.get(key, key), key)
+
+
+def show_profile_epp(combo, profile) -> None:
+    """Select the profile's stored EPP without emitting a change."""
+    combo.blockSignals(True)
+    try:
+        combo.setCurrentIndex(max(0, combo.findData(profile.get("epp") or "")))
+    finally:
+        combo.blockSignals(False)
+
+
+def now_text(live) -> str:
+    """The "Now: ..." readout for the value the CPUs report (None = unreadable)."""
+    return f"Now: {EPP_LABELS.get(live, live) or 'unavailable'}"
+
+
+def profile_with_epp(profile, combo) -> dict:
+    """A copy of `profile` carrying the combo's choice ("Unchanged" -> None)."""
+    out = dict(profile)
+    out["epp"] = combo.currentData() or None
+    return out

@@ -29,6 +29,7 @@ from hardware_controller import HardwareController
 from sensor_reader import SensorReader
 from config_manager import ConfigManager
 import app_log
+import epp
 import host
 import install_record
 import max_fans_state
@@ -38,7 +39,7 @@ from fan_watchdog import FanTrace, FanWatchdog, FanWatchdogRunner
 from screen_brightness import ScreenBrightness, MIN_PERCENT
 from apply_worker import ApplyWorker
 from profile_control import ProfileControl
-from fans_window import FansWindow, EPP_LABELS
+from fans_window import FansWindow
 from updates_dialog import UpdatesDialog, UpdateCheckThread
 from theme import (STYLESHEET, ModeTile, Panel, pill, tip, ECO, STANDARD, TURBO, CUSTOM,
                    ACCENT_FOR_BASE, BORDER)
@@ -510,25 +511,20 @@ class DashboardUI(QMainWindow):
         row = QHBoxLayout()
         row.addWidget(QLabel("CPU Boost"))
         self.epp_combo = QComboBox()
-        self.epp_combo.addItem("Unchanged", "")
-        for key in self.controller.get_epp_choices():
-            self.epp_combo.addItem(EPP_LABELS.get(key, key), key)
+        epp.fill_combo(self.epp_combo, self.controller.get_epp_choices())
         self.epp_combo.currentIndexChanged.connect(self._on_epp)
         row.addWidget(self.epp_combo, 1)
+        self.epp_now = QLabel("")
+        self.epp_now.setObjectName("dim")
+        row.addWidget(self.epp_now)
         self.perf.body.addLayout(row)
 
     def _refresh_epp_ui(self, profile):
-        self.epp_combo.blockSignals(True)
-        try:
-            index = self.epp_combo.findData(profile.get("epp") or "")
-            self.epp_combo.setCurrentIndex(max(0, index))
-        finally:
-            self.epp_combo.blockSignals(False)
+        epp.show_profile_epp(self.epp_combo, profile)
+        self.epp_now.setText(epp.now_text(self.controller.get_epp()))
 
     def _on_epp(self, _index):
-        profile = dict(self.control.shown())
-        profile["epp"] = self.epp_combo.currentData() or None
-        self.control.save(profile, "epp")
+        self.control.save(epp.profile_with_epp(self.control.shown(), self.epp_combo), "epp")
 
     def _refresh_profile_ui(self):
         active = self.control.shown()       # the clicked profile lights up at once

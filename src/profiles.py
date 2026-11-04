@@ -77,7 +77,7 @@ LIGHTING_COLORS = ("red", "orange", "yellow", "green", "cyan", "blue", "purple",
 # CPU Boost: amd-pstate energy_performance_preference, display order. Same list as
 # src/epp.py (the app's copy); kept here too because z13-profile runs without it.
 EPP_CHOICES = ("power", "balance_power", "balance_performance", "performance")
-EPP_SYSFS = "/sys/devices/system/cpu/cpufreq/policy{n}/energy_performance_preference"
+EPP_SYSFS_GLOB = "/sys/devices/system/cpu/cpufreq/policy*/energy_performance_preference"
 
 # Max Fans = every point at 100%. Must match the desktop app and the Decky plugin.
 MAX_FAN_TEMPS = (20, 30, 40, 50, 60, 70, 80, 90)   # Low anchor; firmware response still needs verification.
@@ -940,31 +940,28 @@ def apply_undervolt(profile, *, z13ctl=Z13CTL):
              if "ryzen_smu" in out else out)]
 
 
-def epp_argv(value, cpu_count):
+def epp_argv(value):
     """Host command that writes one EPP value to every cpufreq policy node.
 
     z13ctl has no EPP command, so this goes through host.run like the rest of the
     host seam. install.sh installs z13-helper-epp.conf to grant the users group
     write access to these policy nodes; no runtime elevation is needed.
-    The value is checked against EPP_CHOICES and travels as an argv item
-    (never spliced into the script). Offline CPUs have no node and are skipped; the
-    script stops at the first write that fails and fails when no node was written
-    (e.g. a kernel without amd-pstate), so that never reads as success.
+    The policy directories are globbed on the host (a policy is not a CPU number, so
+    nothing assumes policy{n} == cpu{n}). The value is checked against EPP_CHOICES
+    and travels as an argv item (never spliced into the script). The script stops
+    at the first write that fails and fails when no node matched (e.g. a kernel
+    without amd-pstate), so that never reads as success.
     """
     if value not in EPP_CHOICES:
         raise ValueError(f"epp must be one of {EPP_CHOICES}")
-    paths = [EPP_SYSFS.format(n=i) for i in range(cpu_count)]
-    script = ('v=$1; shift; n=0; for f in "$@"; do [ -e "$f" ] || continue; '
+    script = (f'v=$1; n=0; for f in {EPP_SYSFS_GLOB}; do [ -e "$f" ] || continue; '
               'printf %s "$v" > "$f" || exit 1; n=$((n+1)); done; [ "$n" -gt 0 ]')
-    return ["sh", "-c", script, "sh", value, *paths]
+    return ["sh", "-c", script, "sh", value]
 
 
-def write_epp(value, *, cpu_count=None):
-    """(ok, message): write `value` to every CPU's energy_performance_preference."""
-    n = cpu_count if cpu_count is not None else (os.cpu_count() or 0)
-    if n < 1:
-        return False, "no CPUs found"
-    rc, out, timed_out = host.run(epp_argv(value, n), timeout=Z13CTL_WRITE_TIMEOUT_S)
+def write_epp(value):
+    """(ok, message): write `value` to every cpufreq policy's energy_performance_preference."""
+    rc, out, timed_out = host.run(epp_argv(value), timeout=Z13CTL_WRITE_TIMEOUT_S)
     if rc == 0:
         return True, value
     if timed_out:
@@ -972,13 +969,13 @@ def write_epp(value, *, cpu_count=None):
     return False, out or f"rc={rc}"
 
 
-def apply_epp(profile, *, cpu_count=None):
+def apply_epp(profile):
     """The CPU Boost step of apply(): [] when the profile sets no EPP (the firmware
     profile's choice stands), else one (step, ok, message)."""
     value = profile.get("epp")
     if value is None:
         return []
-    ok, message = write_epp(value, cpu_count=cpu_count)
+    ok, message = write_epp(value)
     return [("cpu boost", ok, message)]
 
 

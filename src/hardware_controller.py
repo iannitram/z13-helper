@@ -20,8 +20,8 @@ Z13CTL_WRITE_TIMEOUT_S = host.Z13CTL_WRITE_TIMEOUT_S
 # z13ctl --device targets for the RGB/brightness commands.
 _LIGHTING_DEVICES = ("keyboard", "lightbar")
 
-# amd-pstate EPP: the choices cpu0 accepts (the rest of the CPUs share them).
-_EPP_AVAILABLE = "/sys/devices/system/cpu/cpu0/cpufreq/energy_performance_available_preferences"
+# amd-pstate EPP: the choices policy0 accepts (the other policies share them).
+_EPP_AVAILABLE = "/sys/devices/system/cpu/cpufreq/policy0/energy_performance_available_preferences"
 
 
 def read_epp_values(paths):
@@ -209,7 +209,7 @@ class HardwareController:
 
     def get_epp(self):
         """The EPP every CPU reports: a choice, "mixed", or None when unreadable."""
-        return epp.summarize_epp(read_epp_values(epp.epp_paths(os.cpu_count() or 0)))
+        return epp.summarize_epp(read_epp_values(epp.policy_paths()))
 
     def get_epp_choices(self) -> list:
         """The EPP values this kernel offers; all of them when the list is unreadable."""
