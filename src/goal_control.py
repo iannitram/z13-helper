@@ -16,8 +16,10 @@ fps (frame-rate target, #126), max (full fans, top TDP; Max wins) and custom
 (the fixed profile; this function never changes anything).
 """
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Optional
+
+from power_range import DEFAULT_RANGES
 
 GOALS = ("quiet", "comfort", "fps", "max", "custom")
 
@@ -49,14 +51,16 @@ class Readings:
 
 @dataclass(frozen=True)
 class Setpoints:
-    tdp_w: int
+    spl_w: int     # PL1, sustained
+    sppt_w: int    # PL2, slow boost
+    fppt_w: int    # PL3, fast boost
     fan_pct: int   # the curve's ceiling; see curve_points()
 
 
 @dataclass(frozen=True)
 class Limits:
-    tdp_min_w: int = 5
-    tdp_max_w: int = 80
+    """Per-rail kernel ranges (``power_range.detect_ranges()``) and the APU cap."""
+    ranges: dict = field(default_factory=lambda: dict(DEFAULT_RANGES))
     apu_temp_limit_c: float = 95.0   # above this, shed power whatever the goal
 
 
@@ -75,8 +79,14 @@ class Decision:
 
 
 def curve_points(fan_pct, temps=CURVE_TEMPS):
-    """The 8-point curve for a ceiling: ramps from the minimum to ``fan_pct``."""
+    """The 8-point curve for a ceiling.
+
+    Full speed (100) is the Max Fans curve: 100% at every anchor. Lower ceilings
+    ramp from the minimum up to the ceiling.
+    """
     fan_pct = max(FAN_MIN_PCT, min(FAN_MAX_PCT, int(fan_pct)))
+    if fan_pct >= FAN_MAX_PCT:
+        return [(t, FAN_MAX_PCT) for t in temps]
     n = len(temps) - 1
     return [(t, round(FAN_MIN_PCT + (fan_pct - FAN_MIN_PCT) * i / n))
             for i, t in enumerate(temps)]
@@ -86,39 +96,63 @@ def _clamp(v, lo, hi):
     return max(lo, min(hi, v))
 
 
-def _move(cur, want, step, lo, hi):
-    return int(_clamp(cur + _clamp(want - cur, -step, step), lo, hi))
+def _move_fan(cur, want):
+    return int(_clamp(cur + _clamp(want - cur, -MAX_FAN_STEP_PCT, MAX_FAN_STEP_PCT),
+                      FAN_MIN_PCT, FAN_MAX_PCT))
+
+
+def _move_power(cur, direction, limits):
+    """Move all three rails ``direction`` steps, inside each rail's own range and
+    keeping SPL <= sPPT <= fPPT."""
+    rails = []
+    for rail, v in zip(("pl1", "pl2", "pl3"), (cur.spl_w, cur.sppt_w, cur.fppt_w)):
+        lo, hi = limits.ranges[rail]
+        rails.append(int(_clamp(v + direction * MAX_TDP_STEP_W, lo, hi)))
+    spl, sppt, fppt = rails
+    sppt = max(sppt, spl)
+    fppt = max(fppt, sppt)
+    sppt = min(sppt, fppt)
+    spl = min(spl, sppt)
+    return spl, sppt, fppt
+
+
+def _needed(goal):
+    return {"quiet": "fan_rpm", "comfort": "comfort_temp_c", "fps": "fps"}.get(goal.kind)
 
 
 def _wanted(goal, r, cur, lim):
-    """(tdp_w, fan_pct, reason) the goal would like now, before step limits."""
-    tdp, fan = cur.tdp_w, cur.fan_pct
+    """(power direction -1/0/+1, fan_pct, reason) the goal wants; steps applied later."""
+    fan = cur.fan_pct
     t = goal.target
     if r.apu_temp_c is not None and r.apu_temp_c >= lim.apu_temp_limit_c:
-        return tdp - MAX_TDP_STEP_W, FAN_MAX_PCT, "over APU temperature limit"
-    if goal.kind == "max":
-        return lim.tdp_max_w, FAN_MAX_PCT, "max"
-    if goal.kind == "quiet" and t is not None and r.fan_rpm is not None:
+        return -1, FAN_MAX_PCT, "over APU temperature limit"
+    if goal.kind == "quiet":
         if r.fan_rpm > t:
             if fan > FAN_MIN_PCT:
-                return tdp, fan - MAX_FAN_STEP_PCT, "fans above ceiling: lower curve"
-            return tdp - MAX_TDP_STEP_W, fan, "fans above ceiling at curve floor: lower TDP"
+                return 0, fan - MAX_FAN_STEP_PCT, "fans above ceiling: lower curve"
+            return -1, fan, "fans above ceiling at curve floor: lower TDP"
         if r.fan_rpm < t - RPM_HYSTERESIS:
-            return tdp + MAX_TDP_STEP_W, fan + MAX_FAN_STEP_PCT, "headroom under ceiling"
-        return tdp, fan, "within quiet band"
-    if goal.kind == "comfort" and t is not None and r.comfort_temp_c is not None:
+            return 1, fan + MAX_FAN_STEP_PCT, "headroom under ceiling"
+        return 0, fan, "within quiet band"
+    if goal.kind == "comfort":
         if r.comfort_temp_c > t + TEMP_HYSTERESIS_C:
-            return tdp - MAX_TDP_STEP_W, fan + MAX_FAN_STEP_PCT, "too warm: lower TDP, raise fans"
+            return -1, fan + MAX_FAN_STEP_PCT, "too warm: lower TDP, raise fans"
         if r.comfort_temp_c < t - TEMP_HYSTERESIS_C:
-            return tdp + MAX_TDP_STEP_W, fan - MAX_FAN_STEP_PCT, "cool enough: raise TDP"
-        return tdp, fan, "within comfort band"
-    if goal.kind == "fps" and t is not None and r.fps is not None:
-        if r.fps < t - FPS_HYSTERESIS:
-            return tdp + MAX_TDP_STEP_W, fan + MAX_FAN_STEP_PCT, "below target fps"
-        if r.fps > t + FPS_HYSTERESIS and tdp > FPS_TDP_FLOOR_W:
-            return tdp - MAX_TDP_STEP_W, fan, "above target fps: save power"
-        return tdp, fan, "within fps band"
-    return tdp, fan, "no change (custom goal or missing reading)"
+            return 1, fan - MAX_FAN_STEP_PCT, "cool enough: raise TDP"
+        return 0, fan, "within comfort band"
+    # fps
+    if r.fps < t - FPS_HYSTERESIS:
+        return 1, fan + MAX_FAN_STEP_PCT, "below target fps"
+    if r.fps > t + FPS_HYSTERESIS and cur.spl_w > FPS_TDP_FLOOR_W:
+        return -1, fan, "above target fps: save power"
+    return 0, fan, "within fps band"
+
+
+def _result(current, state, now, spl, sppt, fppt, fan, reason):
+    new = Setpoints(spl, sppt, fppt, fan)
+    if new == current:
+        return Decision(current, False, state, reason)
+    return Decision(new, True, replace(state, last_change_at=now), reason)
 
 
 def decide(goal, readings, current, state=State(), now=0.0, limits=Limits()):
@@ -127,19 +161,24 @@ def decide(goal, readings, current, state=State(), now=0.0, limits=Limits()):
         raise ValueError(f"unknown goal {goal.kind!r}")
     if goal.kind == "custom":
         return Decision(current, False, state, "custom: fixed profile")
-    over_limit = (readings.apu_temp_c is not None
-                  and readings.apu_temp_c >= limits.apu_temp_limit_c)
     dwelling = (state.last_change_at is not None
                 and now - state.last_change_at < MIN_DWELL_S)
-    if dwelling and not over_limit:
+    over_limit = (readings.apu_temp_c is not None
+                  and readings.apu_temp_c >= limits.apu_temp_limit_c)
+    if goal.kind == "max":
+        if dwelling:
+            # Max wins: full fans at once; power waits out the dwell and the
+            # dwell clock is not restarted by this fan-only change.
+            new = replace(current, fan_pct=FAN_MAX_PCT)
+            return Decision(new, new != current, state, "max: full fans, power in dwell")
+        spl, sppt, fppt = _move_power(current, -1 if over_limit else 1, limits)
+        return _result(current, state, now, spl, sppt, fppt, FAN_MAX_PCT,
+                       "over APU temperature limit" if over_limit else "max")
+    need = _needed(goal)
+    if goal.target is None or getattr(readings, need) is None:
+        return Decision(current, False, state, "no change: missing reading")
+    if dwelling:
         return Decision(current, False, state, "minimum dwell")
-    tdp, fan, reason = _wanted(goal, readings, current, limits)
-    step = MAX_TDP_STEP_W
-    new = Setpoints(
-        _move(current.tdp_w, tdp, step, limits.tdp_min_w, limits.tdp_max_w),
-        _move(current.fan_pct, fan, MAX_FAN_STEP_PCT, FAN_MIN_PCT, FAN_MAX_PCT)
-        if goal.kind != "max" else FAN_MAX_PCT,
-    )
-    if new == current:
-        return Decision(current, False, state, reason)
-    return Decision(new, True, replace(state, last_change_at=now), reason)
+    direction, fan, reason = _wanted(goal, readings, current, limits)
+    spl, sppt, fppt = _move_power(current, direction, limits)
+    return _result(current, state, now, spl, sppt, fppt, _move_fan(current.fan_pct, fan), reason)
