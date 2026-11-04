@@ -273,7 +273,17 @@ class CrashReporter:
         )
         report["traceback"] = (Path(fatal_text).read_text() if fatal_text else
                                "".join(traceback.format_exception(type(exc), exc, tb)))
-        identities = {"home": str(Path.home()), "hostname": socket.gethostname(), "user": getpass.getuser()}
+        # A uid with no passwd entry and no USER/LOGNAME makes this raise; the report
+        # must still go out, just without that identifier to scrub.
+        try:
+            login = getpass.getuser()
+        except Exception:  # noqa: BLE001 -- a failed lookup only loses a scrub target
+            login = None
+        try:
+            home = str(Path.home())
+        except Exception:  # noqa: BLE001 -- a failed lookup only loses a scrub target
+            home = ""
+        identities = {"home": home, "hostname": socket.gethostname(), "user": login}
         try:
             account = pwd.getpwuid(os.getuid())
         except KeyError:

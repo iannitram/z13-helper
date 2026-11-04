@@ -31,6 +31,8 @@ PL1_SAFE_MAX = 75
 DEFAULT_TDP = (70, 86, 86)
 UV_MIN, UV_MAX = -40, 0
 BASE_LABELS = [("quiet", "Quiet (Silent)"), ("balanced", "Balanced"), ("performance", "Performance (Turbo)")]
+EPP_LABELS = {"power": "Power", "balance_power": "Balance power",
+              "balance_performance": "Balance performance", "performance": "Performance"}
 
 
 class _SliderRow(QWidget):
@@ -193,6 +195,21 @@ class FansWindow(QWidget):
         v.addWidget(tip("The firmware mode underneath (asus-wmi platform_profile). "
                         "G-Helper's \"Windows Power Mode\" slot."))
 
+        t3 = QLabel("CPU Boost")
+        t3.setObjectName("title")
+        v.addWidget(t3)
+        self.epp_combo = QComboBox()
+        self.epp_combo.addItem("Unchanged", "")
+        for key in self.controller.get_epp_choices():
+            self.epp_combo.addItem(EPP_LABELS.get(key, key), key)
+        self.epp_combo.currentIndexChanged.connect(self._on_epp)
+        v.addWidget(self.epp_combo)
+        self.epp_now = QLabel("")
+        self.epp_now.setObjectName("dim")
+        v.addWidget(self.epp_now)
+        v.addWidget(tip("amd-pstate energy_performance_preference on every CPU. Unchanged "
+                        "leaves it as the platform profile sets it."))
+
         t2 = QLabel("Power Limits")
         t2.setObjectName("title")
         v.addWidget(t2)
@@ -273,6 +290,13 @@ class FansWindow(QWidget):
             self.base_combo.setCurrentIndex(max(0, idx))
             self.base_combo.blockSignals(False)
 
+            epp_idx = self.epp_combo.findData(p.get("epp") or "")
+            self.epp_combo.blockSignals(True)
+            self.epp_combo.setCurrentIndex(max(0, epp_idx))
+            self.epp_combo.blockSignals(False)
+            live = self.controller.get_epp()
+            self.epp_now.setText(f"Now: {EPP_LABELS.get(live, live) or 'unavailable'}")
+
             tdp = p.get("tdp")
             self.apply_power.setChecked(bool(tdp))
             note = ""
@@ -329,6 +353,13 @@ class FansWindow(QWidget):
         p = self._profile()
         p["base"] = self.base_combo.currentData()
         self.control.save(p, "base")
+
+    def _on_epp(self, _idx):
+        if self._loading:
+            return
+        p = self._profile()
+        p["epp"] = self.epp_combo.currentData() or None
+        self.control.save(p, "epp")
 
     def _on_tdp_moved(self, _val):
         if self._loading:
