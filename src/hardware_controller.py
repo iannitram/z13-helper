@@ -3,6 +3,7 @@ import re
 import logging
 
 import host
+import epp
 import profiles
 
 logger = logging.getLogger(__name__)
@@ -18,6 +19,24 @@ Z13CTL_WRITE_TIMEOUT_S = host.Z13CTL_WRITE_TIMEOUT_S
 
 # z13ctl --device targets for the RGB/brightness commands.
 _LIGHTING_DEVICES = ("keyboard", "lightbar")
+
+# amd-pstate EPP: the choices cpu0 accepts (the rest of the CPUs share them).
+_EPP_AVAILABLE = "/sys/devices/system/cpu/cpu0/cpufreq/energy_performance_available_preferences"
+
+
+def read_epp_values(paths):
+    """The raw EPP text of each CPU node, for epp.summarize_epp. Nodes that do not
+    exist (offline CPUs) are left out; an unreadable one gives None."""
+    values = []
+    for path in paths:
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path) as f:
+                values.append(f.read())
+        except OSError:
+            values.append(None)
+    return values
 
 
 class HardwareController:
@@ -177,7 +196,29 @@ class HardwareController:
         argv = profiles.lighting_argv(device, setting, brightness, self.z13ctl_path)
         return self._run_command(argv[1:], timeout=Z13CTL_WRITE_TIMEOUT_S)
 
+    # --- CPU Boost (amd-pstate EPP); host helper, not z13ctl ---
+
+    def set_epp(self, value: str):
+        """Writes one EPP value to every CPU (profiles.write_epp). RuntimeError on failure."""
+        ok, message = profiles.write_epp(value)
+        if not ok:
+            raise RuntimeError(f"CPU Boost not set: {message}")
+        return message
+
     # --- Read commands ---
+
+    def get_epp(self):
+        """The EPP every CPU reports: a choice, "mixed", or None when unreadable."""
+        return epp.summarize_epp(read_epp_values(epp.epp_paths(os.cpu_count() or 0)))
+
+    def get_epp_choices(self) -> list:
+        """The EPP values this kernel offers; all of them when the list is unreadable."""
+        try:
+            with open(_EPP_AVAILABLE) as f:
+                available = epp.parse_available(f.read())
+        except OSError:
+            return list(epp.EPP_CHOICES)
+        return available or list(epp.EPP_CHOICES)
 
     def get_profile(self) -> str:
         """Returns the active hardware profile name."""

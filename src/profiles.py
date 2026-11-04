@@ -17,6 +17,7 @@ Store: ~/.config/z13-helper/profiles.json
                    "undervolt": null | int (0..-40),
                    "brightness": null | "off"|"low"|"medium"|"high",
                    "battery_limit": null | 40..100,
+                   "epp": null | "power"|"balance_power"|"balance_performance"|"performance",
                    "hooks": {"enter": "", "exit": ""}}, ...]}
 
 null means "leave that subsystem to the firmware / don't touch it".
@@ -73,6 +74,10 @@ BRIGHTNESS_LEVELS = ("off", "low", "medium", "high")
 LIGHTING_DEVICES = ("keyboard", "lightbar")
 LIGHTING_MODES = ("static", "breathe", "cycle", "rainbow", "strobe")
 LIGHTING_COLORS = ("red", "orange", "yellow", "green", "cyan", "blue", "purple", "white")
+# CPU Boost: amd-pstate energy_performance_preference, display order. Same list as
+# src/epp.py (the app's copy); kept here too because z13-profile runs without it.
+EPP_CHOICES = ("power", "balance_power", "balance_performance", "performance")
+EPP_SYSFS = "/sys/devices/system/cpu/cpu{n}/cpufreq/energy_performance_preference"
 
 # Max Fans = every point at 100%. Must match the desktop app and the Decky plugin.
 MAX_FAN_TEMPS = (20, 30, 40, 50, 60, 70, 80, 90)   # Low anchor; firmware response still needs verification.
@@ -658,6 +663,9 @@ def validate(p):
     uv = p.get("undervolt")
     if uv is not None and (not isinstance(uv, int) or not -40 <= uv <= 0):
         raise ValueError("undervolt must be 0..-40")
+    epp_value = p.get("epp")
+    if epp_value is not None and epp_value not in EPP_CHOICES:
+        raise ValueError(f"epp must be null or one of {EPP_CHOICES}")
     if p.get("brightness") not in (None, *BRIGHTNESS_LEVELS):
         raise ValueError("bad brightness level")
     lighting = p.get("lighting", {})
@@ -932,6 +940,45 @@ def apply_undervolt(profile, *, z13ctl=Z13CTL):
              if "ryzen_smu" in out else out)]
 
 
+def epp_argv(value, cpu_count):
+    """Host command that writes one EPP value to every CPU's cpufreq node.
+
+    z13ctl has no EPP command, so this goes through host.run like the rest of the
+    host seam. The value is checked against EPP_CHOICES and travels as an argv item
+    (never spliced into the script). Offline CPUs have no node and are skipped; the
+    script stops at the first write that fails.
+    """
+    if value not in EPP_CHOICES:
+        raise ValueError(f"epp must be one of {EPP_CHOICES}")
+    paths = [EPP_SYSFS.format(n=i) for i in range(cpu_count)]
+    script = ('v=$1; shift; for f in "$@"; do [ -e "$f" ] || continue; '
+              'printf %s "$v" > "$f" || exit 1; done')
+    return ["sh", "-c", script, "sh", value, *paths]
+
+
+def write_epp(value, *, cpu_count=None):
+    """(ok, message): write `value` to every CPU's energy_performance_preference."""
+    n = cpu_count if cpu_count is not None else (os.cpu_count() or 0)
+    if n < 1:
+        return False, "no CPUs found"
+    rc, out, timed_out = host.run(epp_argv(value, n), timeout=Z13CTL_WRITE_TIMEOUT_S)
+    if rc == 0:
+        return True, value
+    if timed_out:
+        return False, f"EPP write timed out after {Z13CTL_WRITE_TIMEOUT_S} s"
+    return False, out or f"rc={rc}"
+
+
+def apply_epp(profile, *, cpu_count=None):
+    """The CPU Boost step of apply(): [] when the profile sets no EPP (the firmware
+    profile's choice stands), else one (step, ok, message)."""
+    value = profile.get("epp")
+    if value is None:
+        return []
+    ok, message = write_epp(value, cpu_count=cpu_count)
+    return [("cpu boost", ok, message)]
+
+
 def lighting_argv(device, setting, brightness, z13ctl=Z13CTL):
     """Build z13ctl's per-device lighting apply command from validated profile data."""
     if device not in LIGHTING_DEVICES:
@@ -1004,6 +1051,9 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
         # represents confirmed enforcement, so keep it suspended rather than
         # letting the watchdog issue another curve write against uncertain state.
         return results
+
+    # 2b. CPU Boost (EPP), after the platform-profile write, which can reset it.
+    results.extend(apply_epp(profile))
 
     # 3. TDP (None = whatever the firmware profile dictates, restored by the
     #    profile write above).
