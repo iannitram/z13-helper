@@ -3,8 +3,9 @@
 Measured 2026-11-04 on the Z13 (board `GZ302EA`, SteamOS with `steamos-manager 26.4.1-2`, kernel
 7.2.x valve). Method: `busctl introspect` on both buses, `steamosctl` getters (read-only), the
 installed device configs under `/usr/share/steamos-manager/`, and the D-Bus policy file. Valve's
-source repository was not read for this note: everything below is from the installed package, so
-treat behaviour not listed here as unknown.
+source repository was intentionally not read, a deliberate deviation from issue #29's "read
+Valve's contract" step: everything below is from the installed package, so treat behaviour not
+listed here as unknown.
 
 ## Two services, same bus name
 
