@@ -247,6 +247,27 @@ class SensorReader:
         got = self.get_gpu_temp_labeled()
         return got[0] if got else None
 
+    def get_comfort_candidates(self) -> dict[str, float | None]:
+        """°C readings that might track how warm the back of the tablet feels.
+
+        Phase 15e probe: Tctl (k10temp), acpitz, the NVMe composite, the
+        battery and the GPU edge. Read-only hwmon/power_supply files; no
+        Armoury power-limit file is touched (principle 5). A missing sensor reads None.
+        """
+        def hwmon_temp(name):
+            hwmon = self._find_hwmon(name)
+            raw = self._read_int(os.path.join(hwmon, "temp1_input")) if hwmon else None
+            return raw / 1000.0 if raw is not None else None
+
+        battery = self._read_int("/sys/class/power_supply/BAT0/temp")   # tenths of °C
+        return {
+            "tctl": hwmon_temp("k10temp"),
+            "acpitz": self.get_apu_temp(),
+            "nvme": hwmon_temp("nvme"),
+            "battery": battery / 10.0 if battery is not None else None,
+            "gpu_edge": self.get_gpu_temp(),
+        }
+
 
 if __name__ == "__main__":
     reader = SensorReader()
