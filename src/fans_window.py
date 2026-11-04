@@ -18,7 +18,8 @@ from PyQt6.QtWidgets import (
 
 import power_range
 import profiles
-from theme import ModeTile, Panel, tip, STANDARD, CUSTOM, ACCENT_FOR_BASE, TEXT_DIM
+from theme import (ModeTile, Panel, tip, STANDARD, CUSTOM, ACCENT_FOR_BASE, TEXT_DIM,
+                   TOUCH_MIN, TILE_SECONDARY)
 from fan_curve_widget import FanCurveWidget, DEFAULT_CURVE
 from profile_control import ProfileControl
 
@@ -85,7 +86,7 @@ class FansWindow(QWidget):
         self._loading = False
         # Per-rail kernel range from sysfs metadata (no live PPT reads, no z13ctl).
         self._ranges = power_range.detect_ranges()
-        self.resize(675, 560)
+        self.resize(900, 720)
         self._build()
         self.control.changed.connect(self.refresh)
         self.refresh()
@@ -101,16 +102,16 @@ class FansWindow(QWidget):
 
         # ---- left column (265 px) ----
         left = QWidget()
-        left.setFixedWidth(265)
+        left.setFixedWidth(340)
         lv = QVBoxLayout(left)
         lv.setContentsMargins(0, 0, 0, 0)
         lv.setSpacing(8)
 
         nav = QHBoxLayout()
-        self.btn_cpu = ModeTile("CPU", STANDARD, secondary=True, height=29)
-        self.btn_cpu.radius = 2
-        self.btn_adv = ModeTile("Advanced", STANDARD, secondary=True, height=29)
-        self.btn_adv.radius = 2
+        self.btn_cpu = ModeTile("CPU", STANDARD, secondary=True, height=TILE_SECONDARY)
+        self.btn_cpu.radius = 6
+        self.btn_adv = ModeTile("Advanced", STANDARD, secondary=True, height=TILE_SECONDARY)
+        self.btn_adv.radius = 6
         self.btn_cpu.clicked.connect(lambda: self._nav(0))
         self.btn_adv.clicked.connect(lambda: self._nav(1))
         nav.addWidget(self.btn_cpu)
@@ -140,7 +141,7 @@ class FansWindow(QWidget):
         self.combo.currentTextChanged.connect(self._on_combo)
         head.addWidget(self.combo)
         self.btn_add = QPushButton("＋")
-        self.btn_add.setFixedWidth(30)
+        self.btn_add.setFixedWidth(TOUCH_MIN)
         self.btn_add.setToolTip("Add a custom profile (copies the selected one)")
         self.btn_add.clicked.connect(self._add)
         self.btn_rename = QPushButton("Rename")

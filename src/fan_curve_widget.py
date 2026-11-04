@@ -21,8 +21,8 @@ from PyQt6.QtWidgets import QWidget, QSizePolicy
 TEMP_MIN, TEMP_MAX = 20, 110
 PCT_MIN, PCT_MAX = 0, 100
 POINTS = 8
-MARKER_R = 5          # G-Helper MarkerSize 10 → radius 5 px
-HIT_R = 12
+MARKER_R = 8          # touch-sized (G-Helper uses 5)
+HIT_R = 32            # Manhattan reach: a >= 44 px square around each point
 
 DEFAULT_CURVE = [[40, 20], [50, 35], [60, 55], [70, 75], [75, 90], [80, 100], [85, 100], [90, 100]]
 

@@ -2,6 +2,7 @@ import { DialogButton, Focusable, PanelSectionRow } from "@decky/ui";
 import { toaster } from "@decky/api";
 import { useEffect, useState } from "react";
 import { BrightnessLevel, isWriteTimeout, PowerState, setBrightness } from "../backend";
+import { ACTIVE_BG, SPACING, TOUCH_MIN_PX, WARN_COLOR } from "../tokens";
 
 const LEVELS: { level: BrightnessLevel; label: string }[] = [
   { level: "off", label: "Off" },
@@ -45,7 +46,7 @@ export function KeyboardBrightness({ state }: { state: PowerState | null }) {
   return (
     <>
       <PanelSectionRow>
-        <Focusable style={{ display: "flex", gap: "6px" }} flow-children="horizontal">
+        <Focusable style={{ display: "flex", gap: `${SPACING.sm}px` }} flow-children="horizontal">
           {LEVELS.map(({ level, label }) => (
             <DialogButton
               key={level}
@@ -55,8 +56,9 @@ export function KeyboardBrightness({ state }: { state: PowerState | null }) {
                 flex: 1,
                 minWidth: 0,
                 padding: "8px 0",
+                minHeight: `${TOUCH_MIN_PX}px`,
                 ...(current === level
-                  ? { background: "#1a9fff", color: "#fff" }
+                  ? { background: ACTIVE_BG, color: "#fff" }
                   : {}),
               }}
             >
@@ -67,7 +69,7 @@ export function KeyboardBrightness({ state }: { state: PowerState | null }) {
       </PanelSectionRow>
       {msg && (
         <PanelSectionRow>
-          <div style={{ fontSize: "12px", opacity: 0.85, color: warn ? "#ffb02e" : undefined }}>
+          <div style={{ fontSize: "12px", opacity: 0.85, color: warn ? WARN_COLOR : undefined }}>
             {msg}
           </div>
         </PanelSectionRow>

@@ -41,7 +41,7 @@ from profile_control import ProfileControl
 from fans_window import FansWindow
 from updates_dialog import UpdatesDialog, UpdateCheckThread
 from theme import (STYLESHEET, ModeTile, Panel, pill, tip, ECO, STANDARD, TURBO, CUSTOM,
-                   ACCENT_FOR_BASE, BORDER)
+                   ACCENT_FOR_BASE, BORDER, TOUCH_MIN, TILE_PRIMARY, TILE_SECONDARY)
 from evdev_listener import find_side_button_device, EvdevListener
 
 APP_VERSION = "0.5.1"
@@ -332,7 +332,7 @@ class DashboardUI(QMainWindow):
         root.setObjectName("root")
         self.setCentralWidget(root)
         col = QVBoxLayout(root)
-        col.setContentsMargins(6, 4, 6, 4)
+        col.setContentsMargins(8, 6, 8, 6)
         col.setSpacing(0)
 
         # 1. Performance Mode
@@ -340,16 +340,16 @@ class DashboardUI(QMainWindow):
         self.maxfans_pill = pill("MAX FANS", orange=True)
         self.maxfans_pill.setToolTip("Both fans at 100%. Off restores the profile's curve.")
         self.maxfans_pill.clicked.connect(self._toggle_max_fans)
-        self.maxfans_pill.setFixedHeight(28)
+        self.maxfans_pill.setMinimumHeight(TOUCH_MIN)
         tiles = QHBoxLayout()
         tiles.setSpacing(6)
         self._tiles = {}
         for name, accent, icon in _TILES:
-            t = ModeTile(name, accent, height=60, icon=icon)
+            t = ModeTile(name, accent, height=TILE_PRIMARY, icon=icon)
             t.clicked.connect(lambda checked, n=name: self._tile_clicked(n))
             tiles.addWidget(t)
             self._tiles[name] = t
-        self.fans_tile = ModeTile("Fans + Power", CUSTOM, secondary=True, height=60, icon="fan")
+        self.fans_tile = ModeTile("Fans + Power", CUSTOM, secondary=True, height=TILE_PRIMARY, icon="fan")
         self.fans_tile.clicked.connect(self._fans_tile_clicked)
         tiles.addWidget(self.fans_tile)
         self.perf.body.addLayout(tiles)
@@ -368,7 +368,7 @@ class DashboardUI(QMainWindow):
         self.light_target = QComboBox()
         for label, _devs in _LIGHT_TARGETS:
             self.light_target.addItem(label)
-        self.light_target.setFixedWidth(110)
+        self.light_target.setMinimumWidth(150)
         self.light.add_head_widget(self.light_target)
         self._lighting_syncing = False
         self._lighting_combos = {}
@@ -396,7 +396,7 @@ class DashboardUI(QMainWindow):
         brow.setSpacing(6)
         self._bright_tiles = {}
         for label, level in _BRIGHTNESS:
-            t = ModeTile(label, STANDARD, height=36)
+            t = ModeTile(label, STANDARD, height=TILE_SECONDARY)
             t.clicked.connect(lambda checked, lv=level, lb=label: self._change_brightness(lv, lb))
             brow.addWidget(t)
             self._bright_tiles[level] = t
@@ -457,6 +457,7 @@ class DashboardUI(QMainWindow):
         self.version_label = QLabel(f"Version: {APP_VERSION}")
         self.version_label.setObjectName("dim")
         self.version_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.version_label.setMinimumHeight(TOUCH_MIN)
         self.version_label.mousePressEvent = lambda _e: self._open_updates()
         row5.addWidget(self.version_label)
         row5.addStretch(1)
@@ -553,7 +554,7 @@ class DashboardUI(QMainWindow):
             w.hide()
             return
         w.select(self.control.active_name())
-        w.resize(675, max(self.height(), 540))
+        w.resize(900, max(self.height(), 720))
         w.move(max(0, self.x() - w.width() - 5), self.y())
         w.show()
         w.raise_()

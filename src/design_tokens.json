@@ -1,0 +1,31 @@
+{
+  "colors": {
+    "form": "#1C1C1C",
+    "button_main": "#2E2E2E",
+    "button_second": "#242424",
+    "text": "#F0F0F0",
+    "text_dim": "#A8A8A8",
+    "border": "#373737",
+    "chart_bg": "#232323",
+    "chart_grid": "#464646",
+    "disabled": "#6A6A6A"
+  },
+  "accents": {
+    "quiet": "#06B48A",
+    "balanced": "#3AAEEF",
+    "performance": "#FF2020",
+    "custom": "#FF8000",
+    "gray": "#A8A8A8"
+  },
+  "radii": {"control": 6, "tile": 10},
+  "spacing": {"xs": 4, "sm": 8, "md": 12, "lg": 16},
+  "font_pt": {"body": 11, "small": 9.5, "pill": 10},
+  "touch": {
+    "touch_min_px": 44,
+    "tile_primary_px": 88,
+    "tile_secondary_px": 52,
+    "slider_groove_px": 8,
+    "slider_handle_px": 32,
+    "checkbox_indicator_px": 28
+  }
+}
