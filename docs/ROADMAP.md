@@ -314,7 +314,11 @@ events (not in 1.4.2's CLI — check the socket API) instead of polling.
   installer manifest. The panel EDID advertises Adaptive-Sync 48–180 Hz and DRM reports
   `vrr_capable=1`, but actual Game Mode slider reach and panel response to generated timings
   remain **on-device verification pending**. Do not describe this as hardware-accepted until
-  tested in Game Mode.
+  tested in Game Mode. Run `python tooling/verify_gamescope_vrr.py` from the checkout for
+  a read-only installed-script/EDID/OS/Game Mode preflight and a pending test matrix.
+  With VRR on, check 48, 60, 120 and 180 Hz with **Disable Frame Limiter** both off and on
+  on SteamOS 3.9.5. Record slider reach, panel stability and measured FPS versus the
+  requested limit; a clean preflight does not establish timing acceptance or limiter behavior.
 - **Open since Phase 6:** QAM focus test with a game running (only the owner can do it).
 
 ---
