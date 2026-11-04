@@ -29,7 +29,8 @@ def _argv(line: str, field: str) -> list:
     return argv
 
 
-def local_recipe(d: dict, run: Callable[[Sequence[str]], tuple], is_root: bool = False) -> Recipe:
+def local_recipe(d: dict, run: Callable[[Sequence[str]], tuple], is_root: bool = False,
+                 run_check: "Callable[[Sequence[str]], tuple] | None" = None) -> Recipe:
     """A Recipe from one parsed dict; ValueError when check or apply cannot be split."""
     check_argv = _argv(d["check"], "check")
     apply_argv = _argv(d["apply"], "apply")
@@ -37,7 +38,7 @@ def local_recipe(d: dict, run: Callable[[Sequence[str]], tuple], is_root: bool =
         apply_argv = ["sudo", "-n", *apply_argv]
 
     def check() -> str:
-        rc, _ = run(check_argv)
+        rc, _ = (run_check or run)(check_argv)   # run_check: plain user run, never sudo
         return "ok" if rc == 0 else "needs"
 
     def apply() -> None:
@@ -47,11 +48,14 @@ def local_recipe(d: dict, run: Callable[[Sequence[str]], tuple], is_root: bool =
 
     return Recipe(id=d["id"], title=d["title"], fixes=d["fixes"], check=check, apply=apply,
                   sudo=d["sudo"], network=d["network"], reboot=d["reboot"], pacman=d["pacman"],
-                  default_on=d["default_on"])
+                  default_on=d["default_on"], replaces=tuple(d.get("replaces", ())),
+                  undo="" if d.get("replaces") else
+                  "local recipe: no automatic undo (it declares no replaces)")
 
 
 def load_local_recipes(home: str, run: Callable[[Sequence[str]], tuple], is_root: bool = False,
-                       taken: Sequence[str] = ()) -> tuple:
+                       taken: Sequence[str] = (),
+                       run_check: "Callable[[Sequence[str]], tuple] | None" = None) -> tuple:
     """(recipes, errors) from ~/.config/z13-helper/post-update.d/*.toml.
 
     A malformed file, or an id a built-in already uses, is an error string; the rest load.
@@ -63,7 +67,7 @@ def load_local_recipes(home: str, run: Callable[[Sequence[str]], tuple], is_root
             errors.append(f"{d['id']}: id is already used by a built-in task")
             continue
         try:
-            recipes.append(local_recipe(d, run, is_root))
+            recipes.append(local_recipe(d, run, is_root, run_check))
         except ValueError as e:
             errors.append(f"{d['id']}: {e}")
     return recipes, errors

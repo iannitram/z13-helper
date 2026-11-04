@@ -25,7 +25,7 @@ def test_rows_show_state_flags_error_rows_and_survive_a_failing_check():
           Recipe("b", "B", "fb", boom, lambda: None),
           Recipe("c", "C", "fc", lambda: "ok", lambda: None)]
     rows = tab.build_rows(rs, ["x.toml: invalid TOML: oops"])
-    assert [(r["id"], r["state"]) for r in rows] == [("a", "needs"), ("b", "na"), ("c", "fine"), ("", "error")]
+    assert [(r["id"], r["state"]) for r in rows] == [("a", "needs"), ("b", "unknown"), ("c", "fine"), ("", "error")]
     assert rows[0]["flags"] == ["sudo", "reboot"] and "needs root" in rows[1]["detail"]
     assert rows[3]["title"] == "x.toml" and rows[3]["detail"] == "invalid TOML: oops"
 
@@ -39,7 +39,7 @@ def test_status_after_build_id_change_shows_banner_and_armoury(tmp_path):
     assert first["updated"] is False and first["banner"] is None and first["armoury"] is None
     io2 = make_io(dict(SUPPORTED, **{"/etc/os-release": "BUILD_ID=2\n"}), listing=arm)
     s = tab.status(home, io2, [])
-    assert s["updated"] and s["banner"].startswith("SteamOS updated, re-verify hardware")
+    assert s["updated"] and s["banner"] == "SteamOS updated: 0 tasks (BUILD_ID 1 to 2)"
     assert s["armoury"]["state"] == "needs" and "ppt_pl2_sppt" in s["armoury"]["missing"]
     assert tab.status(home, io2, [])["updated"] is True        # remembered
     assert tab.status(home, io2, [], ack=True)["updated"] is False

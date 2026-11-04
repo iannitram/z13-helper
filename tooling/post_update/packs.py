@@ -72,7 +72,9 @@ def dev_headers_recipe(io: HostIO) -> Recipe:
 
     return Recipe(id="dev-headers", title="Dev headers and .pc files (optional)",
                   fixes="the update strips pkg-config files, so gcc and Tauri builds on the host break",
-                  check=check, apply=apply, sudo=True, network=True, pacman=True)
+                  check=check, apply=apply, sudo=True, network=True, pacman=True,
+                  creates=lambda: [p for paths in missing_pc_files(io).values() for p in paths],
+                  undo="installed package files are left; only the extracted .pc files are removed")
 
 
 def coredump_cap_recipe(io: HostIO) -> Recipe:

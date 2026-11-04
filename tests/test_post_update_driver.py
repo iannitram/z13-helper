@@ -92,4 +92,15 @@ def test_listing_never_escalates_to_root_and_skips_checks_that_need_it():
         raise PermissionError("root")
     rs = [Recipe(id="k", title="k", fixes="k", check=needs_root, apply=lambda: None),
           Recipe(id="a", title="a", fixes="a", check=lambda: "needs", apply=lambda: None)]
-    assert [r.id for r in driver.pending(rs)] == ["a"]
+    needs, unchecked = driver.classify(rs)
+    assert [r.id for r in needs] == ["a"] and [r.id for r in unchecked] == ["k"]
+    assert [r.id for r in driver.pending(rs)] == ["a", "k"]   # never silently dropped
+
+
+def test_list_pending_says_which_tasks_could_not_be_checked(capsys):
+    def needs_root():
+        raise PermissionError("pacman-key needs root")
+    rs = [Recipe(id="keyring", title="k", fixes="k", check=needs_root, apply=lambda: None)]
+    assert driver.main(["--list-pending"], recipes=rs) == 0
+    out = capsys.readouterr().out
+    assert "pending: none" in out and "Could not check without root" in out and "keyring" in out

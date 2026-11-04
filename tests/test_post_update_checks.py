@@ -40,3 +40,19 @@ def test_run_checks_does_not_mutate_inventory():
     before = repr(inv)
     run_checks(inv)
     assert repr(inv) == before
+
+
+def test_permission_mode_and_owner_are_compared_not_just_present():
+    from post_update_checks import permission_problem
+    p = PERMISSION_PATHS[1]
+    assert permission_problem(p, "644 root:root") is None
+    assert "writable" in permission_problem(p, "666 root:root")
+    assert "writable" in permission_problem(p, "664 root:root")
+    assert "owner" in permission_problem(p, "644 deck:deck")
+    assert permission_problem(p, None) == "missing or unreadable"
+    assert permission_problem(p, "zzz root:root").startswith("unreadable mode")
+    table = dict(GOOD)
+    table[("stat", "-c", "%a %U:%G", PERMISSION_PATHS[0])] = "666 root:root\n"
+    rows = by_id(run_checks(collect_inventory(fake(table))))
+    assert not rows["permission:" + PERMISSION_PATHS[0]].passed
+    assert "666" in rows["permission:" + PERMISSION_PATHS[0]].detail

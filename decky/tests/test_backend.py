@@ -1056,5 +1056,69 @@ class PostUpdateTest(unittest.TestCase):
         self.assertIsNone(out["status"])
 
 
+class PostUpdateRepairTest(unittest.TestCase):
+    def test_argv_plan_and_run(self):
+        base = ["env", "PYTHONPATH=/r/tooling:/r/src", "python3", "-m", "post_update", "repair", "--json"]
+        self.assertEqual(m.post_repair_argv("/r"), base)
+        self.assertEqual(m.post_repair_argv("/r", ["kernel_args", "permission:/etc/x"]),
+                         base + ["--run", "kernel_args,permission:/etc/x"])
+        for bad in ([], ["a b"], ["a;b"], [""], "kernel_args"):
+            with self.assertRaises(ValueError):
+                m.post_repair_argv("/r", bad)
+        with self.assertRaises(ValueError):
+            m.post_repair_argv("rel")
+
+    def test_parse_needs_the_key(self):
+        self.assertEqual(m.parse_json_key('log\n{"steps": []}', "steps"), {"steps": []})
+        self.assertIsNone(m.parse_json_key('{"rows": []}', "steps"))
+        self.assertIsNone(m.parse_json_key("nope", "steps"))
+
+    def _call(self, method, repo, result, *args):
+        calls = []
+
+        def run(argv, timeout=30, *, as_deck=False, input=None):
+            calls.append((argv, as_deck, timeout))
+            return result
+
+        with mock.patch.object(m, "_repo_path", return_value=repo), mock.patch.object(host, "run", run):
+            return asyncio.run(getattr(m.Plugin(), method)(*args)), calls
+
+    def test_plan_changes_nothing_and_runs_as_deck(self):
+        out, calls = self._call("post_update_repair_plan", "/r",
+                                host.Result(0, '{"steps": [{"id": "kernel_args"}], "unplanned": []}', False))
+        self.assertTrue(out["ok"])
+        self.assertEqual(out["plan"]["steps"][0]["id"], "kernel_args")
+        argv, as_deck, _ = calls[0]
+        self.assertTrue(as_deck)
+        self.assertNotIn("--run", argv)            # the plan call never runs a repair
+
+    def test_run_passes_only_the_confirmed_ids_through_the_driver(self):
+        out, calls = self._call("post_update_repair_run", "/r",
+                                host.Result(1, '{"results": [["kernel_args", "rolled back"]]}', False),
+                                ["kernel_args"])
+        self.assertTrue(out["ok"])                  # rc 1 still carries the per-step result
+        self.assertEqual(out["result"]["results"], [["kernel_args", "rolled back"]])
+        argv, as_deck, _ = calls[0]
+        self.assertEqual(argv[-2:], ["--run", "kernel_args"])
+        self.assertTrue(as_deck)
+
+    def test_run_refuses_bad_ids_without_calling_the_host(self):
+        for ids in ([], ["a b"], None, "kernel_args"):
+            out, calls = self._call("post_update_repair_run", "/r", host.Result(0, "{}", False), ids)
+            self.assertFalse(out["ok"])
+            self.assertEqual(calls, [])
+        out, calls = self._call("post_update_repair_run", None, host.Result(0, "{}", False), ["x"])
+        self.assertFalse(out["ok"])
+        self.assertEqual(calls, [])
+
+    def test_plan_without_repo_or_with_junk_is_not_ok(self):
+        out, calls = self._call("post_update_repair_plan", None, host.Result(0, "{}", False))
+        self.assertFalse(out["ok"])
+        self.assertEqual(calls, [])
+        out, _ = self._call("post_update_repair_plan", "/r", host.Result(0, "junk", False))
+        self.assertFalse(out["ok"])
+        self.assertIsNone(out["plan"])
+
+
 if __name__ == "__main__":
     unittest.main()

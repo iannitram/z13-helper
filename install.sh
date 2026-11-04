@@ -14,6 +14,11 @@
 #   ./install.sh --post-update [--only amdgpu,rocm]
 #                           after a SteamOS update: pick tasks from a list, or run only
 #                           the named ones; --repair then lists tasks still pending
+#   ./install.sh --system-check checks|repair|suspend|bundle
+#                           after a SteamOS update (#27): checks = inventory checks (read-only);
+#                           repair = print the repair plan, ask, run it (with --yes: no question;
+#                           with --dry-run: plan only); suspend = suspend/resume diagnostic
+#                           (read-only); bundle = preview the redacted support bundle
 #
 # Order (each step independent; a failure is reported, the rest still runs):
 #   1. preflight     SteamOS/kernel, `users` group, sudo, network
@@ -39,7 +44,7 @@
 set -uo pipefail
 
 REPO=$(cd "$(dirname "$0")" && pwd)
-MODE=install DRY=0 YES=0 REBUILD=0 POST_UPDATE=0
+MODE=install DRY=0 YES=0 REBUILD=0 POST_UPDATE=0 SYS_CHECK=
 PU_ARGS=()      # --post-update / --only, handed to `python3 -m post_update` (tooling/post_update/cli.py)
 while (($#)); do
     a=$1; shift
@@ -49,10 +54,16 @@ while (($#)); do
         --yes|-y) YES=1 ;;
         --rebuild) REBUILD=1 ;;
         --post-update) POST_UPDATE=1; PU_ARGS+=(--post-update) ;;
+        --system-check)
+            SYS_CHECK=${1:-}; (($#)) && shift
+            case "$SYS_CHECK" in
+                checks|repair|suspend|bundle) ;;
+                *) echo "--system-check needs one of: checks, repair, suspend, bundle" >&2; exit 2 ;;
+            esac ;;
         --only)
             PU_ARGS+=(--only)
             if (($#)) && [[ $1 != --* ]]; then PU_ARGS+=("$1"); shift; fi ;;
-        -h|--help) sed -n '2,36p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,42p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown option: $a (try --help)" >&2; exit 2 ;;
     esac
 done
@@ -838,6 +849,16 @@ EOF
 
 # ----------------------------------------------------------------------
 main() {
+    if [[ -n $SYS_CHECK ]]; then
+        say "System check: $SYS_CHECK"
+        local sc=("$SYS_CHECK")
+        if [[ $SYS_CHECK == repair ]]; then
+            ((DRY)) && sc+=(--plan-only)
+            ((YES && !DRY)) && sc+=(--yes)
+        fi
+        post_update_py "${sc[@]}"
+        return $?
+    fi
     if ((POST_UPDATE)); then
         say "Post-update tasks"
         local pu=("${PU_ARGS[@]}"); ((DRY)) && pu+=(--dry-run)

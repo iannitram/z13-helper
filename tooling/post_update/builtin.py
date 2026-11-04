@@ -19,6 +19,7 @@ OS_RELEASE = "/etc/os-release"
 DMI_PRODUCT = "/sys/class/dmi/id/product_name"
 CMDLINE = "/proc/cmdline"
 GRUB_FILE = "/etc/default/grub-steamos"
+KEYRING_DIR = "/etc/pacman.d/gnupg"   # --init/--populate rewrite it: backed up first
 KEEP_DIR = "/etc/atomic-update.conf.d"
 
 AMDGPU_ARGS = ("dcdebugmask=0x20e10", "gpu_recovery=1", "cwsr_enable=0", "sg_display=0", "abmlevel=0")
@@ -156,6 +157,7 @@ def builtin_recipes(io: HostIO) -> list:
             fixes='"required key missing from keyring" on pacman steps after an update',
             check=lambda: _keyring_check(io),
             apply=lambda: _keyring_apply(io),
+            replaces=(KEYRING_DIR,),
             sudo=True,
             pacman=True,
         ),

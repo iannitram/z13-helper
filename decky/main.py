@@ -137,6 +137,34 @@ def parse_post_update(out):
     return data if isinstance(data, dict) and isinstance(data.get("rows"), list) else None
 
 
+_STEP_ID = re.compile(r"[A-Za-z0-9@:._/-]+\Z")
+
+
+def post_repair_argv(repo, ids=None):
+    """Host command for the repair plan (copy of src/post_update_view.repair_argv): with no ids it
+    prints the plan as JSON and changes nothing; with ids it runs exactly those confirmed steps."""
+    if not isinstance(repo, str) or not os.path.isabs(repo) or "\n" in repo:
+        raise ValueError("repo path must be absolute")
+    argv = ["env", f"PYTHONPATH={repo}/tooling:{repo}/src", "python3", "-m", "post_update",
+            "repair", "--json"]
+    if ids is not None:
+        if not isinstance(ids, (list, tuple)) or not ids or not all(
+                isinstance(i, str) and _STEP_ID.fullmatch(i) for i in ids):
+            raise ValueError("ids must be non-empty step ids")
+        argv += ["--run", ",".join(ids)]
+    return argv
+
+
+def parse_json_key(out, key):
+    """The JSON object in the output when it has `key`, else None."""
+    start = out.find("{")
+    try:
+        data = json.loads(out[start:]) if start >= 0 else None
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) and key in data else None
+
+
 def _repo_path():
     try:
         with open(os.path.join(host.DECK_HOME, ".config", "z13-helper", "install.json")) as f:
@@ -1116,7 +1144,7 @@ class Plugin:
             except Exception as e:  # noqa: BLE001
                 decky.logger.error("Desktop app check error: %s", e)
 
-    # ---- After SteamOS update (tooling/post_update, run as deck; checks only) ----
+    # ---- After SteamOS update (tooling/post_update, run as deck; the repair needs a confirmed run) ----
     async def post_update_status(self, ack: bool = False) -> dict:
         """{"ok", "message", "status"}; status is the --tab-json dict (None when unavailable)."""
         repo = _repo_path()
@@ -1129,6 +1157,40 @@ class Plugin:
         return {"ok": status is not None,
                 "message": "" if status is not None else "Could not read the post-update status.",
                 "status": status}
+
+    async def post_update_repair_plan(self) -> dict:
+        """{"ok", "message", "plan"}: the repair plan (steps with exact commands, root flags,
+        undo notes). Changes nothing; the Deck UI shows it and asks before the run."""
+        repo = _repo_path()
+        if not repo:
+            return {"ok": False, "message": "Run ./install.sh once so the plugin knows the repo.",
+                    "plan": None}
+        rc, out = await asyncio.to_thread(
+            lambda: _run(post_repair_argv(repo), 120, as_deck=True))
+        plan = parse_json_key(out, "steps") if rc == 0 else None
+        return {"ok": plan is not None,
+                "message": "" if plan is not None else "Could not build the repair plan.",
+                "plan": plan}
+
+    async def post_update_repair_run(self, ids: list) -> dict:
+        """{"ok", "message", "result"}: run exactly the step ids the user confirmed (root steps go
+        through sudo -n as deck; nothing escalates silently). Each step is verified, rolled back on
+        failure and written to the rollback record."""
+        repo = _repo_path()
+        argv = None
+        if repo and isinstance(ids, (list, tuple)):   # never fall back to the plan call
+            try:
+                argv = post_repair_argv(repo, list(ids))
+            except ValueError:
+                argv = None
+        if argv is None:
+            return {"ok": False, "message": "No repo or no valid steps to run.", "result": None}
+        rc, out = await asyncio.to_thread(lambda: _run(argv, 900, as_deck=True))
+        result = parse_json_key(out, "results")
+        # rc 1 = a step did not apply; the JSON still says which and why
+        return {"ok": result is not None and rc in (0, 1),
+                "message": "" if result is not None else "The repair did not report back.",
+                "result": result}
 
     # ---- App profiles (profiles.json, shared with the desktop app) ----
     async def get_profiles(self) -> dict:

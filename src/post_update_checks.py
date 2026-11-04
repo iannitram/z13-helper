@@ -27,6 +27,31 @@ class CheckResult:
     detail: str
 
 
+EXPECTED_OWNER = "root:root"
+EXPECTED_MODE = {PERMISSION_PATHS[0]: "644", PERMISSION_PATHS[1]: "644"}
+
+
+def permission_problem(path, value):
+    """Why `value` ("644 root:root", from stat -c '%a %U:%G') is wrong for `path`, else None.
+
+    Wrong = not owned by root:root, or writable by group or others.
+    """
+    parts = (value or "").split()
+    if len(parts) != 2:
+        return "missing or unreadable"
+    mode, owner = parts
+    try:
+        bits = int(mode, 8)
+    except ValueError:
+        return f"unreadable mode {mode!r}"
+    problems = []
+    if owner != EXPECTED_OWNER:
+        problems.append(f"owner is {owner}, expected {EXPECTED_OWNER}")
+    if bits & 0o022:
+        problems.append(f"mode {mode} is writable by group or others, expected {EXPECTED_MODE.get(path, '644')}")
+    return "; ".join(problems) or None
+
+
 def run_checks(inventory) -> list:
     """One CheckResult per inventory item and unit; check_id names what a repair would fix."""
     inv = inventory or {}
@@ -48,6 +73,8 @@ def run_checks(inventory) -> list:
                                    f"{name} is {state or 'unknown'}"))
     perms = inv.get("permissions") or {}
     for path in PERMISSION_PATHS:
-        results.append(CheckResult("permission:" + path, bool(perms.get(path)),
-                                   f"{path}: {perms.get(path) or 'missing or unreadable'}"))
+        problem = permission_problem(path, perms.get(path))
+        results.append(CheckResult("permission:" + path, problem is None,
+                                   f"{path}: {perms.get(path)}" if problem is None
+                                   else f"{path}: {problem}"))
     return results

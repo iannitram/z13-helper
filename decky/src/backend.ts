@@ -106,7 +106,7 @@ export interface PostUpdateRow {
   id: string;
   title: string;
   fixes: string;
-  state: string; // needs | fine | info | na | reboot | error
+  state: string; // needs | fine | info | na | unknown | reboot | error
   detail: string;
 }
 export interface PostUpdateStatus {
@@ -115,6 +115,31 @@ export interface PostUpdateStatus {
   armoury: { state: string; missing: string[] } | null;
   rows: PostUpdateRow[];
 }
+export interface RepairStepInfo {
+  id: string;
+  description: string;
+  needs_root: boolean;
+  guided: boolean;
+  commands: string[];
+  undo: string;
+}
+export interface RepairPlanInfo {
+  steps: RepairStepInfo[];
+  unplanned: string[];
+  lines: string[];
+}
+export interface RepairRunResult {
+  results: [string, string][];
+}
+/** The plan only: changes nothing. */
+export const getRepairPlan = callable<[], { ok: boolean; message: string; plan: RepairPlanInfo | null }>(
+  "post_update_repair_plan",
+);
+/** Runs exactly the confirmed step ids (root steps use sudo -n). */
+export const runRepair = callable<
+  [ids: string[]],
+  { ok: boolean; message: string; result: RepairRunResult | null }
+>("post_update_repair_run");
 export const getPostUpdateStatus = callable<
   [ack: boolean],
   { ok: boolean; message: string; status: PostUpdateStatus | null }

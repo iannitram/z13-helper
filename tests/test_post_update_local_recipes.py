@@ -161,9 +161,12 @@ def test_a_local_recipe_runs_through_the_runner_and_a_bad_file_does_not_stop_it(
     # `check` says needs (rc 1), so the apply runs
     monkeypatch.setattr(driver, "_run", lambda argv, timeout=600, escalate=True: calls.append(argv) or (
         (1, "") if argv[0] == "test" else (0, "")))
+    checks = []
+    monkeypatch.setattr(driver, "_run_plain", lambda argv: checks.append(argv) or (1, ""))
     rc = driver.main(["--post-update", "--only", "hello"], env=driver.Env(
         backup=lambda p: None, readonly_disable=lambda: None, readonly_enable=lambda: None))
     out = capsys.readouterr()
     assert rc == 0 and "hello: done" in out.out
     assert ["sudo", "-n", "touch", "/tmp/a b"] in calls
+    assert checks and not any(a[0] == "sudo" for a in checks)   # a check never gets sudo
     assert "local recipe skipped: bad.toml" in out.err

@@ -32,6 +32,7 @@ import app_log
 import host
 import install_record
 import max_fans_state
+import post_update_view
 import profiles
 import update_watch
 from fan_watchdog import FanTrace, FanWatchdog, FanWatchdogRunner
@@ -39,7 +40,7 @@ from screen_brightness import ScreenBrightness, MIN_PERCENT
 from apply_worker import ApplyWorker
 from profile_control import ProfileControl
 from fans_window import FansWindow
-from updates_dialog import UpdatesDialog, UpdateCheckThread
+from updates_dialog import UpdatesDialog, UpdateCheckThread, PostUpdateThread
 from theme import (STYLESHEET, ModeTile, Panel, pill, tip, ECO, STANDARD, TURBO, CUSTOM,
                    ACCENT_FOR_BASE, BORDER)
 from evdev_listener import find_side_button_device, EvdevListener
@@ -142,6 +143,7 @@ class DashboardUI(QMainWindow):
         self._tick()
 
         QTimer.singleShot(8000, lambda: self._check_updates(force=False))
+        QTimer.singleShot(12000, self._check_post_update)
         self._update_timer = QTimer(self)
         self._update_timer.timeout.connect(lambda: self._check_updates(force=False))
         self._update_timer.start(UPDATE_CHECK_MS)
@@ -265,6 +267,11 @@ class DashboardUI(QMainWindow):
         m.addSeparator()
         fans = m.addAction("Fans + Power…")
         fans.triggered.connect(self._toggle_fans_window)
+        pu = getattr(self, "_post_update_text", None)
+        if pu:
+            m.addSeparator()
+            act = m.addAction(pu + "…")
+            act.triggered.connect(self._open_updates)   # the Updates dialog has the After SteamOS update tab
         m.addSeparator()
         q = m.addAction("Quit")
         q.triggered.connect(self._user_quit)
@@ -800,6 +807,25 @@ class DashboardUI(QMainWindow):
             return
         self._last_crash_notice = time.monotonic()
         self._tray.showMessage("Z13-Helper", text, QSystemTrayIcon.MessageIcon.Warning, 6000)
+
+    def _check_post_update(self):
+        """Read-only status of the After SteamOS update checks; says "SteamOS updated: N tasks"."""
+        repo = install_record.repo_path(install_record.load())
+        if not repo:
+            return
+        self._pu_thread = PostUpdateThread(repo, False, self)
+        self._pu_thread.done.connect(self._post_update_banner)
+        self._pu_thread.start()
+
+    def _post_update_banner(self, status):
+        text = post_update_view.tray_text(status)
+        self._post_update_text = text
+        if self._tray is not None:
+            self._tray.setToolTip("Z13-Helper" + (f"\n{text}" if text else ""))
+            self._rebuild_tray_menu()
+            if text and text != self.config.get("post_update_notified", ""):
+                self._tray.showMessage("Z13-Helper", text, QSystemTrayIcon.MessageIcon.Warning, 8000)
+                self.config.set("post_update_notified", text)
 
     def _open_updates(self):
         if self._updates_dialog is None:

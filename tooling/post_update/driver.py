@@ -2,7 +2,9 @@
 
 `python3 -m post_update ARGS` (with tooling/ and src/ on the path, as install.sh sets it)
 lists the tasks, runs the picked ones through `runner.run_plan`, or prints the pending
-ones. Every command is an argv list, privileged ones through `sudo -n`. Checks never write.
+ones; `repair`, `checks`, `bundle` and `suspend` are the system-repair subcommands
+(repair.py). Every command is an argv list, privileged ones through `sudo -n`. Checks never
+write. Every applied task leaves an entry in `rollback-record.json` next to its backups.
 """
 
 import json
@@ -18,13 +20,15 @@ from .builtin_4_6 import Sys, builtin_recipes_4_6
 from .cli import parse_args
 from .local_recipes import load_local_recipes
 from .packs import pack_recipes
+from . import repair
 from .recipe import order_tasks, plan_text, with_keyring
 from .runner import Env, run_plan
-from .tab import status as tab_status
+from .tab import mark_reboot, status as tab_status
 
 _log = logging.getLogger(__name__)
 
 BACKUP_ROOT = os.path.join(".local", "state", "z13-helper", "post-update-backups")
+RECORD_NAME = "rollback-record.json"
 # Commands that must run as root; anything else runs as the current user.
 _ROOT_CMDS = {"update-grub", "pacman-key", "pacman", "ldconfig", "mkdir", "bsdtar"}
 
@@ -48,6 +52,12 @@ def _run(argv: Sequence[str], timeout: int = 600, escalate: bool = True) -> tupl
             raise PermissionError(f"{argv[0]} needs root; not run when only listing")
         argv = ["sudo", "-n", *argv]
     res = _host().run(argv, timeout=timeout)
+    return res.rc, res.out
+
+
+def _run_plain(argv: Sequence[str]) -> tuple:
+    """Run as the current user with no sudo at all (local recipe checks)."""
+    res = _host().run(list(argv), timeout=60)
     return res.rc, res.out
 
 
@@ -96,20 +106,71 @@ def readonly_cmd(tool_name: Callable[[str], str] | None = None) -> str:
     return (tool_name or _host().holo_or_steamos)("readonly")
 
 
+def _priv(argv: Sequence[str]) -> list:
+    """argv with an explicit sudo -n unless already root (the one sudo path; never silent)."""
+    return list(argv) if os.geteuid() == 0 else ["sudo", "-n", *argv]
+
+
+def _safe_target(path: str) -> bool:
+    """Only an absolute path at least two levels deep may be removed or replaced by a rollback."""
+    return os.path.isabs(path) and ".." not in path.split("/") and len(path.strip("/").split("/")) >= 2
+
+
 def make_env(home: str, run: Callable = _run, tool_name: Callable[[str], str] | None = None,
              stamp: str | None = None) -> Env:
-    """Env for run_plan: backups under ~/.local/state/z13-helper/post-update-backups/<stamp>/."""
+    """Env for run_plan: backups under ~/.local/state/z13-helper/post-update-backups/<stamp>/.
+
+    `rollback-record.json` in the same folder gets one entry per task: what was backed up
+    (and where), what was created, how to undo it and how the run went.
+    """
     stamp = stamp or time.strftime("%Y%m%d-%H%M%S")
     dest_root = os.path.join(home, BACKUP_ROOT, stamp)
     tool = readonly_cmd(tool_name)
 
-    def backup(path: str) -> None:
-        if not os.path.exists(path):
-            return  # nothing to lose
+    def backup(path: str) -> "str | None":
+        if not os.path.lexists(path):
+            return None  # nothing to lose; the record says "absent before"
         dest = os.path.join(dest_root, path.lstrip("/"))
         os.makedirs(os.path.dirname(dest), exist_ok=True)
-        shutil.copy2(path, dest)  # raises when unreadable: the run then stops before replacing it
+        try:
+            if os.path.isdir(path):
+                raise PermissionError("folder: copied as root to keep owners and modes")
+            shutil.copy2(path, dest)
+        except PermissionError:
+            rc, out = run(_priv(["cp", "-a", "--", path, dest]))
+            if rc != 0:  # the run then stops before replacing it
+                raise RuntimeError(f"could not back up {path}: {out}") from None
         _log.info("backed up %s to %s", path, dest)
+        return dest
+
+    def restore(path: str, backup_path: "str | None") -> None:
+        if not _safe_target(path):
+            raise RuntimeError(f"refusing to touch {path}")
+        if backup_path is None:
+            steps = [["rm", "-rf", "--", path]]
+        elif os.path.isdir(backup_path):
+            steps = [["rm", "-rf", "--", path], ["cp", "-a", "--", backup_path, path]]
+        else:
+            steps = [["cp", "-a", "--", backup_path, path]]
+        for argv in steps:
+            rc, out = run(_priv(argv))
+            if rc != 0:
+                raise RuntimeError(f"{' '.join(argv)} failed: {out}")
+        _log.info("restored %s", path)
+
+    def record(entry: dict) -> None:
+        path = os.path.join(dest_root, RECORD_NAME)
+        try:
+            with open(path, encoding="utf-8") as f:
+                entries = json.load(f)
+        except (OSError, ValueError):
+            entries = []
+        entries.append(entry)
+        os.makedirs(dest_root, exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(entries, f, indent=2)
+        os.replace(tmp, path)
 
     def toggle(verb: str) -> None:
         _log.info("read-only: %s through %s", verb, tool)
@@ -118,7 +179,54 @@ def make_env(home: str, run: Callable = _run, tool_name: Callable[[str], str] | 
             raise RuntimeError(f"{tool} {verb} failed: {out}")
 
     return Env(backup=backup, readonly_disable=lambda: toggle("disable"),
-               readonly_enable=lambda: toggle("enable"))
+               readonly_enable=lambda: toggle("enable"), restore=restore, record=record)
+
+
+def make_repair_io(home: str, stamp: str | None = None,
+                   tool_name: Callable[[str], str] | None = None):
+    """RepairIO for the real machine: root work only through the explicit `sudo -n` path."""
+    from repair_plan import RepairIO  # src/ is on the path, as install.sh sets it
+    stamp = stamp or time.strftime("%Y%m%d-%H%M%S")
+    dest = os.path.join(home, BACKUP_ROOT, stamp, "repair")
+
+    def run(argv):
+        res = _host().run(list(argv), timeout=300)
+        return res.rc, res.out
+
+    def write(path: str, text: str) -> None:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+
+    return RepairIO(read=_read, write=write, run=run, backup_dir=dest,
+                    run_root=lambda argv: run(_priv(argv)), write_root=_write,
+                    readonly_tool=readonly_cmd(tool_name))
+
+
+def save_repair_record(io, record: dict) -> None:
+    """The rollback record of a repair run, next to its backups."""
+    io.write(os.path.join(os.path.dirname(io.backup_dir), "repair-record.json"),
+             json.dumps(record, indent=2))
+
+
+def subcommand(argv: Sequence[str], input_fn=input, out=print, io=None, read=None) -> "int | None":
+    """repair | checks | bundle | suspend; None when argv is not one of them."""
+    if not argv or argv[0] not in ("repair", "checks", "bundle", "suspend"):
+        return None
+    import system_inventory
+    read = read or system_inventory.host_read
+    name, rest = argv[0], list(argv[1:])
+    if name == "checks":
+        return repair.checks_main(read, out)
+    if name == "suspend":
+        return repair.suspend_main(read, out)
+    if name == "bundle":
+        def write_file(path: str, text: str) -> None:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(text)
+        return repair.bundle_main(rest, read, write_file, input_fn, out)
+    io = io or make_repair_io(os.path.expanduser("~"))
+    return repair.repair_main(rest, read, io, lambda rec: save_repair_record(io, rec), input_fn, out)
 
 
 def collect(home: str, escalate: bool = True) -> tuple:
@@ -126,7 +234,8 @@ def collect(home: str, escalate: bool = True) -> tuple:
     io = make_hostio(escalate)
     recipes = builtin_recipes(io) + builtin_recipes_4_6(make_sys(home, escalate)) + pack_recipes(io)
     local, errors = load_local_recipes(home, lambda argv: _run(argv, escalate=escalate),
-                                       is_root=os.geteuid() == 0, taken=[r.id for r in recipes])
+                                       is_root=os.geteuid() == 0, taken=[r.id for r in recipes],
+                                       run_check=_run_plain)
     return recipes + local, errors
 
 
@@ -134,16 +243,24 @@ def all_recipes(home: str, escalate: bool = True) -> list:
     return collect(home, escalate)[0]
 
 
-def pending(recipes: Sequence) -> list:
-    """Recipes whose check says they need work (read-only). A check that cannot run is left out."""
-    needs = []
+def classify(recipes: Sequence) -> tuple:
+    """(needs, unchecked): recipes whose read-only check says "needs", and those whose check
+    could not run (it needs root while only listing). An unchecked task is never dropped."""
+    needs, unchecked = [], []
     for r in recipes:
         try:
             if r.check() == "needs":
                 needs.append(r)
-        except Exception:  # noqa: BLE001 - a check that needs root cannot say; do not guess
-            _log.info("could not check %s without root", r.id)
-    return needs
+        except Exception as exc:  # noqa: BLE001 - a check that needs root cannot say; do not guess
+            _log.info("could not check %s without root: %s", r.id, exc)
+            unchecked.append(r)
+    return needs, unchecked
+
+
+def pending(recipes: Sequence) -> list:
+    """Tasks to offer: those that need work, then those that could not be checked."""
+    needs, unchecked = classify(recipes)
+    return needs + unchecked
 
 
 def _pick(candidates: Sequence, input_fn=input) -> list:
@@ -169,6 +286,9 @@ def main(argv: Sequence[str], recipes: Sequence | None = None, env: Env | None =
     the re-verify flag.
     """
     argv = list(argv)
+    sub = subcommand(argv, input_fn)
+    if sub is not None:
+        return sub
     list_pending = "--list-pending" in argv
     try:
         args = parse_args(argv)
@@ -187,8 +307,11 @@ def main(argv: Sequence[str], recipes: Sequence | None = None, env: Env | None =
     for err in errors:
         print(f"post-update: local recipe skipped: {err}", file=sys.stderr)
     if list_pending:
-        needs = pending(recipes)
+        needs, unchecked = classify(recipes)
         print("Post-update tasks pending: " + (", ".join(r.id for r in needs) if needs else "none"))
+        if unchecked:
+            print("Could not check without root (run ./install.sh --post-update to check them): "
+                  + ", ".join(r.id for r in unchecked))
         return 0
     if args["only"]:
         known = {r.id for r in recipes}
@@ -208,4 +331,5 @@ def main(argv: Sequence[str], recipes: Sequence | None = None, env: Env | None =
     results = run_plan(ordered, env or make_env(home))
     for rid, status in results:
         print(f"{rid}: {status}")
+    mark_reboot(home, [r.id for r in ordered if r.reboot and dict(results).get(r.id) == "done"])
     return 1 if any(s == "failed" for _, s in results) else 0
