@@ -1,6 +1,6 @@
 # Decky / Game Mode code map
 
-This describes the Decky source on `main` at `e575835` (2026-11-02). It is not a claim that all Game Mode behavior has been verified on the device. The current code map is [`README.md`](README.md); the pending verification checklist is in [`docs/ROADMAP.md`](../docs/ROADMAP.md).
+Refreshed 2026-11-04 from origin/main 8521ffc. Open PRs are not yet reflected: #153 (state owner), #154 (post-update repair) and the `build/*` branches. This describes the Decky source on `main` as of that commit. It is not a claim that all Game Mode behavior has been verified on the device. The current code map is [`README.md`](README.md); the pending verification checklist is in [`docs/ROADMAP.md`](../docs/ROADMAP.md).
 
 ## Runtime and data flow
 
@@ -30,11 +30,11 @@ Decky re-reads shared state when its methods need it rather than holding a long-
 
 | Path | Responsibility |
 |---|---|
-| `decky/main.py` | Decky backend and callable API. Profile reads/switches, Max Fans, direct performance profile, power, battery limit, brightness, telemetry, desktop-app check and Game Mode watchdog lifecycle. Each z13ctl write uses `host.Z13CTL_WRITE_TIMEOUT_S` (20 s); a profile apply gets its own 180 s budget (`PROFILE_APPLY_TIMEOUT_S`). Write callables (`set_app_profile`, `set_profile`, `set_max_fans`) return `{ok, message}`, so a timeout reaches the panel as text. |
-| `decky/src/index.tsx` | QAM panel composition and profile switch flow. |
-| `decky/src/backend.ts` | Typed Decky callable names, results and shared TDP clamping rule. |
-| `decky/src/profileSwitch.ts` | Pure async flow for profile changes: apply, then re-read profile and Max Fans whether apply succeeds or fails. |
-| `decky/src/hooks.ts` | Slider commit-on-release and visibility polling hooks. |
+| `decky/main.py` | Decky backend and callable API. Profile reads/switches, Max Fans, direct performance profile, power, battery limit, brightness, telemetry, desktop-app check and Game Mode watchdog lifecycle. Each z13ctl write uses `host.Z13CTL_WRITE_TIMEOUT_S` (20 s); a profile apply gets its own 180 s budget (`PROFILE_APPLY_TIMEOUT_S`). Write callables (`set_app_profile`, `set_profile`, `set_max_fans`) return `{ok, message}`, so a timeout reaches the panel as text. Key: `Plugin` (callable methods, `_main`/`_unload`), `apply_tdp`, `apply_battery_limit`, `set_max_fans_blocking`, `set_brightness_per_device`, `clamp_tdp`, `power_state`, `telemetry`, `DeckyFans`, `DesktopAppCheck`, `fan_watchdog_tick`. Called by Decky Loader; it has its own copies of the store lock, atomic writer, Max Fans state and lightbar recovery. |
+| `decky/src/index.tsx` | QAM panel composition and profile switch flow. Plugin entry (`definePlugin`); uses `backend.ts`, `profileSwitch.ts`, `hooks.ts` and the four components. |
+| `decky/src/backend.ts` | Typed Decky callable names, results and shared TDP clamping rule. Key: the `callable` bridges (`getProfiles`, `setAppProfile`, `setTdp`, `setBatteryLimit`, `setBrightness`, `getTelemetry`), `clampTdp`, `safely`, `isWriteTimeout`. Called by `index.tsx` and the components. |
+| `decky/src/profileSwitch.ts` | Pure async flow for profile changes: apply, then re-read profile and Max Fans whether apply succeeds or fails. Key: `switchProfile`. Called by `index.tsx`; tested by `decky/tests/profileSwitch.test.ts`. |
+| `decky/src/hooks.ts` | Slider commit-on-release and visibility polling hooks. Key: `useCommitOnRelease`, `usePollWhileVisible`, `cancelPendingCommits`. Called by the components. |
 | `decky/src/components/PowerLimits.tsx` | Profile-scoped TDP override controls; no override is labeled “Not set” and remains distinct from the displayed fallback slider positions. |
 | `decky/src/components/BatteryLimit.tsx` | Battery charge limit control. |
 | `decky/src/components/KeyboardBrightness.tsx` | Keyboard brightness control. |
@@ -44,8 +44,11 @@ Decky re-reads shared state when its methods need it rather than holding a long-
 | Installed plugin `py_modules/power_range.py` | Root-owned installed copy of `src/power_range.py`; per-rail metadata bounds matching z13ctl backend selection. |
 | Installed plugin `py_modules/host.py` | Root-owned installed copy of `src/host.py`; host command mode and environment handling. |
 | Installed plugin `py_modules/crash_report.py`, `crash_scrub.py`, `crash_queue.py`, `_crash_build.json` | Root-owned shared crash reporting and build configuration. Startup installs Python/thread/asyncio hooks; unload restores them. Reports share the desktop queue and preference; see [`docs/crash-reporting.md`](../docs/crash-reporting.md). |
-| `decky/rollup.config.js` | Bundle build for the plugin front end. |
+| `decky/rollup.config.js`, `decky/tsconfig.json`, `decky/package.json`, `decky/pnpm-lock.yaml` | Bundle build for the plugin front end (`pnpm build` writes `dist/index.js`, which `install.sh` installs). |
+| `decky/plugin.json` | Decky plugin manifest: name `Z13-Helper`, `api_version` 1, store metadata. Installed beside `main.py`. |
+| `decky/README.md` | Plugin-specific notes: what the panel offers, how it is built and installed. |
 | `decky/tests/test_backend.py` | Backend tests, run with `python3 -m unittest discover -s decky/tests`. |
+| `decky/tests/test_crash_entry.py` | Plugin lifecycle test: `_main` and `_unload` install and remove the shared crash-reporting preference, loop and task hooks without real I/O. Part of the unittest suite. |
 | `decky/tests/profileSwitch.test.ts` | Node tests for the pure profile switch helper; run manually with `node --test decky/tests/profileSwitch.test.ts` (not part of CI). |
 
 ## Profile, Max Fans and watchdog paths
