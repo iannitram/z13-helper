@@ -20,7 +20,8 @@ GOAL_NOT_MET = "goal_not_met"
 # Rate limit: the lightbar wedges under write bursts (Phase 7). Minimum seconds between
 # two signal writes (those reported via `last_write`; this module cannot see profile
 # applies or hardware_controller lighting writes, so the runner (#130) should pass the
-# time of the latest lightbar write of any kind), and the longest a one-shot may show.
+# time of the latest lightbar write of any kind), and the longest a one-shot may show,
+# measured from that same last write.
 MIN_WRITE_INTERVAL_S = 3.0
 ONE_SHOT_S = 3.0
 
@@ -60,19 +61,30 @@ def signal_for(event: str) -> Optional[Signal]:
     return SIGNALS.get(event)
 
 
-def active_signal(active: Mapping[str, Optional[float]], now: float) -> Optional[Signal]:
+def active_signal(active: Mapping[str, Optional[float]], now: float,
+                  last_write: Optional[float] = None,
+                  shown: Optional[Pattern] = None) -> Optional[Signal]:
     """Highest-priority signal showing now.
 
     `active` maps event -> start time (sticky events stay while present; one-shots
-    expire `duration_s` after start). Unknown events are ignored.
+    expire `duration_s` after the latest lightbar write, not the event start, so a
+    write made at the same moment (a profile apply) does not use up the window while
+    it defers the play). Unknown events are ignored.
     """
     best = None
     for event, started in active.items():
         sig = SIGNALS.get(event)
         if sig is None or started is None:
             continue
-        if sig.duration_s is not None and now - started >= sig.duration_s:
-            continue
+        if sig.duration_s is not None:
+            since = started if last_write is None else max(started, last_write)
+            # A one-shot that has not played yet keeps the first write allowed after
+            # the deferral, even when the rate limit is as long as its window.
+            pending = last_write is not None and shown != sig.pattern
+            expired = (now - since > sig.duration_s if pending
+                       else now - since >= sig.duration_s)
+            if expired:
+                continue
         if best is None or sig.priority > best.priority:
             best = sig
     return best
@@ -94,7 +106,7 @@ def next_action(active: Mapping[str, Optional[float]], shown: Optional[Pattern],
     - a different pattern wanted: play it, unless the last write was under
       MIN_WRITE_INTERVAL_S ago (deferred: "none"; the caller asks again later).
     """
-    want = active_signal(active, now) if enabled else None
+    want = active_signal(active, now, last_write, shown) if enabled else None
     if want is None:
         if shown is None or shown == restore:
             return "none", None

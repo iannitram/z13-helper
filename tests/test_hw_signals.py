@@ -106,3 +106,19 @@ def test_higher_signal_ending_hands_off_to_lower_not_restore():
                           restore=own) == ("play", low)
     # then, once the lower one ends too, the owner's lighting comes back
     assert hs.next_action({}, low, now=30.0, last_write=14.0, restore=own) == ("restore", own)
+
+
+def test_one_shot_expiry_is_measured_from_the_last_lightbar_write():
+    # A profile apply writes the lightbar as profile_changed fires, so the play waits
+    # for the rate limit; that deferral must not consume the one-shot's window.
+    active = {hs.PROFILE_CHANGED: 0.0}
+    assert hs.active_signal(active, hs.ONE_SHOT_S,
+                            last_write=0.0).event == hs.PROFILE_CHANGED
+    pattern = hs.SIGNALS[hs.PROFILE_CHANGED].pattern
+    assert hs.next_action(active, None, now=hs.MIN_WRITE_INTERVAL_S,
+                          last_write=0.0) == ("play", pattern)
+    # a later write moves the window too
+    assert hs.active_signal({hs.PROFILE_CHANGED: 0.0}, 4.0,
+                            last_write=1.5).event == hs.PROFILE_CHANGED
+    # and it still ends one full window after the write
+    assert hs.active_signal(active, hs.ONE_SHOT_S + 0.1, last_write=0.0) is None
