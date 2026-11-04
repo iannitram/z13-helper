@@ -127,7 +127,11 @@ def test_manual_on_off_still_does_hardware(real_subprocess, env):
         'echo "z13-profile $*" >> "$STUB_LOG"\n'
         'case "$1" in\n'
         "  active) echo Balanced ;;\n"
-        '  show) printf \'{"name":"Balanced","tdp":{"pl1":30,"pl2":30,"pl3":30}}\' ;;\n'
+        '  show) if [ "$2" = Boondock ]; then\n'
+        '    printf \'{"name":"Boondock","tdp":{"pl1":28,"pl2":32,"pl3":45}}\'\n'
+        "  else\n"
+        '    printf \'{"name":"Balanced","tdp":{"pl1":30,"pl2":30,"pl3":30}}\'\n'
+        "  fi ;;\n"
         "esac\n"
     )
     profile.chmod(0o755)
@@ -146,7 +150,7 @@ def test_manual_on_off_still_does_hardware(real_subprocess, env):
     assert manual("on").returncode == 0
     log = Path(env["STUB_LOG"]).read_text()
     assert "z13ctl profile --set quiet" in log
-    assert "z13ctl tdp --set 20 --pl2 30 --pl3 40" in log
+    assert "z13ctl tdp --set 28 --pl2 32 --pl3 45" in log
     snapshot = Path(env["BOONDOCK_STATE"]).read_text()
     assert "profile=Balanced" in snapshot
     assert "pl1=30" in snapshot

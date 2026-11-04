@@ -128,10 +128,21 @@ do_hw_on() {
       echo "profile=$(cat "$PROFILE_SYSFS" 2>/dev/null)"
     fi
   } >> "$STATE"
-  "$Z" profile --set quiet >/dev/null 2>&1; say "profile → quiet (low-power)"
   # z13ctl only (no sudo, no sysfs writes): it has the udev/perms grants as deck.
-  "$Z" tdp --set "$TDP_PL1" --pl2 "$TDP_PL2" --pl3 "$TDP_PL3" >/dev/null 2>&1
-  say "TDP → ${TDP_PL1}W sustained / ${TDP_PL2}W / ${TDP_PL3}W boost"
+  if ! "$Z" profile --set quiet >/dev/null 2>&1; then
+    say "profile → quiet FAILED"
+    return 1
+  fi
+  say "profile → quiet (low-power)"
+  local tdp1 tdp2 tdp3
+  tdp1=$(profile_tdp Boondock pl1); tdp1=${tdp1:-$TDP_PL1}
+  tdp2=$(profile_tdp Boondock pl2); tdp2=${tdp2:-$TDP_PL2}
+  tdp3=$(profile_tdp Boondock pl3); tdp3=${tdp3:-$TDP_PL3}
+  if ! "$Z" tdp --set "$tdp1" --pl2 "$tdp2" --pl3 "$tdp3" >/dev/null 2>&1; then
+    say "TDP → ${tdp1}/${tdp2}/${tdp3}W FAILED"
+    return 1
+  fi
+  say "TDP → ${tdp1}W sustained / ${tdp2}W / ${tdp3}W boost"
 }
 
 do_hw_off() {
@@ -165,8 +176,8 @@ do_hw_off() {
 }
 
 # `on` / `off` (by hand): both halves, as before.
-do_on()  { do_hw_on; do_session_on "$@"; echo "  → run 'boondock off' when you're back on power."; }
-do_off() { do_hw_off; do_session_off; echo "  → beast mode restored."; }
+do_on()  { local rc=0; do_hw_on || rc=1; do_session_on "$@"; echo "  → run 'boondock off' when you're back on power."; return "$rc"; }
+do_off() { local rc=0; do_hw_off || rc=1; do_session_off; echo "  → beast mode restored."; return "$rc"; }
 
 do_status() {
   local max cur pct; max=$(bright_max); cur=$(cat "$BL/brightness"); pct=$(( cur * 100 / max ))
