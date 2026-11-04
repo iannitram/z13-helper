@@ -50,6 +50,7 @@ The desktop Flatpak and Decky are two frontends to the same profile and Max Fans
 | `src/max_fans_state.py` | Shared Max Fans intent and saved-curve snapshot in `max-fans.json`, with inter-process locking and atomic writes. |
 | `src/fan_watchdog.py` | Shared Desktop/Game Mode recovery rules. In the desktop app, recoveries use the worker queue; stale dropped-curve recoveries are canceled if the queued profile operation has already changed Max Fans intent or restored a curve. |
 | `src/sensor_reader.py` | Read-only hwmon temperatures, fan RPM, custom-curve mode and points. It does not write hardware. |
+| `src/platform_support.py` | Read-only platform support and capability discovery (#22): supported only on Linux and the GZ302EA (DMI product name); reports per-control availability with a reason (platform profile, battery limit, keyboard backlight, fan curve, TDP, undervolt) from sysfs metadata, never a live Armoury `current_value`. `dashboard_ui.py` uses it to disable the battery limit control with a tooltip reason. |
 | `src/power_range.py` | Determines per-rail slider bounds from kernel min/max metadata and z13ctl's backend selection rules. It never reads a live PPT `current_value`. |
 | `src/hardware_controller.py` | z13ctl command wrappers for profile, fan, power, battery, lighting and Curve Optimizer operations. Every write is bounded by `host.Z13CTL_WRITE_TIMEOUT_S` (20 s); a timeout is reported, not retried. |
 | `src/host.py` | Shared command seam for Flatpak, host, and Decky contexts; owns `Z13CTL_WRITE_TIMEOUT_S`. |

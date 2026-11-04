@@ -32,6 +32,7 @@ import app_log
 import host
 import install_record
 import max_fans_state
+import platform_support
 import profiles
 import update_watch
 from fan_watchdog import FanTrace, FanWatchdog, FanWatchdogRunner
@@ -435,6 +436,14 @@ class DashboardUI(QMainWindow):
         self.batt_100.clicked.connect(self._battery_100)
         srow.addWidget(self.batt_100)
         self.batt.body.addLayout(srow)
+        support = platform_support.detect()
+        batt_cap = support["capabilities"]["battery_limit"]
+        if not batt_cap["available"]:
+            self.battery_slider.setEnabled(False)
+            self.batt_100.setEnabled(False)
+            self.batt.right.setText("unavailable")
+            self.batt.setToolTip(batt_cap["reason"])
+            logging.getLogger("z13.platform").info("Battery limit disabled: %s", batt_cap["reason"])
         col.addWidget(self.batt)
         col.addWidget(self._sep())
 
