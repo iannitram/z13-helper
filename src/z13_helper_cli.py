@@ -68,6 +68,20 @@ class CliError(RuntimeError):
     """A user-facing failure, printed without a traceback."""
 
 
+class _UsageError(Exception):
+    """An argparse failure, raised so main() can honour --json."""
+
+    def __init__(self, parser, message):
+        super().__init__(message)
+        self.parser = parser
+        self.message = message
+
+
+class _ArgumentParser(argparse.ArgumentParser):
+    def error(self, message):
+        raise _UsageError(self, message)
+
+
 # ----------------------------------------------------------------------
 # Output and small shared helpers
 # ----------------------------------------------------------------------
@@ -82,9 +96,7 @@ def _parser():
         help="print machine-readable JSON",
     )
 
-    ap = argparse.ArgumentParser(
-        prog="z13-helper", description=__doc__.split("\n\n")[0]
-    )
+    ap = _ArgumentParser(prog="z13-helper", description=__doc__.split("\n\n")[0])
     ap.add_argument(
         "--json", action="store_true", default=False, help="print machine-readable JSON"
     )
@@ -1176,8 +1188,20 @@ def cmd_crash_upload(args):
 
 
 def main(argv=None):
+    if argv is None:
+        argv = sys.argv[1:]
+    argv = list(argv)
+    want_json = "--json" in argv
     ap = _parser()
-    args = ap.parse_args(argv)
+    try:
+        args = ap.parse_args(argv)
+    except _UsageError as exc:
+        if want_json:
+            print(json.dumps({"ok": False, "error": exc.message}, sort_keys=True))
+        else:
+            exc.parser.print_usage(sys.stderr)
+            print(f"{exc.parser.prog}: error: {exc.message}", file=sys.stderr)
+        return 2
     handlers = {
         ("status",): cmd_status,
         ("version",): cmd_version,

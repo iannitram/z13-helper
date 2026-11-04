@@ -66,6 +66,15 @@ def test_every_command_accepts_json(argv):
     assert args.json is True
 
 
+def test_parse_error_honours_json(capsys):
+    assert cli.main(["bogus", "--json"]) == 2
+    captured = capsys.readouterr()
+    data = json.loads(captured.out)
+    assert data["ok"] is False and "invalid choice" in data["error"]
+    assert "usage:" not in captured.out.lower()
+    assert captured.err == ""
+
+
 def run_json(capsys, argv):
     assert cli.main(argv + ["--json"]) == 0
     return json.loads(capsys.readouterr().out)
