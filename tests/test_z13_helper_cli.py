@@ -138,6 +138,16 @@ def test_battery_set_rounds_and_clamps(owner, capsys):
     assert calls == [("set_field", ("battery_limit", 85), {})]
 
 
+@pytest.mark.parametrize("value", ["inf", "nan", "1e309"])
+def test_battery_set_rejects_non_finite_values(owner, capsys, value):
+    calls, record = owner
+    record("set_field")
+    assert cli.main(["battery", "set", value, "--json"]) == 2
+    data = json.loads(capsys.readouterr().out)
+    assert data["ok"] is False and "finite" in data["error"]
+    assert calls == []
+
+
 def test_brightness_set_passes_devices(owner, capsys):
     calls, record = owner
     record("set_field", [])

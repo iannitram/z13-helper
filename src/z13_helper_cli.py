@@ -30,6 +30,7 @@ Every command accepts `--json`.
 
 import argparse
 import json
+import math
 import os
 import sys
 import time
@@ -66,6 +67,10 @@ CONFIG_PATH = os.path.expanduser("~/.config/z13-helper/config.json")
 
 class CliError(RuntimeError):
     """A user-facing failure, printed without a traceback."""
+
+
+class _InputError(ValueError):
+    """A bad numeric argument, reported like a usage error with exit 2."""
 
 
 class _UsageError(Exception):
@@ -230,6 +235,14 @@ def _fail(args, message):
     return 1
 
 
+def _fail_input(args, message):
+    if getattr(args, "json", False):
+        print(json.dumps({"ok": False, "error": str(message)}, sort_keys=True))
+    else:
+        print(str(message), file=sys.stderr)
+    return 2
+
+
 def _as_int(value):
     try:
         return int(str(value).strip())
@@ -242,7 +255,18 @@ def _clamp(value, lo, hi):
 
 
 def _clamp_battery(value):
-    v = int(round(float(value) / BATTERY_STEP) * BATTERY_STEP)
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise _InputError(f"battery limit must be a number, got {value!r}") from None
+    if not math.isfinite(number):
+        raise _InputError(
+            f"battery limit must be a finite number, got {value!r}"
+        ) from None
+    try:
+        v = int(round(number / BATTERY_STEP) * BATTERY_STEP)
+    except (ValueError, OverflowError):
+        raise _InputError(f"battery limit is out of range, got {value!r}") from None
     return _clamp(v, BATTERY_MIN, BATTERY_MAX)
 
 
@@ -691,7 +715,10 @@ def cmd_battery(args):
 
 def cmd_brightness(args):
     action = args.action
-    if action not in ("get", "set", "screen") and action not in profiles.BRIGHTNESS_LEVELS:
+    if (
+        action not in ("get", "set", "screen")
+        and action not in profiles.BRIGHTNESS_LEVELS
+    ):
         if _as_int(action) is not None and args.value is None:
             args.value, action = action, "screen"
     if action == "get":
@@ -1256,6 +1283,8 @@ def main(argv=None):
         return _fail(args, f"unknown command {' '.join(part for part in key if part)}")
     try:
         return handler(args)
+    except (_InputError, OverflowError) as exc:
+        return _fail_input(args, exc)
     except (CliError, KeyError, ValueError, OSError, RuntimeError) as exc:
         return _fail(args, exc)
 
