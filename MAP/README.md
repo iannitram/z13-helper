@@ -102,7 +102,7 @@ Modules planned by Phases 15 and 16 (`docs/ROADMAP.md` §10a, §10b). Each moves
 | `src/fps_source.py` | planned | Read-only frame-rate reading in Game Mode (source chosen by the probe). | #126 |
 | `src/hw_signals.py` | planned | Event → lightbar pattern mapping with priority, rate limit and restore; played through `hardware_controller.py`. | #129, #130 |
 | `src/evdev_listener.py` (gestures) | planned | Hold or double-press on the side button cycles profiles/goals. | #131 |
-| shared touch UI | planned | Desktop window and QAM from one set of parts; shape to be decided in an ADR (#132, not yet written). | #132, #133 |
+| `src/design_tokens.json`, `src/theme.py`, `decky/src/tokens.ts` (shared touch UI) | planned | Shared JSON design tokens (palette, semantic accents, spacing, `>= 44 px` touch minimums) loaded by `src/theme.py` for a large-tile PyQt6 layout in `src/dashboard_ui.py` and `src/fans_window.py`, and bundled into `decky/src/` by Rollup; decided in [`docs/adr/0002-shared-touch-ui.md`](../docs/adr/0002-shared-touch-ui.md) (#132). | #133 |
 | `src/timeline.py` | planned | Append-only `~/.local/state/z13-helper/timeline.jsonl` of hardware and host changes with Phase 12c rollback records; written by `profiles.py`, `goal_runner.py`, `install.sh`. | #134 |
 | timeline view | planned | Compare and roll back, beside `updates_dialog.py` and in the QAM. | #135 |
 
@@ -155,6 +155,7 @@ flowchart LR
 | `.github/workflows/tests.yml` | CI on every push and PR: pytest and the Decky unittest suite on Linux; it does not run the Node test. |
 | `decky/rollup.config.js`, `decky/src/` | Decky bundle build; `index.tsx`, `hooks.ts` and `components/` (`PowerLimits`, `BatteryLimit`, `KeyboardBrightness`, `Telemetry`) are the QAM panel, mapped in [`decky.md`](decky.md). |
 | `flatpak/` | Flatpak manifest (`io.github.iannitram.Z13Helper.yml`), `build.sh`, the in-sandbox `launch.sh`, desktop file and AppStream metadata. |
+| `docs/adr/` | Architecture decision records: root-owned `py_modules/` copies for the Decky plugin (`0001-decky-imports-root-owned-copies.md`), and shared JSON design tokens with a large-tile PyQt6 layout rather than a desktop web view (`0002-shared-touch-ui.md`, #132); its timings are offscreen prototype measurements, and the #133 issue sync is a pending owner/coordinator action). |
 
 `z13ctl` is the sole hardware command backend. Decky Loader provides the Game Mode QAM surface; G-Helper informs the desktop layout and interaction model. The device verification checklist is in [`docs/ROADMAP.md`](../docs/ROADMAP.md); automated tests do not replace pending on-device checks.
 
