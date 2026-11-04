@@ -32,16 +32,16 @@ Keep native toolkits in each frontend—PyQt6 widgets in the desktop app and `@d
 - **Desktop app (`src/theme.py`, `src/dashboard_ui.py`, `src/fans_window.py`):** `src/theme.py` reads `src/design_tokens.json` via stdlib `json` and drives touch-sized `ModeTile` cards, `>= 44 px` combos/buttons/checkbox rows, and wide-handle touch sliders across both desktop windows. `flatpak/io.github.iannitram.Z13Helper.yml` already copies `src/` into `/app/share/z13-helper/src/`.
 - **Decky plugin (`decky/src/tokens.ts` and `decky/src/components/`):** Rollup bundles `src/design_tokens.json` into `decky/dist/index.js` at build time, so no extra runtime file copy is needed in `py_modules/` (see [ADR 0001](0001-decky-imports-root-owned-copies.md)). Components keep `@decky/ui` `Focusable`, `PanelSection` and `SliderField` so Game Mode controller and touch focus keep working with a game running (`SPEC.md` M9), while replacing inline colour and spacing literals with the shared tokens.
 
-## Measurements for Option (a) vs Option (b)
+## Offscreen prototype measurements for Option (a) vs Option (b)
 
-Measured on the target GZ302EA hardware under SteamOS 3.9.5 against the installed `io.github.iannitram.Z13Helper` Flatpak (`org.kde.Platform//6.10`, `PyQt6==6.11.0`, `QT_QPA_PLATFORM=offscreen`, 5 cold runs per case):
+These are offscreen prototype measurements taken on the target GZ302EA hardware under SteamOS 3.9.5 against the installed `io.github.iannitram.Z13Helper` Flatpak (`org.kde.Platform//6.10`, `PyQt6==6.11.0`, `QT_QPA_PLATFORM=offscreen`, 5 cold runs per case). They are not application-level startup costs of the real desktop app and must not be read as such. No benchmark harness or reproducible command is committed, and the committed record does not name the content rendered, the bridge used or the completion signal behind the timing rows. Option (a) was a prototype `QWebEngineView` with a local JSON bridge (as named in the table header); the record does not state which Decky components or pages it rendered. Option (b) was PyQt6 widgets with shared tokens. Treat the timing rows as indicative only; #133 should add a committed harness before relying on them.
 
 | Metric | Option (a): `QWebEngineView` + local JSON bridge | Option (b): Shared tokens + PyQt6 widgets | Delta for (a) |
 |---|---|---|---|
 | Flatpak app installed size | **~531.0 MB** (`253.7 MB` base + `277.3 MB` unpacked `PyQt6-WebEngine` wheels) | **253.7 MB** (`files/` = `252.5 MB`; tokens `< 4 KB`) | **+277.3 MB (+109 %)** |
 | Extra wheel download at Flatpak build | `116.59 MB` (`PyQt6-WebEngine-Qt6==6.11.0` `116.27 MB` + `PyQt6-WebEngine==6.11.0` `0.32 MB`) | `0 MB` | **+116.6 MB** |
-| Cold start (wall-clock, process spawn → first rendered frame) | **266 ms** median (runs: `250, 264, 266, 267, 300 ms`) | **173 ms** median (runs: `155, 169, 173, 178, 186 ms`) | **+93 ms (+54 %)** |
-| Cold start (in-process, `QApplication` → first rendered frame) | **198 ms** median (runs: `185, 197, 198, 200, 231 ms`) | **143 ms** median (runs: `129, 141, 143, 147, 156 ms`) | **+55 ms (+38 %)** |
+| Offscreen prototype cold start (wall-clock, process spawn → prototype's offscreen completion point; signal not recorded) | **266 ms** median (runs: `250, 264, 266, 267, 300 ms`) | **173 ms** median (runs: `155, 169, 173, 178, 186 ms`) | **+93 ms (+54 %)** |
+| Offscreen prototype cold start (in-process, `QApplication` → prototype's offscreen completion point; signal not recorded) | **198 ms** median (runs: `185, 197, 198, 200, 231 ms`) | **143 ms** median (runs: `129, 141, 143, 147, 156 ms`) | **+55 ms (+38 %)** |
 | Resident memory (`VmRSS`, process tree) | **516 MB** across **4 processes** (`python3` + `QtWebEngineProcess` helpers) | **65 MB** in **1 process** | **+451 MB (~7.9×)** |
 
 Notes on the measurements:
@@ -63,6 +63,7 @@ Notes on the measurements:
 We pick **Option (b)**. Phase 16e (#133) is scoped accordingly:
 
 - **16e Where:** `src/design_tokens.json`, `src/theme.py`, `src/dashboard_ui.py`, `src/fans_window.py`, `decky/src/tokens.ts` (and token consumers in `decky/src/`), `MAP/README.md`, `MAP/decky.md`, `docs/ROADMAP.md` §10b Phase 16. No `PyQt6-WebEngine` dependency, local HTTP/`QWebChannel` bridge, or `@decky/ui` DOM shim.
+- **Pending owner/coordinator action:** this 16e brief currently lives only in this ADR and `docs/ROADMAP.md`. Syncing the #133 **Where** and **Done when** fields on GitHub has not been done; the issue was deliberately not edited from #132. The owner or coordinator should post the shared-token criteria (the `src/design_tokens.json` bullet below, with `pytest` parity checks and `>= 44 px` minimums) and the Decky criteria (`decky/src/` consuming the shared accent and spacing tokens, keeping `@decky/ui` `Focusable` QAM navigation) to #133.
 - **16e Done when:**
   - `src/design_tokens.json` defines the shared design tokens (surfaces, text, borders, semantic profile/goal accents, radii, spacing, and `>= 44 px` minimum touch target metrics), loaded by `src/theme.py` in the desktop app and imported at build time by `decky/src/tokens.ts` in the Decky plugin, with `pytest` checks (no `PyQt6` import) verifying token parity and `>= 44 px` touch minimums.
   - `src/dashboard_ui.py` and `src/fans_window.py` rebuild the desktop app as large touch-first tiles and controls where every interactive target is at least `44 px` tall/wide and every control from the current windows still exists.

@@ -98,3 +98,25 @@ def test_adr_0002_follows_glossary_and_privacy_rules():
     # AGENTS.md rule 8: no home paths or email addresses in docs.
     assert "/home/" not in text
     assert not re.search(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", text)
+
+
+def test_adr_0002_timings_are_labelled_as_offscreen_prototype_measurements():
+    text = ADR.read_text(encoding="utf-8")
+    roadmap = (ADR.parents[2] / "docs" / "ROADMAP.md").read_text(encoding="utf-8")
+
+    assert "offscreen prototype measurements" in text.lower()
+    assert "first rendered frame" not in text
+    assert "not application-level startup costs" in text
+    # The timing numbers must not be restated as app-level startup in the roadmap.
+    assert "slow cold start" not in roadmap
+    assert not re.search(r"173\s*ms to 266\s*ms", roadmap)
+
+
+def test_adr_0002_flags_pending_133_sync_with_acceptance_criteria():
+    text = ADR.read_text(encoding="utf-8")
+    roadmap = (ADR.parents[2] / "docs" / "ROADMAP.md").read_text(encoding="utf-8")
+
+    for doc in (text, roadmap):
+        assert re.search(r"pending owner/coordinator action", doc, re.IGNORECASE)
+        assert "#133" in doc
+    assert "Focusable" in text and "design_tokens.json" in text
