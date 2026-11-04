@@ -46,8 +46,10 @@ def test_restore_owner_lighting_when_signal_ends():
     shown = hs.SIGNALS[hs.PROFILE_CHANGED].pattern
     assert hs.next_action({hs.PROFILE_CHANGED: 0.0}, shown, now=5.0, last_write=0.0,
                           restore=own) == ("restore", own)
-    # no known lighting to restore: leave it alone
-    assert hs.next_action({}, shown, now=5.0, last_write=0.0) == ("none", None)
+    # no known lighting to restore: the signal still ends (one-shot never persists)
+    assert hs.next_action({hs.PROFILE_CHANGED: 0.0}, shown, now=5.0, last_write=0.0) == ("clear", None)
+    assert hs.next_action({}, shown, now=5.0, last_write=0.0) == ("clear", None)
+    assert hs.next_action({}, None, now=5.0, last_write=0.0) == ("none", None)
     # nothing shown, nothing to do
     assert hs.next_action({}, None, now=5.0, last_write=None, restore=own) == ("none", None)
 
@@ -75,3 +77,24 @@ def test_goal_not_met_has_its_own_sticky_pattern_between_limit_and_update():
     assert hs.next_action({hs.GOAL_NOT_MET: 0.0}, None, now=0.0, last_write=None) == ("play", sig.pattern)
     patterns = [s.pattern for s in hs.SIGNALS.values()]
     assert len(set(patterns)) == len(patterns)
+
+
+def test_higher_signal_preempts_lower_when_write_gap_allows():
+    low = hs.SIGNALS[hs.CHARGE_LIMIT].pattern
+    high = hs.SIGNALS[hs.THROTTLING].pattern
+    active = {hs.CHARGE_LIMIT: 0.0, hs.THROTTLING: 4.0}
+    assert hs.next_action(active, low, now=4.0, last_write=3.0)[0] == "none"
+    assert hs.next_action(active, low, now=3.0 + hs.MIN_WRITE_INTERVAL_S,
+                          last_write=3.0) == ("play", high)
+    assert hs.next_action(active, None, now=4.0, last_write=None) == ("play", high)
+
+
+def test_higher_signal_ending_hands_off_to_lower_not_restore():
+    own = hs.Pattern("static", "white")
+    low = hs.SIGNALS[hs.CHARGE_LIMIT].pattern
+    high = hs.SIGNALS[hs.PROFILE_CHANGED].pattern
+    active = {hs.CHARGE_LIMIT: 0.0, hs.PROFILE_CHANGED: 10.0}
+    assert hs.next_action(active, high, now=10.0 + hs.ONE_SHOT_S, last_write=10.0,
+                          restore=own) == ("play", low)
+    # then, once the lower one ends too, the owner's lighting comes back
+    assert hs.next_action({}, low, now=30.0, last_write=14.0, restore=own) == ("restore", own)
