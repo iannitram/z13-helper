@@ -18,7 +18,7 @@ def edid(vendor="TMA", product=0x0803, model="TL134ADXP03"):
 
 @pytest.fixture
 def device(tmp_path):
-    config = tmp_path / "config"
+    config = tmp_path / "home" / ".config"
     installed = config / verify.PROFILE
     installed.parent.mkdir(parents=True)
     installed.write_bytes(verify.SOURCE.read_bytes())
@@ -78,14 +78,21 @@ def test_missing_context_and_drift_are_reported(device):
 
 
 def test_cli_reports_blockers_without_writing(monkeypatch, capsys, device):
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(device["config_home"]))
+    home = device["config_home"].parent
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home / "elsewhere"))
     collect = verify.collect
-    monkeypatch.setattr(verify, "collect", lambda config: collect(**device))
+    seen = []
+    monkeypatch.setattr(verify, "collect", lambda config: seen.append(config) or collect(
+        **{**device, "config_home": config}))
+    before = sorted(home.parent.rglob("*"))
     assert verify.main([]) == 0
+    assert seen == [device["config_home"]]
     assert json.loads(capsys.readouterr().out)["device_acceptance"].startswith("pending")
     (device["config_home"] / verify.PROFILE).unlink()
     assert verify.main([]) == 1
     assert json.loads(capsys.readouterr().out)["preflight_blockers"]
+    assert sorted(home.parent.rglob("*")) == [p for p in before if p.exists()]
 
 
 def test_newer_steamos_is_a_note_not_a_blocker(device):
@@ -93,3 +100,11 @@ def test_newer_steamos_is_a_note_not_a_blocker(device):
     report = verify.collect(**device)
     assert report["preflight_blockers"] == []
     assert "found newer steamos 3.10.0" in report["preflight_notes"][0]
+
+
+@pytest.mark.parametrize("value,blocked", [
+    ("3.9.5-preview", False), ("3.9", True), ("3.10", False), ("junk", True)])
+def test_version_suffix_and_short_forms(device, value, blocked):
+    device["os_release"].write_text(f"ID=steamos\nVERSION_ID={value}\n")
+    report = verify.collect(**device)
+    assert bool(report["preflight_blockers"]) == blocked

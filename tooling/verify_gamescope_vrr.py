@@ -8,6 +8,7 @@ output and the manual Game Mode observations in the issue #73 comment.
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 
 
@@ -39,10 +40,12 @@ def panel_identity(data):
 
 
 def version_tuple(value):
-    try:
-        return tuple(int(part) for part in (value or "").split("."))
-    except ValueError:
+    """Leading numeric release (3.9.5-preview -> 3.9.5), padded to three parts."""
+    match = re.match(r"\d+(?:\.\d+)*", value or "")
+    if not match:
         return None
+    parts = tuple(int(part) for part in match.group().split("."))
+    return parts + (0,) * (3 - len(parts))
 
 
 def collect(config_home, drm=Path("/sys/class/drm"),
@@ -101,7 +104,8 @@ def collect(config_home, drm=Path("/sys/class/drm"),
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.parse_args(argv)
-    config = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+    # Same location install_check.py writes to; it ignores XDG_CONFIG_HOME.
+    config = Path(os.path.expanduser("~")) / ".config"
     report = collect(config)
     print(json.dumps(report, indent=2))
     # Zero means only that preflight found no blockers, never hardware sign-off.
