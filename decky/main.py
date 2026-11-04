@@ -31,6 +31,7 @@ if os.path.isdir(_PY_MODULES) and _PY_MODULES not in sys.path:
     sys.path.insert(0, _PY_MODULES)
 import crash_report
 import host
+import compute_health
 import power_range
 from fan_watchdog import FanTrace, FanWatchdog
 from sensor_reader import SensorReader
@@ -1147,6 +1148,14 @@ class Plugin:
         if res["ok"]:
             _save_plugin_state(brightness=level)
         return res
+
+    async def get_compute_health(self) -> dict:
+        # Read-only; the host probe can take a few seconds, so off the event loop.
+        return await asyncio.get_event_loop().run_in_executor(None, compute_health.health_report)
+
+    async def run_compute_smoke(self, budget_mib: int = compute_health.SMOKE_DEFAULT_MIB) -> dict:
+        """Only on an explicit button press: allocates `budget_mib` (clamped) of GPU memory."""
+        return await asyncio.get_event_loop().run_in_executor(None, compute_health.smoke_test, budget_mib)
 
     async def get_telemetry(self) -> dict:
         return telemetry()   # a handful of sysfs reads; cheap enough inline

@@ -25,6 +25,7 @@ import { TelemetryRow } from "./components/Telemetry";
 import { PowerLimits } from "./components/PowerLimits";
 import { BatteryLimit } from "./components/BatteryLimit";
 import { KeyboardBrightness } from "./components/KeyboardBrightness";
+import { ComputeHealth } from "./components/ComputeHealth";
 
 const PLATFORM_PROFILES = [
   { data: "quiet", label: "Quiet" },
@@ -125,6 +126,7 @@ function Content() {
       <PanelSection title="Keyboard brightness">
         <KeyboardBrightness state={power} />
       </PanelSection>
+      <ComputeHealth />
     </>
   );
 }

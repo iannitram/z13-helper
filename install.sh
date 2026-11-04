@@ -83,7 +83,8 @@ PLUGIN_DIR="$HOME/homebrew/plugins/z13-helper"
 PLUGIN_FILES=(plugin.json package.json main.py dist/index.js dist/index.js.map
               py_modules/fan_watchdog.py py_modules/sensor_reader.py py_modules/host.py
               py_modules/power_range.py py_modules/crash_report.py py_modules/crash_queue.py
-              py_modules/crash_scrub.py py_modules/_crash_build.json)
+              py_modules/crash_scrub.py py_modules/_crash_build.json
+              py_modules/compute_health.py)
 # py_modules/X comes from src/X (shared with the desktop app, installed root-owned:
 # docs/adr/0001-decky-imports-root-owned-copies.md); everything else from decky/.
 plugin_src() {

@@ -39,6 +39,7 @@ from screen_brightness import ScreenBrightness, MIN_PERCENT
 from apply_worker import ApplyWorker
 from profile_control import ProfileControl
 from fans_window import FansWindow
+from compute_dialog import ComputeDialog
 from updates_dialog import UpdatesDialog, UpdateCheckThread
 from theme import (STYLESHEET, ModeTile, Panel, pill, tip, ECO, STANDARD, TURBO, CUSTOM,
                    ACCENT_FOR_BASE, BORDER)
@@ -199,6 +200,9 @@ class DashboardUI(QMainWindow):
         upd = QAction("Updates…", self)
         upd.triggered.connect(self._open_updates)
         file_menu.addAction(upd)
+        mem = QAction("Memory and compute…", self)
+        mem.triggered.connect(self._open_compute)
+        file_menu.addAction(mem)
         file_menu.addSeparator()
         hide = QAction("Hide to Tray", self)
         hide.setShortcut("Ctrl+H")
@@ -800,6 +804,12 @@ class DashboardUI(QMainWindow):
             return
         self._last_crash_notice = time.monotonic()
         self._tray.showMessage("Z13-Helper", text, QSystemTrayIcon.MessageIcon.Warning, 6000)
+
+    def _open_compute(self):
+        if getattr(self, "_compute_dialog", None) is None:
+            self._compute_dialog = ComputeDialog(self)
+        self._compute_dialog.show()
+        self._compute_dialog.raise_()
 
     def _open_updates(self):
         if self._updates_dialog is None:
