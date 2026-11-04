@@ -94,3 +94,31 @@ present).
 
 The maintainer's notes were rewritten on 2026-09-23 and now describe evdev-direct as the real
 side-button path, with InputPlumber D-Bus as a never-taken fallback.
+
+## Gestures: probe result and the profile-cycle gesture (Phase 16c, #131)
+
+**Probe: does the side button report releases?** Yes, but as a pulse. The raw `Asus WMI hotkeys`
+device emits `EV_KEY code=202 value=1` and `value=0` back to back for every press (verified live
+2026-07-14 and 2026-07-15, see the header of `tooling/z13-button-watcher`), with no key-up after a
+hold and no autorepeat. So the release carries no hold duration and **a hold gesture is impossible**;
+gestures are made of press counts. `python3 src/evdev_listener.py --probe` (on the host) prints every
+event with its value and the gap since the last one, to re-run the probe on a new firmware or kernel.
+Re-run on the device: pending (`needs-owner-device`).
+
+**The gesture is a triple press, not a double press.** Game Mode already gives a double tap to the
+Steam menu (`tooling/z13-button-watcher`), so a double-press cycle would fire both. Presses within
+0.35 s count as one chain:
+
+| Presses | Action |
+|---|---|
+| 1 | unchanged: Desktop Mode toggles the window, Game Mode opens the Quick Access Menu |
+| 2 | unchanged: Game Mode opens the Steam menu |
+| 3 | cycles to the next profile (wraps) and **replaces** the third press's own action |
+| 4+ | a new chain starts after the third, so one chain cycles once |
+
+Desktop Mode: the reader (`src/evdev_listener.py`, `GestureDetector`) prints `CYCLE` instead of the
+third `PRESS`; the app calls `DashboardUI.cycle_profile()`. Game Mode: the watcher sends `cycle` to the
+resident app over its socket (`src/single_instance.py`), so both modes use the same switch and the
+same lightbar confirmation (#130). InputPlumber stays masked: nothing here emulates input or touches
+the gamepad stack (principle 2). Not done: the Game Mode watcher does not flash the lightbar by
+itself, it relies on the app being resident.

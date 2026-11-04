@@ -3,6 +3,7 @@ import os
 import struct
 import sys
 import threading
+import time
 import logging
 
 logger = logging.getLogger(__name__)
@@ -12,6 +13,37 @@ logger = logging.getLogger(__name__)
 _EVENT_FORMAT = "llHHi"
 _EVENT_SIZE = struct.calcsize(_EVENT_FORMAT)
 EV_KEY = 0x01
+
+# Gesture (issue #131). The probe (docs/BUTTON-AND-INPUTPLUMBER.md) found the side button is
+# a momentary DOWN+UP pulse with no hold information, so hold is impossible; presses are
+# counted instead. Game Mode already gives a double tap to the Steam menu
+# (tooling/z13-button-watcher), so the profile-cycle gesture is a triple press: presses 1 and
+# 2 keep their current actions, press 3 cycles instead of acting. Same window as the watcher.
+GESTURE_WINDOW_S = 0.35
+CYCLE_PRESSES = 3
+
+
+class GestureDetector:
+    """Counts presses that follow each other within GESTURE_WINDOW_S. Pure: pass `now`."""
+
+    def __init__(self, window: float = GESTURE_WINDOW_S, cycle_presses: int = CYCLE_PRESSES):
+        self.window = window
+        self.cycle_presses = cycle_presses
+        self._count = 0
+        self._last = None
+
+    def press(self, now: float) -> str:
+        """"press" (act as today) or "cycle" (the gesture completed; do not also act)."""
+        if self._last is not None and now - self._last <= self.window:
+            self._count += 1
+        else:
+            self._count = 1
+        self._last = now
+        if self._count >= self.cycle_presses:
+            self._count = 0      # a fourth press starts a new chain: no double-fire
+            self._last = None
+            return "cycle"
+        return "press"
 
 
 def find_side_button_device() -> tuple[str | None, int]:
@@ -115,6 +147,36 @@ class EvdevListener(threading.Thread):
                 pass
 
 
+def run_probe_loop() -> int:
+    """Device probe (`--probe`): print every EV_KEY event with its value (1 press, 0 release,
+    2 autorepeat) and the seconds since the last event, so the owner can see on the Z13
+    whether the side button reports releases and how long a hold lasts. Ctrl+C to stop."""
+    device, code = find_side_button_device()
+    if not device:
+        print("NODEV", file=sys.stderr, flush=True)
+        return 2
+    print(f"probing {device} (side button = code {code}); press and hold it, Ctrl+C to stop",
+          flush=True)
+    last = None
+    try:
+        with open(device, "rb") as f:
+            while True:
+                data = f.read(_EVENT_SIZE)
+                if len(data) < _EVENT_SIZE:
+                    return 0
+                _, _, ev_type, ev_code, value = struct.unpack(_EVENT_FORMAT, data)
+                if ev_type != EV_KEY:
+                    continue
+                now = time.monotonic()
+                gap = "" if last is None else f"  +{now - last:.3f}s"
+                last = now
+                kind = {1: "press", 0: "release", 2: "repeat"}.get(value, f"value {value}")
+                mark = "  <-- SIDE BUTTON" if ev_code == code else ""
+                print(f"code={ev_code} {kind}{gap}{mark}", flush=True)
+    except KeyboardInterrupt:
+        return 0
+
+
 def run_emit_loop() -> int:
     """Machine-readable reader: print ``PRESS`` to stdout on each side-button press.
 
@@ -129,6 +191,7 @@ def run_emit_loop() -> int:
         READY <device> <code>   → emitted once on stderr for diagnostics
         NODEV                    → emitted on stderr if no device was found (exit 2)
         PRESS                    → one line per side-button press
+        CYCLE                    → instead of PRESS, on the third press of a quick chain
     """
     device, code = find_side_button_device()
     if not device:
@@ -136,11 +199,13 @@ def run_emit_loop() -> int:
         return 2
     print(f"READY {device} {code}", file=sys.stderr, flush=True)
 
+    gestures = GestureDetector()
+
     def on_key(event_code):
         # Only the side button — the raw WMI/virtual-pad device also carries
         # other hotkeys/gamepad buttons; filter to the code we resolved.
         if event_code == code:
-            print("PRESS", flush=True)
+            print("CYCLE" if gestures.press(time.monotonic()) == "cycle" else "PRESS", flush=True)
 
     listener = EvdevListener(device, on_key)
     listener.daemon = False
@@ -157,6 +222,8 @@ if __name__ == "__main__":
 
     if "--emit" in sys.argv:
         sys.exit(run_emit_loop())
+    if "--probe" in sys.argv:
+        sys.exit(run_probe_loop())
 
     device, code = find_side_button_device()
     if device:

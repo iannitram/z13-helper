@@ -87,6 +87,21 @@ class ProfileControl(QObject):
         self.changed.emit()
         self._submit(f"Profile → {name}", lambda: profiles.apply_by_name(name))
 
+    def next_name(self):
+        """The profile after the one shown (wraps), or None with fewer than two."""
+        names = self.names()
+        shown = self.shown()["name"]
+        if len(names) < 2 or shown not in names:
+            return None
+        return names[(names.index(shown) + 1) % len(names)]
+
+    def cycle(self):
+        """Switch to the next profile; returns its name (None when there is nothing to cycle)."""
+        name = self.next_name()
+        if name:
+            self.switch(name)
+        return name
+
     def reapply_active(self):
         name = self.active_name()
         self._submit(f"Re-applied {name}", lambda: profiles.apply_by_name(name, skip_hooks=True))
