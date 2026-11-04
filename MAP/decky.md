@@ -30,7 +30,7 @@ Decky re-reads shared state when its methods need it rather than holding a long-
 
 | Path | Responsibility |
 |---|---|
-| `decky/main.py` | Decky backend and callable API. Profile reads/switches, Max Fans, direct performance profile, power, battery limit, brightness, telemetry, desktop-app check and Game Mode watchdog lifecycle. Each z13ctl write uses `host.Z13CTL_WRITE_TIMEOUT_S` (20 s); a profile apply gets its own 180 s budget (`PROFILE_APPLY_TIMEOUT_S`). Write callables (`set_app_profile`, `set_profile`, `set_max_fans`) return `{ok, message}`, so a timeout reaches the panel as text. |
+| `decky/main.py` | Decky backend and callable API. Profile reads/switches, Max Fans, direct performance profile, power, battery limit, brightness, telemetry, desktop-app check and Game Mode watchdog lifecycle. `BackendMemoryGuard` monitors current process RSS on a separate thread every 5 s, exits only this backend at 500 MiB, and stops/joins on unload (sampled threshold; process isolation, respawn and plugin reload after a trip are unverified, needs device check). Each z13ctl write uses `host.Z13CTL_WRITE_TIMEOUT_S` (20 s); a profile apply gets its own 180 s budget (`PROFILE_APPLY_TIMEOUT_S`). Write callables (`set_app_profile`, `set_profile`, `set_max_fans`) return `{ok, message}`, so a timeout reaches the panel as text. |
 | `decky/src/index.tsx` | QAM panel composition and profile switch flow. |
 | `decky/src/backend.ts` | Typed Decky callable names, results and shared TDP clamping rule. |
 | `decky/src/profileSwitch.ts` | Pure async flow for profile changes: apply, then re-read profile and Max Fans whether apply succeeds or fails. |
@@ -39,7 +39,7 @@ Decky re-reads shared state when its methods need it rather than holding a long-
 | `decky/src/components/BatteryLimit.tsx` | Battery charge limit control. |
 | `decky/src/components/KeyboardBrightness.tsx` | Keyboard brightness control. |
 | `decky/src/components/Telemetry.tsx` | APU/GPU temperatures and fan RPM display. |
-| Installed plugin `py_modules/fan_watchdog.py` | Root-owned installed copy of `src/fan_watchdog.py`; dropped-curve and fan-stall recovery logic. |
+| Installed plugin `py_modules/fan_watchdog.py` | Root-owned installed copy of `src/fan_watchdog.py`; dropped-curve and fan-stall recovery logic; `FanTrace` history is bounded to 120 s and 256 entries. |
 | Installed plugin `py_modules/sensor_reader.py` | Root-owned installed copy of `src/sensor_reader.py`; read-only hwmon collection. |
 | Installed plugin `py_modules/power_range.py` | Root-owned installed copy of `src/power_range.py`; per-rail metadata bounds matching z13ctl backend selection. |
 | Installed plugin `py_modules/host.py` | Root-owned installed copy of `src/host.py`; host command mode and environment handling. |
@@ -65,3 +65,5 @@ The Game Mode watchdog uses the same `src/fan_watchdog.py` implementation as the
 ## Tests and verification boundary
 
 CI runs the pytest suite and Decky backend unittest suite. The Node profile-switch test is separate and is run manually. These tests verify API shape, command construction, shared store behavior, locking and pure transition logic; they do not verify the live Decky QAM or actual firmware response. On-device Game Mode, suspend/resume, and cold-boot behavior remain owner-device checks recorded in the roadmap.
+
+Memory investigation: [`docs/fan-watchdog-memory.md`](../docs/fan-watchdog-memory.md) records the source audit and containment limitations. `tests/test_backend_memory.py` covers the monitor and plugin lifecycle; `tests/test_fan_trace.py` covers trace bounds. #30 remains open until a completed 24-hour sampler run is interpreted.

@@ -38,7 +38,7 @@ suspend/resume, sustained load and soak still need verification; 1.0 remains unf
 - **#16** Decky Profile dropdown showing a state that never applied: ✅ fixed by PR #49 (`decky/src/profileSwitch.ts`), merged 2026-10-26; the on-device check is part of #61.
 - **#58** flaky and environment-dependent tests: partly resolved, including temp-name/store-owner fixtures. Current suites pass; this does not close every environment check in the issue.
 - **#86** fan/power regression: individual fixes are under review; root firmware causality and broader device verification remain open. See the release record for observed behaviour and rejected workarounds.
-- **#30** the reported 43 GB memory spike: open (investigation).
+- **#30** the reported 43 GB memory spike: open (investigation). Source audit and preventive trace/RSS bounds are recorded in [fan-watchdog-memory.md](fan-watchdog-memory.md); no completed 24-hour current-identity sampler result or leak attribution is claimed.
 - Also merged 2026-10-26: PR #3, `tooling/z13_gamemode_report.py` (reads a Game Mode session back from local logs).
 
 ### Fixed today (2026-10-09)

@@ -4,7 +4,9 @@ run() is exercised with subprocess.run swapped for a recorder, so nothing runs
 and neither the real ~/.config nor /run/user is touched.
 """
 
+import io
 import subprocess
+import sys
 
 import pytest
 
@@ -93,16 +95,31 @@ def test_library_path_dropped_when_no_original():
 # run()
 # ----------------------------------------------------------------------
 
+class FakeProc:
+    def __init__(self, out=b"out\nerr\n", rc=0, wait_exc=None):
+        self.stdout, self.stdin = io.BytesIO(out), io.BytesIO()
+        self.stdin.close = lambda: None
+        self.rc, self.wait_exc, self.killed = rc, wait_exc, False
+
+    def wait(self, timeout=None):
+        if self.wait_exc and not self.killed:
+            raise self.wait_exc
+        return self.rc
+
+    def kill(self):
+        self.killed = True
+
+
 @pytest.fixture
 def recorded(monkeypatch):
-    """subprocess.run replaced by a recorder; `answer` decides what it does."""
+    """subprocess.Popen replaced by a recorder; `answer` decides what it does."""
     calls = []
 
     def fake(cmd, **kw):
         calls.append((cmd, kw))
         return recorded_answer[0](cmd, kw)
-    recorded_answer = [lambda cmd, kw: subprocess.CompletedProcess(cmd, 0, "out\n", "err\n")]
-    monkeypatch.setattr(subprocess, "run", fake)
+    recorded_answer = [lambda cmd, kw: FakeProc()]
+    monkeypatch.setattr(subprocess, "Popen", fake)
     monkeypatch.setattr(host, "MODE", "host")
     fake.calls, fake.answer = calls, recorded_answer
     return fake
@@ -113,12 +130,33 @@ def test_run_combines_stdout_and_stderr(recorded):
     assert r == host.Result(0, "out\nerr", False)
     cmd, kw = recorded.calls[0]
     assert cmd == ["z13ctl", "status"]
-    assert kw["timeout"] == 9 and kw["env"] is None and kw["capture_output"] and kw["text"]
+    assert kw["env"] is None and kw["stdout"] == subprocess.PIPE and kw["stderr"] == subprocess.STDOUT
 
 
 def test_run_passes_input(recorded):
+    procs = []
+    def answer(cmd, kw):
+        procs.append(FakeProc())
+        return procs[0]
+    recorded.answer[0] = answer
     host.run(["tee", "/sys/class/backlight/x/brightness"], input="5\n")
-    assert recorded.calls[0][1]["input"] == "5\n"
+    assert recorded.calls[0][1]["stdin"] == subprocess.PIPE
+    assert procs[0].stdin.getvalue() == b"5\n"
+
+
+def test_run_caps_captured_output(recorded, monkeypatch):
+    monkeypatch.setattr(host, "MAX_OUTPUT_BYTES", 10)
+    recorded.answer[0] = lambda cmd, kw: FakeProc(out=b"x" * 200000)
+    r = host.run(["noisy"])
+    assert r == host.Result(0, "x" * 10, False)
+
+
+def test_run_cap_real_child_drains_everything(real_subprocess, monkeypatch):
+    monkeypatch.setattr(host, "MODE", "host")
+    monkeypatch.setattr(host, "MAX_OUTPUT_BYTES", 100)
+    code = "import sys; sys.stdout.write('a'*3000000); sys.stderr.write('b'*10)"
+    r = host.run([sys.executable, "-c", code], timeout=30)
+    assert r.rc == 0 and r.out == "a" * 100 and not r.timed_out
 
 
 def test_run_uses_the_detected_mode(recorded, monkeypatch):
@@ -128,9 +166,7 @@ def test_run_uses_the_detected_mode(recorded, monkeypatch):
 
 
 def test_run_timeout(recorded):
-    def boom(cmd, kw):
-        raise subprocess.TimeoutExpired(cmd, kw["timeout"])
-    recorded.answer[0] = boom
+    recorded.answer[0] = lambda cmd, kw: FakeProc(wait_exc=subprocess.TimeoutExpired(cmd, 30))
     r = host.run(["z13ctl", "--device", "lightbar", "brightness", "low"], timeout=30)
     assert r.rc == host.RC_TIMEOUT and r.timed_out
     assert "timed out" in r.out     # profiles.lightbar_failure_kind reads this as "wedged"

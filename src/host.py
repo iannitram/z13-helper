@@ -26,6 +26,7 @@ import collections
 import os
 import re
 import subprocess
+import threading
 
 DECK_HOME = "/home/deck"
 DECK_RUNTIME_DIR = "/run/user/1000"
@@ -33,6 +34,7 @@ DECK_BUS = f"unix:path={DECK_RUNTIME_DIR}/bus"
 
 RC_TIMEOUT = 124
 RC_NOT_FOUND = 127
+MAX_OUTPUT_BYTES = 1024 * 1024   # captured child output kept in memory (issue #30)
 
 Result = collections.namedtuple("Result", "rc out timed_out")
 
@@ -107,16 +109,63 @@ def holo_or_steamos(name: str) -> str:
     return _HOLO_TOOLS[name]
 
 
-def run(argv, timeout=30, *, as_deck=False, input=None):
-    """Run argv on the host and wait. Returns Result(rc, out, timed_out); never raises."""
-    cmd, env = command(argv, as_deck=as_deck)
+def _drain(stream, chunks, cap):
+    """Read to EOF, keeping at most `cap` bytes; the rest is read and dropped."""
+    kept = 0
+    while True:
+        block = stream.read(65536)
+        if not block:
+            return
+        if kept < cap:
+            chunks.append(block[:cap - kept])
+            kept += len(chunks[-1])
+
+
+def _feed(stream, data):
     try:
-        p = subprocess.run(cmd, env=env, input=input, capture_output=True, text=True,
-                           timeout=timeout)
-    except subprocess.TimeoutExpired:
-        return Result(RC_TIMEOUT, f"timed out after {timeout} s", True)
+        stream.write(data)
+    except OSError:      # child closed stdin early
+        pass
+    finally:
+        try:
+            stream.close()
+        except OSError:
+            pass
+
+
+def run(argv, timeout=30, *, as_deck=False, input=None):
+    """Run argv on the host and wait. Returns Result(rc, out, timed_out); never raises.
+
+    stdout+stderr are merged and only the first MAX_OUTPUT_BYTES are kept in memory.
+    """
+    cmd, env = command(argv, as_deck=as_deck)
+    chunks, threads = [], []
+    try:
+        p = subprocess.Popen(cmd, env=env, stdin=None if input is None else subprocess.PIPE,
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     except FileNotFoundError as e:
         return Result(RC_NOT_FOUND, str(e), False)
     except (OSError, ValueError, subprocess.SubprocessError) as e:
         return Result(1, str(e), False)
-    return Result(p.returncode, ((p.stdout or "") + (p.stderr or "")).strip(), False)
+    try:
+        threads.append(threading.Thread(target=_drain, args=(p.stdout, chunks, MAX_OUTPUT_BYTES),
+                                        daemon=True))
+        if input is not None:
+            threads.append(threading.Thread(target=_feed, args=(p.stdin, input.encode()),
+                                            daemon=True))
+        for t in threads:
+            t.start()
+        try:
+            rc = p.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            p.wait()
+            return Result(RC_TIMEOUT, f"timed out after {timeout} s", True)
+        for t in threads:
+            t.join(5)
+    except (OSError, ValueError, subprocess.SubprocessError) as e:
+        p.kill()
+        return Result(1, str(e), False)
+    finally:
+        p.stdout.close()
+    return Result(rc, b"".join(chunks).decode(errors="replace").strip(), False)

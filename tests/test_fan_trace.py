@@ -160,3 +160,18 @@ def test_deferred_recovery_result_is_traced_when_the_worker_finishes(clock):
     results = [l for l in cap.lines if "*** RESULT" in l]
     assert len(results) == 1 and text in results[0]
     assert "*** RESULT Fans were stalled" in results[0]    # same text as the inline path
+
+
+def test_history_has_count_bound_even_when_clock_does_not_advance(clock):
+    wd, _, _, _, _ = make(clock)
+    for _ in range(10_000):
+        wd.trace.record(clock(), {}, (None, None))
+    assert len(wd.trace._history) == wd.trace.HISTORY_MAX_ENTRIES
+
+
+def test_history_still_expires_old_samples(clock):
+    wd, _, _, _, _ = make(clock)
+    wd.trace.record(clock(), {}, (None, None))
+    clock.advance(wd.trace.HISTORY_S + 1)
+    wd.trace.record(clock(), {}, (None, None))
+    assert len(wd.trace._history) == 1
