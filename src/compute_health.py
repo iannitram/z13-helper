@@ -126,6 +126,20 @@ def gfx_name(target_version):
     return f"gfx{major}{minor}{step:x}"
 
 
+def _pci_id(props):
+    """"1002:1586" from the KFD vendor_id/device_id (decimal), or None. The file has no name key."""
+    try:
+        return f"{int(props['vendor_id']):04x}:{int(props['device_id']):04x}"
+    except (KeyError, ValueError):
+        return None
+
+
+def _json_line(text):
+    """The last line of `text` that is a JSON object; host.run mixes stderr into out."""
+    lines = [l for l in (text or "").splitlines() if l.lstrip().startswith("{")]
+    return json.loads(lines[-1])
+
+
 def gpu_identity():
     """GPU agents the kernel's KFD lists: [{"gfx": "gfx1151", "name": ...}]. Empty without KFD."""
     agents = []
@@ -143,7 +157,7 @@ def gpu_identity():
         except ValueError:
             gfx = None
         if gfx:
-            agents.append({"gfx": gfx, "name": props.get("name") or None})
+            agents.append({"gfx": gfx, "name": _pci_id(props)})
     return agents
 
 
@@ -213,7 +227,7 @@ def discover():
     info = {}
     if res.rc == 0:
         try:
-            info = json.loads(res.out.splitlines()[-1])
+            info = _json_line(res.out)
         except (ValueError, IndexError):
             info = {}
     return {
@@ -279,7 +293,7 @@ def smoke_test(budget_mib=SMOKE_DEFAULT_MIB, hip_lib=None):
         return {"ok": False, "budget_mib": budget,
                 "detail": f"Timed out after {SMOKE_TIMEOUT_S} s."}
     try:
-        data = json.loads(res.out.splitlines()[-1])
+        data = _json_line(res.out)
         return {"ok": bool(data["ok"]), "budget_mib": budget, "detail": str(data["detail"])}
     except (ValueError, IndexError, KeyError, TypeError):
         return {"ok": False, "budget_mib": budget,

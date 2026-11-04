@@ -78,8 +78,8 @@ def test_gpu_identity_skips_cpu_nodes(sysfs):
     for i, gfx in enumerate(("0", "110501")):
         n = sysfs / "kfd" / str(i)
         n.mkdir()
-        (n / "properties").write_text(f"cpu_cores_count 32\ngfx_target_version {gfx}\nname gfx1151\n")
-    assert ch.gpu_identity() == [{"gfx": "gfx1151", "name": "gfx1151"}]
+        (n / "properties").write_text(f"cpu_cores_count 32\ngfx_target_version {gfx}\nvendor_id 4098\ndevice_id 5510\n")
+    assert ch.gpu_identity() == [{"gfx": "gfx1151", "name": "1002:1586"}]
 
 
 def test_no_kfd_means_no_agents(sysfs):
