@@ -156,6 +156,29 @@ def test_wrong_types_are_rejected_before_the_owner(owner, name, arguments):
     assert calls == []
 
 
+@pytest.mark.parametrize(
+    "name, arguments",
+    [
+        ("battery_set", {"limit": 39}),
+        ("battery_set", {"limit": 101}),
+        ("profile_set", {"name": "Turbo", "battery_limit": 39}),
+        ("profile_set", {"name": "Turbo", "battery_limit": 101}),
+        ("screen_brightness_set", {"percent": -1}),
+        ("screen_brightness_set", {"percent": 101}),
+    ],
+)
+def test_out_of_range_limits_are_rejected_before_the_owner(
+    owner, profiles_env, name, arguments
+):
+    calls, record = owner
+    record("set_field")
+    record("edit")
+    result = mcp_server.call_tool(name, arguments)
+    assert result["isError"] is True
+    assert "must be at" in result["content"][0]["text"]
+    assert calls == []
+
+
 def test_missing_and_unknown_arguments_are_tool_errors(profiles_env):
     missing = mcp_server.call_tool("battery_set", {})
     assert missing["isError"] is True

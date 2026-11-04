@@ -95,7 +95,11 @@ def _tool_specs():
                     "type": "string",
                     "description": "eight temp:pct points, comma separated",
                 },
-                "battery_limit": {"type": "integer"},
+                "battery_limit": {
+                    "type": "integer",
+                    "minimum": 40,
+                    "maximum": 100,
+                },
                 "brightness": {"type": "string", "enum": levels},
                 "undervolt": {"type": "integer", "minimum": -40, "maximum": 0},
                 "epp": {"type": "string", "enum": list(cli.profiles.EPP_CHOICES)},
@@ -161,7 +165,7 @@ def _tool_specs():
         _tool(
             "battery_set",
             "Set the charge limit, rounded to 5% and clamped to 40-100%.",
-            {"limit": {"type": "integer"}},
+            {"limit": {"type": "integer", "minimum": 40, "maximum": 100}},
             required=("limit",),
             annotations=_WRITE,
         ),
@@ -183,7 +187,7 @@ def _tool_specs():
         _tool(
             "screen_brightness_set",
             "Set the built-in display brightness, clamped to the safe range.",
-            {"percent": {"type": "integer"}},
+            {"percent": {"type": "integer", "minimum": 0, "maximum": 100}},
             required=("percent",),
             annotations=_WRITE,
         ),
