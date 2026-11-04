@@ -828,6 +828,8 @@ class DashboardUI(QMainWindow):
                 parts.append(f"Fans {fan1}/{fan2}RPM")   # fan1 = CPU side, fan2 = GPU side
             elif fan1 is not None:
                 parts.append(f"Fan {fan1}RPM")
+            elif fan2 is not None:
+                parts.append(f"Fan {fan2}RPM")
             else:
                 parts.append("Fans unavailable")
             text = "  ".join(parts)

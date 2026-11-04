@@ -9,6 +9,13 @@ const temp = (v: number | null, src?: string | null) =>
   v == null ? "unavailable" : `${Math.round(v)}°C${src ? ` (${src})` : ""}`;
 const rpm = (v: number | null) => (v == null ? "unavailable" : `${v}`);
 
+const fans = (fan1: number | null, fan2: number | null) => {
+  if (fan1 == null && fan2 == null) return "unavailable";
+  if (fan1 == null) return `Fan 1 unavailable · ${rpm(fan2)} RPM`;
+  if (fan2 == null) return `${rpm(fan1)} · Fan 2 unavailable`;
+  return `${rpm(fan1)} · ${rpm(fan2)} RPM`;
+};
+
 /** CPU / GPU temperature (each with its sensor) and both fan RPMs; polled every 2 s only while the QAM is open. */
 export function TelemetryRow() {
   const [t, setT] = useState<T | null>(null);
@@ -32,9 +39,7 @@ export function TelemetryRow() {
       </PanelSectionRow>
       <PanelSectionRow>
         <Field label="Fans" focusable={false} padding="compact" childrenLayout="inline">
-          {t?.fan1 == null && t?.fan2 == null
-            ? "unavailable"
-            : `${rpm(t?.fan1 ?? null)} · ${rpm(t?.fan2 ?? null)} RPM`}
+          {fans(t?.fan1 ?? null, t?.fan2 ?? null)}
         </Field>
       </PanelSectionRow>
     </>
