@@ -4,7 +4,6 @@ Run from the repo root:  python3 -m unittest discover -s decky/tests -v
 """
 
 import asyncio
-import contextlib
 import importlib.util
 import io
 import json
@@ -38,10 +37,13 @@ import sensor_reader
 
 _SETTINGS = tempfile.mkdtemp(prefix="z13-helper-settings-")
 # main.py does `import decky` at import time; give it a stand-in.
-sys.modules.setdefault("decky", types.SimpleNamespace(
-    logger=logging.getLogger("z13-helper-test"),
-    DECKY_PLUGIN_SETTINGS_DIR=_SETTINGS,
-))
+sys.modules.setdefault(
+    "decky",
+    types.SimpleNamespace(
+        logger=logging.getLogger("z13-helper-test"),
+        DECKY_PLUGIN_SETTINGS_DIR=_SETTINGS,
+    ),
+)
 
 _spec = importlib.util.spec_from_file_location("z13_decky_main", MAIN)
 m = importlib.util.module_from_spec(_spec)
@@ -50,10 +52,18 @@ _spec.loader.exec_module(m)
 # Never touch the real deck user's files: every path the backend reads or writes
 # under ~/.config, ~/.local/state or /run/user goes to a scratch folder.
 _HOME = tempfile.mkdtemp(prefix="z13-decky-home-")
-REAL = {}   # the real values, for the tests that check the paths themselves
-for _name in ("SHARED_CONFIG", "MAX_FANS_STATE", "PROFILES_STORE", "FAN_TRACE",
-              "LIGHTBAR_STAMP", "LIGHTBAR_DAEMON_STAMP", "DESKTOP_APP_SOCKET",
-              "DESKTOP_APP_USER_QUIT", "INSTALL_JSON"):
+REAL = {}  # the real values, for the tests that check the paths themselves
+for _name in (
+    "SHARED_CONFIG",
+    "MAX_FANS_STATE",
+    "PROFILES_STORE",
+    "FAN_TRACE",
+    "LIGHTBAR_STAMP",
+    "LIGHTBAR_DAEMON_STAMP",
+    "DESKTOP_APP_SOCKET",
+    "DESKTOP_APP_USER_QUIT",
+    "INSTALL_JSON",
+):
     if hasattr(m, _name):
         REAL[_name] = getattr(m, _name)
         setattr(m, _name, os.path.join(_HOME, _name.lower()))
@@ -61,8 +71,9 @@ for _name in ("SHARED_CONFIG", "MAX_FANS_STATE", "PROFILES_STORE", "FAN_TRACE",
 
 def setUpModule():
     # Backend writes target a fixed owner, independent of the runner's account.
-    owner = types.SimpleNamespace(pw_uid=m.DECK_UID, pw_gid=m.DECK_GID,
-                                  pw_dir=os.path.join(_HOME, "owner-home"))
+    owner = types.SimpleNamespace(
+        pw_uid=m.DECK_UID, pw_gid=m.DECK_GID, pw_dir=os.path.join(_HOME, "owner-home")
+    )
     patcher = mock.patch("pwd.getpwuid", return_value=owner)
     patcher.start()
     unittest.addModuleCleanup(patcher.stop)
@@ -70,28 +81,65 @@ def setUpModule():
 
 def _store(active="Balanced"):
     """A store shaped like src/profiles.py's default_profiles()."""
+
     def prof(name, base, **kw):
-        p = {"name": name, "builtin": True, "base": base, "tdp": None, "fan_curve": None,
-             "undervolt": None, "brightness": None, "battery_limit": None,
-             "hooks": {"enter": "", "exit": ""}}
+        p = {
+            "name": name,
+            "builtin": True,
+            "base": base,
+            "tdp": None,
+            "fan_curve": None,
+            "undervolt": None,
+            "brightness": None,
+            "battery_limit": None,
+            "hooks": {"enter": "", "exit": ""},
+        }
         p.update(kw)
         return p
-    return {"version": 1, "active": active, "profiles": [
-        prof("Silent", "quiet", brightness="low", battery_limit=80),
-        prof("Balanced", "balanced", brightness="medium", battery_limit=80,
-             fan_curve=[[40, 20], [50, 35], [60, 55], [70, 75],
-                        [75, 90], [80, 100], [85, 100], [90, 100]]),
-        prof("Boondock", "quiet", tdp={"pl1": 20, "pl2": 30, "pl3": 40, "force": False},
-             hooks={"enter": "boondock on", "exit": "boondock off"}),
-    ]}
+
+    return {
+        "version": 1,
+        "active": active,
+        "profiles": [
+            prof("Silent", "quiet", brightness="low", battery_limit=80),
+            prof(
+                "Balanced",
+                "balanced",
+                brightness="medium",
+                battery_limit=80,
+                fan_curve=[
+                    [40, 20],
+                    [50, 35],
+                    [60, 55],
+                    [70, 75],
+                    [75, 90],
+                    [80, 100],
+                    [85, 100],
+                    [90, 100],
+                ],
+            ),
+            prof(
+                "Boondock",
+                "quiet",
+                tdp={"pl1": 20, "pl2": 30, "pl3": 40, "force": False},
+                hooks={"enter": "boondock on", "exit": "boondock off"},
+            ),
+        ],
+    }
 
 
 def _formatted_profile_timeout():
     stream = io.StringIO()
     with redirect_stdout(stream):
-        profiles._print_results([
-            ("fans", False, "z13ctl write timed out after 20 s (kernel asus-wmi hang?)")
-        ])
+        profiles._print_results(
+            [
+                (
+                    "fans",
+                    False,
+                    "z13ctl write timed out after 20 s (kernel asus-wmi hang?)",
+                )
+            ]
+        )
     return stream.getvalue()
 
 
@@ -101,13 +149,15 @@ FAIL_OUT = "write /dev/hidraw5: connection timed out"
 def fake_host(test, fail_if=(), out=FAIL_OUT):
     """A FakeHost installed as host.run for the rest of `test`; calls whose argv
     contains a fail_if substring answer (1, out)."""
-    for attr, value in (("STORE_PATH", os.path.join(_HOME, "engine-profiles.json")),
-                        ("MAX_FANS_PATH", os.path.join(_HOME, "engine-max-fans.json")),
-                        ("LEGACY_CURRENT_PATH", os.path.join(_HOME, "engine-legacy"))):
+    for attr, value in (
+        ("STORE_PATH", os.path.join(_HOME, "engine-profiles.json")),
+        ("MAX_FANS_PATH", os.path.join(_HOME, "engine-max-fans.json")),
+        ("LEGACY_CURRENT_PATH", os.path.join(_HOME, "engine-legacy")),
+    ):
         p = mock.patch.object(profiles, attr, value)
         p.start()
         test.addCleanup(p.stop)
-    p = mock.patch.object(state_authority, 'named_client', return_value=None)
+    p = mock.patch.object(state_authority, "named_client", return_value=None)
     p.start()
     test.addCleanup(p.stop)
     fh = FakeHost()
@@ -121,8 +171,10 @@ def fake_host(test, fail_if=(), out=FAIL_OUT):
 
 class TdpRangesTest(unittest.TestCase):
     def test_clamp_per_rail_with_armoury_ranges(self):
-        self.assertEqual(m.clamp_tdp(20, 30, 40, power_range.ARMOURY_RANGES),
-                         {"pl1": 28, "pl2": 32, "pl3": 45, "force": False})
+        self.assertEqual(
+            m.clamp_tdp(20, 30, 40, power_range.ARMOURY_RANGES),
+            {"pl1": 28, "pl2": 32, "pl3": 45, "force": False},
+        )
 
     def test_tdp_ranges_runs_no_subprocess(self):
         fh = fake_host(self)
@@ -132,16 +184,20 @@ class TdpRangesTest(unittest.TestCase):
 
 class ClampTdpTest(unittest.TestCase):
     def test_in_range_unchanged(self):
-        self.assertEqual(m.clamp_tdp(20, 30, 40),
-                         {"pl1": 20, "pl2": 30, "pl3": 40, "force": False})
+        self.assertEqual(
+            m.clamp_tdp(20, 30, 40), {"pl1": 20, "pl2": 30, "pl3": 40, "force": False}
+        )
 
     def test_bounds(self):
-        self.assertEqual(m.clamp_tdp(1, 2, 3), {"pl1": 5, "pl2": 5, "pl3": 5, "force": False})
+        self.assertEqual(
+            m.clamp_tdp(1, 2, 3), {"pl1": 5, "pl2": 5, "pl3": 5, "force": False}
+        )
         self.assertEqual(m.clamp_tdp(200, 200, 200)["pl3"], 93)
 
     def test_spl_pushes_sppt_and_fppt_up(self):
-        self.assertEqual(m.clamp_tdp(60, 40, 30),
-                         {"pl1": 60, "pl2": 60, "pl3": 60, "force": False})
+        self.assertEqual(
+            m.clamp_tdp(60, 40, 30), {"pl1": 60, "pl2": 60, "pl3": 60, "force": False}
+        )
 
     def test_fppt_never_below_sppt(self):
         t = m.clamp_tdp(20, 50, 30)
@@ -157,8 +213,10 @@ class ClampTdpTest(unittest.TestCase):
         self.assertTrue(all(isinstance(t[k], int) for k in ("pl1", "pl2", "pl3")))
 
     def test_tdp_argv(self):
-        self.assertEqual(m.tdp_argv(m.clamp_tdp(20, 30, 40))[1:],
-                         ["tdp", "--set", "20", "--pl2", "30", "--pl3", "40"])
+        self.assertEqual(
+            m.tdp_argv(m.clamp_tdp(20, 30, 40))[1:],
+            ["tdp", "--set", "20", "--pl2", "30", "--pl3", "40"],
+        )
         self.assertEqual(m.tdp_argv(m.clamp_tdp(80, 85, 90))[-1], "--force")
 
 
@@ -189,52 +247,36 @@ class StoreTest(unittest.TestCase):
         with open(self.path) as f:
             return json.load(f)
 
-
-
-
-
-
-
-
-
     def test_set_app_profile_preserves_formatted_profile_timeout(self):
         run = fake_host(self)
         output = _formatted_profile_timeout()
         run.fail("z13-profile", rc=1, out=output)
         result = asyncio.run(m.Plugin().set_app_profile("Boondock"))
-        self.assertEqual(result["message"],
-                         "z13ctl write timed out after 20 s (kernel asus-wmi hang?) (step: fans)")
+        self.assertEqual(
+            result["message"],
+            "z13ctl write timed out after 20 s (kernel asus-wmi hang?) (step: fans)",
+        )
 
-    def test_set_profile_takes_the_shared_authority_lock(self):
+    def test_set_profile_rejects_names_that_are_not_bases(self):
         run = fake_host(self)
-        held = []
-        real = state_authority.transaction
+        result = asyncio.run(m.Plugin().set_profile("custom"))
+        self.assertFalse(result["ok"])
+        self.assertIn("unknown profile", result["message"])
+        self.assertEqual(run.calls, [])
 
-        @contextlib.contextmanager
-        def watching():
-            with real():
-                held.append(True)
-                yield
-
-        with mock.patch.object(state_authority, "transaction", watching):
-            result = asyncio.run(m.Plugin().set_profile("balanced"))
+    def test_set_profile_routes_through_the_profile_engine(self):
+        run = fake_host(self)
+        result = asyncio.run(m.Plugin().set_profile("performance"))
         self.assertTrue(result["ok"])
-        self.assertTrue(held)
-        self.assertIn([m.Z13CTL, "profile", "--set", "balanced"], run.argvs)
+        self.assertEqual(run.argvs, [m.Z13_PROFILE + ["apply", "Turbo"]])
+        self.assertTrue(run.calls[0].as_deck)
 
     def test_profile_timeout_without_step_keeps_bare_message(self):
         output = "z13ctl write timed out after 20 s (kernel asus-wmi hang?)\n"
-        self.assertEqual(m._extract_z13ctl_timeout(output),
-                         "z13ctl write timed out after 20 s (kernel asus-wmi hang?)")
-
-
-
-
-
-
-
-
-
+        self.assertEqual(
+            m._extract_z13ctl_timeout(output),
+            "z13ctl write timed out after 20 s (kernel asus-wmi hang?)",
+        )
 
 
 class FileLockSafetyTest(unittest.TestCase):
@@ -265,6 +307,7 @@ class FileLockSafetyTest(unittest.TestCase):
 
     def test_held_lock_times_out(self):
         import threading
+
         held, release = threading.Event(), threading.Event()
 
         def hold():
@@ -277,7 +320,10 @@ class FileLockSafetyTest(unittest.TestCase):
         self.assertTrue(held.wait(5))
         with mock.patch.object(m, "LOCK_TIMEOUT", 0.2):
             try:
-                with self.assertRaisesRegex(m.StoreLockError, "timed out"), m._file_lock(self.store):
+                with (
+                    self.assertRaisesRegex(m.StoreLockError, "timed out"),
+                    m._file_lock(self.store),
+                ):
                     pass
             finally:
                 release.set()
@@ -293,23 +339,29 @@ class FileLockSafetyTest(unittest.TestCase):
                 def getpwuid(account_uid):
                     if account_uid != m.DECK_UID:
                         raise KeyError(account_uid)  # uid 54321 has no passwd entry
-                    return types.SimpleNamespace(pw_dir=os.path.join(self.dir, "owner-home"))
+                    return types.SimpleNamespace(
+                        pw_dir=os.path.join(self.dir, "owner-home")
+                    )
 
                 def fstat(fd, owner=expected_owner):
                     fields = list(real_fstat(fd))
                     fields[4] = owner
                     return os.stat_result(fields)
 
-                with mock.patch.object(os, "getuid", return_value=uid), \
-                        mock.patch.object(os, "geteuid", return_value=uid), \
-                        mock.patch("pwd.getpwuid", side_effect=getpwuid), \
-                        mock.patch.object(os, "fstat", side_effect=fstat), \
-                        mock.patch.object(os, "fchown") as chown:
+                with (
+                    mock.patch.object(os, "getuid", return_value=uid),
+                    mock.patch.object(os, "geteuid", return_value=uid),
+                    mock.patch("pwd.getpwuid", side_effect=getpwuid),
+                    mock.patch.object(os, "fstat", side_effect=fstat),
+                    mock.patch.object(os, "fchown") as chown,
+                ):
                     with m._file_lock(store):
                         pass
                     self.assertTrue(os.path.isfile(store + ".lock"))
-                    self.assertEqual([call.args[1:] for call in chown.call_args_list],
-                                     [(m.DECK_UID, m.DECK_GID)] if uid == 0 else [])
+                    self.assertEqual(
+                        [call.args[1:] for call in chown.call_args_list],
+                        [(m.DECK_UID, m.DECK_GID)] if uid == 0 else [],
+                    )
                     with m._file_lock(store):  # existing lock checks the owner
                         pass
 
@@ -319,20 +371,16 @@ class FileLockSafetyTest(unittest.TestCase):
         self.assertTrue(os.path.isfile(self.store + ".lock"))
 
 
-
-
-
-
-
-
 class TelemetryTest(unittest.TestCase):
     def setUp(self):
         self.root = tempfile.mkdtemp(prefix="z13-hwmon-")
         # Deliberately shuffled indices: lookup must go by `name`.
-        nodes = {"hwmon0": ("amdgpu", {"temp1_input": "48000"}),
-                 "hwmon3": ("acpitz", {"temp1_input": "52500"}),
-                 "hwmon7": ("asus", {"fan1_input": "2100", "fan2_input": "2250"}),
-                 "hwmon9": ("k10temp", {"temp1_input": "99000"})}
+        nodes = {
+            "hwmon0": ("amdgpu", {"temp1_input": "48000"}),
+            "hwmon3": ("acpitz", {"temp1_input": "52500"}),
+            "hwmon7": ("asus", {"fan1_input": "2100", "fan2_input": "2250"}),
+            "hwmon9": ("k10temp", {"temp1_input": "99000"}),
+        }
         for d, (name, files) in nodes.items():
             os.makedirs(os.path.join(self.root, d))
             with open(os.path.join(self.root, d, "name"), "w") as f:
@@ -348,12 +396,16 @@ class TelemetryTest(unittest.TestCase):
         sensor_reader.HWMON_ROOT, m._sensors = self._orig
 
     def test_by_name(self):
-        self.assertEqual(m.telemetry(), {"apu": 52.5, "gpu": 48.0, "fan1": 2100, "fan2": 2250})
+        self.assertEqual(
+            m.telemetry(), {"apu": 52.5, "gpu": 48.0, "fan1": 2100, "fan2": 2250}
+        )
 
     def test_missing_nodes_are_none(self):
         sensor_reader.HWMON_ROOT = tempfile.mkdtemp(prefix="z13-empty-")
         m._sensors = sensor_reader.SensorReader()
-        self.assertEqual(m.telemetry(), {"apu": None, "gpu": None, "fan1": None, "fan2": None})
+        self.assertEqual(
+            m.telemetry(), {"apu": None, "gpu": None, "fan1": None, "fan2": None}
+        )
 
 
 class StalledSensors:
@@ -392,11 +444,14 @@ class DeckyFansTest(unittest.TestCase):
         fans.rewrite_profile()
         fans.set_fans_max()
         fans.set_fancurve_pwm([(40, 51), (50, 102.0)])
-        self.assertEqual([c[0][1:] for c in run.calls], [
-            ["profile", "--set", "performance"],
-            ["fancurve", "--set", m.MAX_FANS_SPEC],
-            ["fancurve", "--set", "40:51,50:102"],
-        ])
+        self.assertEqual(
+            [c[0][1:] for c in run.calls],
+            [
+                ["profile", "--set", "performance"],
+                ["fancurve", "--set", m.MAX_FANS_SPEC],
+                ["fancurve", "--set", "40:51,50:102"],
+            ],
+        )
         self.assertTrue(all(c[0][0] == m.Z13CTL for c in run.calls))
 
     def test_auto_recovery_commands(self):
@@ -404,25 +459,35 @@ class DeckyFansTest(unittest.TestCase):
         fans = m.DeckyFans()
         fans.apply_tdp({"pl1": 20, "pl2": 30, "pl3": 40, "force": False})
         fans.reset_fancurve()
-        self.assertEqual([c[0][1:] for c in run.calls], [
-            ["tdp", "--set", "20", "--pl2", "30", "--pl3", "40"],
-            ["fancurve", "--reset"],
-        ])
+        self.assertEqual(
+            [c[0][1:] for c in run.calls],
+            [
+                ["tdp", "--set", "20", "--pl2", "30", "--pl3", "40"],
+                ["fancurve", "--reset"],
+            ],
+        )
         self.assertEqual([c.as_deck for c in run.calls], [True, False])
 
     def test_watchdog_reads_active_tdp_from_store(self):
         orig = m._read_store
         tdp = {"pl1": 20, "pl2": 30, "pl3": 40, "force": False}
-        m._read_store = lambda: {"active": "Boondock", "profiles": [{"name": "Boondock", "tdp": tdp}]}
+        m._read_store = lambda: {
+            "active": "Boondock",
+            "profiles": [{"name": "Boondock", "tdp": tdp}],
+        }
         try:
-            self.assertEqual(m.make_fan_watchdog(StalledSensors(), m.DeckyFans())._active_tdp(), tdp)
+            self.assertEqual(
+                m.make_fan_watchdog(StalledSensors(), m.DeckyFans())._active_tdp(), tdp
+            )
             m._read_store = lambda: None
-            self.assertIsNone(m.make_fan_watchdog(StalledSensors(), m.DeckyFans())._active_tdp())
+            self.assertIsNone(
+                m.make_fan_watchdog(StalledSensors(), m.DeckyFans())._active_tdp()
+            )
         finally:
             m._read_store = orig
 
     def test_failure_raises(self):
-        fans = (fake_host(self, fail_if=("profile",)) and m.DeckyFans())
+        fans = fake_host(self, fail_if=("profile",)) and m.DeckyFans()
         with self.assertRaises(RuntimeError):
             fans.rewrite_profile()
 
@@ -455,7 +520,9 @@ class RecoveryRestoresTuningTest(unittest.TestCase):
         run = fake_host(self)
         wd = m.make_fan_watchdog(StalledSensors(), m.DeckyFans(), may_act=lambda: True)
         msgs = [wd.tick() for _ in range(fan_watchdog.STALL_TICKS)]
-        self.assertEqual(msgs[-1], "Fans were stalled at 0 RPM; profile and curve re-applied")
+        self.assertEqual(
+            msgs[-1], "Fans were stalled at 0 RPM; profile and curve re-applied"
+        )
         sets = [" ".join(c[0][1:]) for c in run.calls if "--set" in c[0]]
         self.assertEqual(sets[0], "profile --set quiet")
         self.assertEqual(sets[1], "tdp --set 20 --pl2 30 --pl3 40")
@@ -486,10 +553,17 @@ class FanWatchdogLoopTest(unittest.TestCase):
     def test_stall_recovers_through_z13ctl_in_order(self):
         run = fake_host(self)
         wd = m.make_fan_watchdog(StalledSensors(), m.DeckyFans(), may_act=lambda: True)
-        msgs = [asyncio.run(m.fan_watchdog_tick(wd)) for _ in range(fan_watchdog.STALL_TICKS)]
-        self.assertEqual(msgs[-1], "Fans were stalled at 0 RPM; profile and curve re-applied")
-        self.assertEqual([c[0][1:3] for c in run.calls],
-                         [["profile", "--set"], ["fancurve", "--set"]])
+        msgs = [
+            asyncio.run(m.fan_watchdog_tick(wd))
+            for _ in range(fan_watchdog.STALL_TICKS)
+        ]
+        self.assertEqual(
+            msgs[-1], "Fans were stalled at 0 RPM; profile and curve re-applied"
+        )
+        self.assertEqual(
+            [c[0][1:3] for c in run.calls],
+            [["profile", "--set"], ["fancurve", "--set"]],
+        )
 
     def test_max_fans_flag_comes_from_shared_state(self):
         m._load_max_fans = lambda: {"enabled": True}
@@ -518,6 +592,7 @@ class FanWatchdogLoopTest(unittest.TestCase):
             async with m._lock():
                 self.assertIsNone(await m.fan_watchdog_tick(wd))
             await m.fan_watchdog_tick(wd)
+
         asyncio.run(scenario())
         self.assertEqual(ticks, [1])
 
@@ -533,12 +608,18 @@ class FanWatchdogLoopTest(unittest.TestCase):
         owner = (os.getuid(), os.getgid())
         # A container may run as a numeric uid with no passwd entry. Supply a
         # deterministic passwd record because the tested path is outside HOME.
-        with mock.patch("pwd.getpwuid", return_value=types.SimpleNamespace(
-                pw_dir="/nonexistent-test-home")):
+        with mock.patch(
+            "pwd.getpwuid",
+            return_value=types.SimpleNamespace(pw_dir="/nonexistent-test-home"),
+        ):
             trace = m.make_fan_trace(path, owner=owner)
         self.assertIsNotNone(trace)
-        wd = m.make_fan_watchdog(StalledSensors(), (fake_host(self) and m.DeckyFans()),
-                                 may_act=lambda: True, trace=trace)
+        wd = m.make_fan_watchdog(
+            StalledSensors(),
+            (fake_host(self) and m.DeckyFans()),
+            may_act=lambda: True,
+            trace=trace,
+        )
         for _ in range(fan_watchdog.STALL_TICKS):
             asyncio.run(m.fan_watchdog_tick(wd))
         for h in trace.log.handlers:
@@ -556,22 +637,32 @@ class FanWatchdogLoopTest(unittest.TestCase):
         else:
             with open(m.INSTALL_JSON, "w") as f:
                 json.dump(rec, f)
-        self.addCleanup(lambda: os.path.exists(m.INSTALL_JSON) and os.remove(m.INSTALL_JSON))
+        self.addCleanup(
+            lambda: os.path.exists(m.INSTALL_JSON) and os.remove(m.INSTALL_JSON)
+        )
 
     def test_logging_choice_on_off_missing(self):
-        for rec, want in ((None, True), ({"mode": "repair"}, True), ({"logging": True}, True),
-                          ({"logging": False}, False)):
+        for rec, want in (
+            (None, True),
+            ({"mode": "repair"}, True),
+            ({"logging": True}, True),
+            ({"logging": False}, False),
+        ):
             with self.subTest(rec=rec):
                 self._logging_choice(rec)
                 self.assertIs(m.logging_enabled(), want)
                 d = tempfile.mkdtemp(prefix="z13-trace-")
                 path = os.path.join(d, "fan-trace-gamemode.log")
-                with mock.patch("pwd.getpwuid", return_value=types.SimpleNamespace(
-                        pw_dir="/nonexistent-test-home")):
+                with mock.patch(
+                    "pwd.getpwuid",
+                    return_value=types.SimpleNamespace(pw_dir="/nonexistent-test-home"),
+                ):
                     trace = m.make_fan_trace(path, owner=(os.getuid(), os.getgid()))
                 self.assertEqual(trace is not None, want)
                 self.assertEqual(os.path.exists(path), want)
-        self.assertTrue(REAL["INSTALL_JSON"].endswith("/.config/z13-helper/install.json"))
+        self.assertTrue(
+            REAL["INSTALL_JSON"].endswith("/.config/z13-helper/install.json")
+        )
 
     def test_unreadable_logging_choice_means_on(self):
         self._logging_choice(None)
@@ -585,7 +676,10 @@ class FanWatchdogLoopTest(unittest.TestCase):
     def test_tick_error_is_logged_not_raised(self):
         def boom():
             raise OSError("sysfs gone")
-        self.assertIsNone(asyncio.run(m.fan_watchdog_tick(types.SimpleNamespace(tick=boom))))
+
+        self.assertIsNone(
+            asyncio.run(m.fan_watchdog_tick(types.SimpleNamespace(tick=boom)))
+        )
         self.assertFalse(m._lock().locked())
 
 
@@ -597,9 +691,13 @@ class DesktopAppCheckTest(unittest.TestCase):
         def restart():
             self.restarts.append(1)
             return restart_ok
-        return m.DesktopAppCheck(in_desktop=lambda: self.state["desktop"],
-                                 app_up=lambda: self.state["up"],
-                                 user_quit=lambda: self.state["user_quit"], restart=restart)
+
+        return m.DesktopAppCheck(
+            in_desktop=lambda: self.state["desktop"],
+            app_up=lambda: self.state["up"],
+            user_quit=lambda: self.state["user_quit"],
+            restart=restart,
+        )
 
     def test_running_app_is_left_alone(self):
         c = self.make(up=True)
@@ -615,9 +713,11 @@ class DesktopAppCheckTest(unittest.TestCase):
     def test_not_restarted_in_a_loop(self):
         c = self.make()
         out = [c.check() for _ in range(6)]
-        self.assertEqual(out, ["miss", "restarted", "gave-up", "gave-up", "gave-up", "gave-up"])
+        self.assertEqual(
+            out, ["miss", "restarted", "gave-up", "gave-up", "gave-up", "gave-up"]
+        )
         self.state["up"] = True
-        self.assertEqual(c.check(), "ok")                  # came back: armed again
+        self.assertEqual(c.check(), "ok")  # came back: armed again
         self.state["up"] = False
         self.assertEqual([c.check(), c.check()], ["miss", "restarted"])
 
@@ -637,6 +737,7 @@ class DesktopAppCheckTest(unittest.TestCase):
 
     def test_app_answers_over_its_socket(self):
         import socket
+
         d = tempfile.mkdtemp(prefix="z13-sock-")
         path = os.path.join(d, "z13-helper.sock")
         self.assertFalse(m._desktop_app_answers(path))
@@ -659,12 +760,20 @@ class DesktopAppCheckTest(unittest.TestCase):
         run = fake_host(self, fail_if=("plasma-workspace",), out="")
         self.assertTrue(m._in_gamemode())
         self.assertFalse(m._desktop_session_active())
-        self.assertEqual([c.argv[-1] for c in run.calls],
-                         ["gamescope-session.target", "plasma-workspace.target"])
-        self.assertTrue(all(c.as_deck and c.argv[:2] == ["systemctl", "--user"] for c in run.calls))
+        self.assertEqual(
+            [c.argv[-1] for c in run.calls],
+            ["gamescope-session.target", "plasma-workspace.target"],
+        )
+        self.assertTrue(
+            all(c.as_deck and c.argv[:2] == ["systemctl", "--user"] for c in run.calls)
+        )
 
     def test_paths_match_the_app(self):
-        self.assertTrue(REAL["DESKTOP_APP_SOCKET"].endswith("/app/io.github.iannitram.Z13Helper/z13-helper.sock"))
+        self.assertTrue(
+            REAL["DESKTOP_APP_SOCKET"].endswith(
+                "/app/io.github.iannitram.Z13Helper/z13-helper.sock"
+            )
+        )
         self.assertTrue(REAL["DESKTOP_APP_USER_QUIT"].endswith("z13-helper.user-quit"))
 
 

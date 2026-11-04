@@ -49,6 +49,9 @@ Z13CTL = os.path.expanduser("~/.local/bin/z13ctl")
 # Always run as deck (as_deck=True) so the store stays deck-owned and hooks (boondock)
 # behave as on the desktop.
 Z13_PROFILE = ["/home/deck/.local/bin/z13-profile"]
+# The firmware base profiles the QAM switch accepts (src/profiles.py BASES), and
+# the built-in app profile that carries each one through the profile engine.
+PROFILE_BASES = {"quiet": "Silent", "balanced": "Balanced", "performance": "Turbo"}
 BOONDOCK = os.path.expanduser("~/.local/bin/boondock")
 SHARED_CONFIG = os.path.expanduser("~/.config/z13-helper/config.json")
 # Max Fans state shared with the desktop app (mirror of src/max_fans_state.py):
@@ -60,7 +63,16 @@ MAX_FANS_STATE = os.path.expanduser("~/.config/z13-helper/max-fans.json")
 # commands use the z13ctl daemon socket; the host's LD_LIBRARY_PATH, not the loader's).
 
 # Max Fans = 8 monotonic temp anchors, all at 100%.
-MAX_FAN_TEMPS = (20, 30, 40, 50, 60, 70, 80, 90)   # Low anchor; firmware response still needs verification.
+MAX_FAN_TEMPS = (
+    20,
+    30,
+    40,
+    50,
+    60,
+    70,
+    80,
+    90,
+)  # Low anchor; firmware response still needs verification.
 MAX_FANS_SPEC = ",".join(f"{t}:100%" for t in MAX_FAN_TEMPS)
 # Fan watchdog poll cadence (its thresholds live in fan_watchdog.py).
 ENFORCE_INTERVAL_S = 2
@@ -82,8 +94,8 @@ DESKTOP_APP_DIR = "/run/user/1000/app/io.github.iannitram.Z13Helper"
 DESKTOP_APP_SOCKET = os.path.join(DESKTOP_APP_DIR, "z13-helper.sock")
 DESKTOP_APP_USER_QUIT = os.path.join(DESKTOP_APP_DIR, "z13-helper.user-quit")
 DESKTOP_CHECK_S = 30
-DESKTOP_MISSES = 2   # consecutive failed checks (~1 min) before a restart: covers the
-                     # unit's 10 s tray wait and a takeover from a session-restored copy
+DESKTOP_MISSES = 2  # consecutive failed checks (~1 min) before a restart: covers the
+# unit's 10 s tray wait and a takeover from a session-restored copy
 
 # ---- Phase 11 (Decky parity): TDP / battery / brightness / telemetry ----
 # The app profile store (schema owned by src/profiles.py; never change it from here).
@@ -139,16 +151,19 @@ def _open_dir_chain(d, owner=None):
     if owner is not None:
         try:
             import pwd
+
             home = os.path.abspath(pwd.getpwuid(owner[0]).pw_dir)
         except (KeyError, ImportError) as e:
             raise OSError(errno.ENOENT, f"no home directory for uid {owner[0]}") from e
         hp = [p for p in home.split(os.sep) if p]
-        if hp and parts[:len(hp)] == hp:
-            start, parts, anchor_uid = home, parts[len(hp):], owner[0]
+        if hp and parts[: len(hp)] == hp:
+            start, parts, anchor_uid = home, parts[len(hp) :], owner[0]
     fd = os.open(start, _DIR_FLAGS)
     try:
         if anchor_uid is not None and os.fstat(fd).st_uid != anchor_uid:
-            raise OSError(errno.EPERM, "home directory is not owned by the target user", d)
+            raise OSError(
+                errno.EPERM, "home directory is not owned by the target user", d
+            )
         for name in parts:
             try:
                 nfd = os.open(name, _DIR_FLAGS, dir_fd=fd)
@@ -246,7 +261,7 @@ def _shared_config():
 # app, z13-profile and this backend can't lose each other's updates. The lock file is
 # kept deck-owned because we run as root and the other writers run as deck.
 _lock_state = threading.local()
-LOCK_TIMEOUT = 10.0   # seconds to wait for another writer before giving up
+LOCK_TIMEOUT = 10.0  # seconds to wait for another writer before giving up
 
 
 class StoreLockError(OSError):
@@ -275,7 +290,9 @@ def _open_lock(lock_path):
     try:
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
-            raise StoreLockError(f"{lock_path} is not a plain single-link file; refusing")
+            raise StoreLockError(
+                f"{lock_path} is not a plain single-link file; refusing"
+            )
         if created:
             if os.geteuid() == 0:
                 os.fchown(fd, DECK_UID, DECK_GID)
@@ -323,14 +340,14 @@ def _file_lock(path):
     except OSError:
         if fd is not None:
             os.close(fd)
-        fd = None   # can't lock (read-only dir?): behave as before, unlocked
+        fd = None  # can't lock (read-only dir?): behave as before, unlocked
     held[path] = 1
     try:
         yield
     finally:
         held.pop(path, None)
         if fd is not None:
-            os.close(fd)   # closing releases the flock
+            os.close(fd)  # closing releases the flock
 
 
 def _load_max_fans():
@@ -345,7 +362,7 @@ def _load_max_fans():
     # Same precedence as the desktop app's migration: its config.json first,
     # then this plugin's old private state.json.
     with _file_lock(MAX_FANS_STATE):
-        try:   # another writer may have seeded it while we waited
+        try:  # another writer may have seeded it while we waited
             with open(MAX_FANS_STATE) as f:
                 state = json.load(f)
             if isinstance(state, dict):
@@ -355,7 +372,7 @@ def _load_max_fans():
         legacy, old = _shared_config(), _load_state()
         state = {"enabled": bool(legacy.get("fans_max", old.get("max_fans", False)))}
         seeded = legacy.get("fan_curve_saved") or old.get("saved_curve")
-        if seeded is not None:   # absent = unknown, null = firmware auto
+        if seeded is not None:  # absent = unknown, null = firmware auto
             state["saved_curve"] = seeded
         _save_max_fans(state)
         return state
@@ -402,13 +419,20 @@ def _in_gamemode():
     Max Fans enforcement, so this watchdog stands down there rather than both
     frontends re-applying the same curve.
     """
-    return host.run(["systemctl", "--user", "is-active", "--quiet", "gamescope-session.target"],
-                    timeout=5, as_deck=True).rc == 0
+    return (
+        host.run(
+            ["systemctl", "--user", "is-active", "--quiet", "gamescope-session.target"],
+            timeout=5,
+            as_deck=True,
+        ).rc
+        == 0
+    )
 
 
 # ----------------------------------------------------------------------
 # Phase 11 helpers (pure where possible; decky/tests/ covers them)
 # ----------------------------------------------------------------------
+
 
 def tdp_ranges():
     """Per-rail bounds from host permissions and kernel range metadata.
@@ -429,6 +453,7 @@ def clamp_tdp(pl1, pl2, pl3, ranges=None):
     def one(v, k):
         lo, hi = r.get(k, (PL_MIN, PL_MAX))
         return max(lo, min(hi, round(float(v))))
+
     a = one(pl1, "pl1")
     b = max(one(pl2, "pl2"), a)
     c = max(one(pl3, "pl3"), b)
@@ -443,8 +468,16 @@ def clamp_battery(value):
 
 def tdp_argv(tdp):
     """`z13ctl tdp --set` arguments for a profiles.json tdp dict (as src/profiles.py builds them)."""
-    argv = [Z13CTL, "tdp", "--set", str(tdp["pl1"]),
-            "--pl2", str(tdp["pl2"]), "--pl3", str(tdp["pl3"])]
+    argv = [
+        Z13CTL,
+        "tdp",
+        "--set",
+        str(tdp["pl1"]),
+        "--pl2",
+        str(tdp["pl2"]),
+        "--pl3",
+        str(tdp["pl3"]),
+    ]
     if tdp.get("force"):
         argv.append("--force")
     return argv
@@ -503,7 +536,12 @@ def telemetry():
     Reads only hwmon; never the asus-armoury ppt_* files.
     """
     f1, f2 = _sensors.get_fan_speeds()
-    return {"apu": _sensors.get_apu_temp(), "gpu": _sensors.get_gpu_temp(), "fan1": f1, "fan2": f2}
+    return {
+        "apu": _sensors.get_apu_temp(),
+        "gpu": _sensors.get_gpu_temp(),
+        "fan1": f1,
+        "fan2": f2,
+    }
 
 
 def _save_plugin_state(**changes):
@@ -523,7 +561,9 @@ def power_state():
     pl = (tdp["pl1"], tdp["pl2"], tdp["pl3"]) if tdp else DEFAULT_TDP
     ranges = tdp_ranges()
     note = ""
-    if tdp:   # show the stored values clamped into the kernel's range; the store is untouched
+    if (
+        tdp
+    ):  # show the stored values clamped into the kernel's range; the store is untouched
         st = power_range.tdp_status(tdp, ranges)
         pl = (st["accepted"]["pl1"], st["accepted"]["pl2"], st["accepted"]["pl3"])
         note = st["note"]
@@ -531,14 +571,21 @@ def power_state():
     bl = live_bl if live_bl is not None else p.get("battery_limit")
     # Last level set from this panel, else the desktop app's (config.json, read only),
     # else the active profile's. Only used to highlight a button.
-    brightness = (_load_state().get("brightness") or _shared_config().get("brightness")
-                  or p.get("brightness"))
+    brightness = (
+        _load_state().get("brightness")
+        or _shared_config().get("brightness")
+        or p.get("brightness")
+    )
     return {
         "active": p.get("name", ""),
         "tdp_enabled": bool(tdp),
-        "pl1": int(pl[0]), "pl2": int(pl[1]), "pl3": int(pl[2]),
-        "pl_min": min(r[0] for r in ranges.values()), "pl_max": max(r[1] for r in ranges.values()),
-        "pl_ranges": {k: list(v) for k, v in ranges.items()}, "tdp_note": note,
+        "pl1": int(pl[0]),
+        "pl2": int(pl[1]),
+        "pl3": int(pl[2]),
+        "pl_min": min(r[0] for r in ranges.values()),
+        "pl_max": max(r[1] for r in ranges.values()),
+        "pl_ranges": {k: list(v) for k, v in ranges.items()},
+        "tdp_note": note,
         "pl1_safe_max": PL1_SAFE_MAX,
         "battery_limit": clamp_battery(bl) if bl is not None else BATTERY_MAX,
         "brightness": brightness if brightness in BRIGHTNESS_LEVELS else "",
@@ -556,7 +603,7 @@ def _extract_z13ctl_timeout(output):
             row = line[:index]
             marker = row.find("ERR  ")
             if marker >= 0:
-                step = row[marker + len("ERR  "):].strip()
+                step = row[marker + len("ERR  ") :].strip()
                 if step:
                     return f"{message} (step: {step})"
             return message
@@ -600,8 +647,11 @@ class DeckyFans:
         uv = (active_profile(_read_store()) or {}).get("undervolt")
         if uv is None:
             return None
-        rc, out = _run([Z13CTL, "undervolt", "--set", str(uv)],
-                       timeout=Z13CTL_WRITE_TIMEOUT_S, as_deck=True)
+        rc, out = _run(
+            [Z13CTL, "undervolt", "--set", str(uv)],
+            timeout=Z13CTL_WRITE_TIMEOUT_S,
+            as_deck=True,
+        )
         if rc != 0:
             if out.startswith("z13ctl write timed out after "):
                 return out
@@ -616,7 +666,9 @@ class DeckyFans:
         self._z13ctl("fancurve", "--set", MAX_FANS_SPEC)
 
     def set_fancurve_pwm(self, points):
-        self._z13ctl("fancurve", "--set", ",".join(f"{int(t)}:{int(p)}" for t, p in points))
+        self._z13ctl(
+            "fancurve", "--set", ",".join(f"{int(t)}:{int(p)}" for t, p in points)
+        )
 
     def apply_tdp(self, tdp):
         # As deck, like apply_tdp() (the TDP slider's write).
@@ -629,12 +681,19 @@ class DeckyFans:
 def _desktop_session_active():
     """True iff the deck user's Plasma (Desktop Mode) session is up."""
     # host.run, not _run: quiet on purpose, this runs every DESKTOP_CHECK_S
-    return host.run(["systemctl", "--user", "is-active", "--quiet", "plasma-workspace.target"],
-                    timeout=5, as_deck=True).rc == 0
+    return (
+        host.run(
+            ["systemctl", "--user", "is-active", "--quiet", "plasma-workspace.target"],
+            timeout=5,
+            as_deck=True,
+        ).rc
+        == 0
+    )
 
 
 def _desktop_app_answers(path=DESKTOP_APP_SOCKET):
     import socket
+
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     s.settimeout(1.0)
     try:
@@ -655,11 +714,24 @@ class DesktopAppCheck:
     until the app answers again (a broken app isn't restarted in a loop).
     """
 
-    def __init__(self, in_desktop=_desktop_session_active, app_up=_desktop_app_answers,
-                 user_quit=lambda: os.path.exists(DESKTOP_APP_USER_QUIT), restart=None):
+    def __init__(
+        self,
+        in_desktop=_desktop_session_active,
+        app_up=_desktop_app_answers,
+        user_quit=lambda: os.path.exists(DESKTOP_APP_USER_QUIT),
+        restart=None,
+    ):
         self.in_desktop, self.app_up, self.user_quit = in_desktop, app_up, user_quit
-        self.restart = restart or (lambda: _run(
-            ["systemctl", "--user", "restart", DESKTOP_APP_UNIT], timeout=30, as_deck=True)[0] == 0)
+        self.restart = restart or (
+            lambda: (
+                _run(
+                    ["systemctl", "--user", "restart", DESKTOP_APP_UNIT],
+                    timeout=30,
+                    as_deck=True,
+                )[0]
+                == 0
+            )
+        )
         self.misses = 0
         self.restarted = False
 
@@ -682,8 +754,11 @@ class DesktopAppCheck:
             return "gave-up"
         self.restarted = True
         ok = self.restart()
-        decky.logger.warning("Desktop app wasn't running in Desktop Mode; restarted %s: %s",
-                             DESKTOP_APP_UNIT, "ok" if ok else "FAILED")
+        decky.logger.warning(
+            "Desktop app wasn't running in Desktop Mode; restarted %s: %s",
+            DESKTOP_APP_UNIT,
+            "ok" if ok else "FAILED",
+        )
         return "restarted" if ok else "restart-failed"
 
 
@@ -705,19 +780,27 @@ def make_fan_trace(path=None, owner=DECK_IDS):
     path = path or FAN_TRACE
     try:
         d = os.path.dirname(path)
-        os.close(_open_dir_chain(d, owner))   # no symlink on the way; new dirs go to `owner`
+        os.close(
+            _open_dir_chain(d, owner)
+        )  # no symlink on the way; new dirs go to `owner`
         return FanTrace.to_file(path, _sensors, "gamemode", owner=owner)
     except OSError as e:
         decky.logger.error("No fan trace: %s", e)
         return None
 
 
-def make_fan_watchdog(sensors=None, fans=None, may_act=None, clock=time.monotonic, trace=None):
-    return FanWatchdog(sensors or _sensors, fans or DeckyFans(),
-                       max_fans_on=lambda: bool(_load_max_fans().get("enabled", False)),
-                       may_act=may_act or _in_gamemode,
-                       active_tdp=lambda: (active_profile(_read_store()) or {}).get("tdp"),
-                       clock=clock, trace=trace)
+def make_fan_watchdog(
+    sensors=None, fans=None, may_act=None, clock=time.monotonic, trace=None
+):
+    return FanWatchdog(
+        sensors or _sensors,
+        fans or DeckyFans(),
+        max_fans_on=lambda: bool(_load_max_fans().get("enabled", False)),
+        may_act=may_act or _in_gamemode,
+        active_tdp=lambda: (active_profile(_read_store()) or {}).get("tdp"),
+        clock=clock,
+        trace=trace,
+    )
 
 
 async def fan_watchdog_tick(watchdog):
@@ -753,10 +836,19 @@ def _edit_field(field, value, expected):
         result = authority.set_field(field, value, expected)
         if isinstance(result, list) and result and isinstance(result[0], tuple):
             failed = [message for _, ok, message in result if not ok]
-            return {"ok": not failed, "saved": True,
-                    "message": "; ".join(failed) if failed else "Applied", "failed": failed}
+            return {
+                "ok": not failed,
+                "saved": True,
+                "message": "; ".join(failed) if failed else "Applied",
+                "failed": failed,
+            }
         if isinstance(result, list) and result:
-            return {"ok": False, "saved": True, "message": "Failed: " + ", ".join(result), "failed": result}
+            return {
+                "ok": False,
+                "saved": True,
+                "message": "Failed: " + ", ".join(result),
+                "failed": result,
+            }
         return {"ok": True, "saved": True, "message": "Applied", "failed": []}
     except (OSError, RuntimeError, ValueError) as exc:
         return {"ok": False, "saved": False, "message": str(exc), "failed": []}
@@ -801,13 +893,16 @@ class Plugin:
     async def get_profiles(self) -> dict:
         """{"names": [...], "active": name}. Empty names if the engine is missing."""
         rc, out = await asyncio.to_thread(
-            lambda: _run(Z13_PROFILE + ["list", "--json"], as_deck=True))
+            lambda: _run(Z13_PROFILE + ["list", "--json"], as_deck=True)
+        )
         if rc != 0:
             return {"names": [], "active": ""}
         try:
-            store = json.loads(out[out.index("{"):])
-            return {"names": [p["name"] for p in store.get("profiles", [])],
-                    "active": store.get("active", "")}
+            store = json.loads(out[out.index("{") :])
+            return {
+                "names": [p["name"] for p in store.get("profiles", [])],
+                "active": store.get("active", ""),
+            }
         except (ValueError, KeyError):
             return {"names": [], "active": ""}
 
@@ -816,11 +911,18 @@ class Plugin:
         # loader's event loop, and serialised with the other writes.
         async with _lock():
             rc, out = await asyncio.to_thread(
-                lambda: _run(Z13_PROFILE + ["apply", name], PROFILE_APPLY_TIMEOUT_S, as_deck=True))
+                lambda: _run(
+                    Z13_PROFILE + ["apply", name], PROFILE_APPLY_TIMEOUT_S, as_deck=True
+                )
+            )
         ok = rc == 0 and "ERR  profile" not in out
         timeout_message = _extract_z13ctl_timeout(out)
-        message = (f"{name} applied" if ok else timeout_message or
-                   f"{name}: profile apply failed ({out[-160:] or f'rc={rc}'})")
+        message = (
+            f"{name} applied"
+            if ok
+            else timeout_message
+            or f"{name}: profile apply failed ({out[-160:] or f'rc={rc}'})"
+        )
         decky.logger.info("profile apply %s -> rc=%s", name, rc)
         return {"ok": ok, "message": message}
 
@@ -829,83 +931,124 @@ class Plugin:
         return await asyncio.to_thread(_current_platform_profile)
 
     async def set_profile(self, profile: str) -> dict:
+        """Switch the firmware base through the profile engine.
+
+        The QAM sends a base name. Applying the matching built-in app profile
+        re-applies TDP, curve, undervolt and EPP, so the hardware and the
+        active profile cannot drift apart the way a bare `profile --set` let
+        them. Unknown names never reach z13ctl.
+        """
+        name = PROFILE_BASES.get(profile)
+        if name is None:
+            return {"ok": False, "message": f"unknown profile {profile!r}"}
         async with _lock():
-            rc, out, _ = await asyncio.to_thread(
-                authority.set_platform_profile, profile, z13ctl=Z13CTL,
-                timeout=Z13CTL_WRITE_TIMEOUT_S)
-        return {"ok": rc == 0, "message": out or (f"{profile} applied" if rc == 0 else
-                f"z13ctl profile failed (rc={rc})")}
+            rc, out = await asyncio.to_thread(
+                lambda: _run(
+                    Z13_PROFILE + ["apply", name],
+                    PROFILE_APPLY_TIMEOUT_S,
+                    as_deck=True,
+                )
+            )
+        ok = rc == 0 and "ERR  profile" not in out
+        timeout_message = _extract_z13ctl_timeout(out)
+        message = (
+            f"{profile} applied"
+            if ok
+            else timeout_message
+            or f"{profile}: profile apply failed ({out[-160:] or f'rc={rc}'})"
+        )
+        decky.logger.info("profile apply %s -> rc=%s", profile, rc)
+        return {"ok": ok, "message": message}
 
     # ---- Power limits / battery / lighting / telemetry (Phase 11) ----
     # Blocking work runs in a thread so the fan watchdog keeps ticking meanwhile.
     async def get_power_state(self) -> dict:
         result = await asyncio.to_thread(power_state)
-        state = getattr(self, '_backend_state', {})
+        state = getattr(self, "_backend_state", {})
         level = state_events.lighting_level(state)
         if isinstance(level, int) and 0 <= level <= 3:
-            result['brightness'] = BRIGHTNESS_LEVELS[level]
-        if isinstance(state.get('battery_limit'), int):
-            result['battery_limit'] = state['battery_limit']
+            result["brightness"] = BRIGHTNESS_LEVELS[level]
+        if isinstance(state.get("battery_limit"), int):
+            result["battery_limit"] = state["battery_limit"]
         return result
 
     # `profile` = the profile the user was editing; omitted (older frontend) = the active one.
-    async def set_tdp(self, enabled: bool, pl1: int, pl2: int, pl3: int,
-                      profile: str = "") -> dict:
+    async def set_tdp(
+        self, enabled: bool, pl1: int, pl2: int, pl3: int, profile: str = ""
+    ) -> dict:
         async with _lock():
             tdp = clamp_tdp(pl1, pl2, pl3, tdp_ranges()) if enabled else None
-            result = await asyncio.to_thread(_edit_field, 'tdp', tdp, profile)
-            result['tdp'] = tdp
+            result = await asyncio.to_thread(_edit_field, "tdp", tdp, profile)
+            result["tdp"] = tdp
             return result
 
     async def set_battery_limit(self, value: int, profile: str = "") -> dict:
         async with _lock():
             value = clamp_battery(value)
-            result = await asyncio.to_thread(_edit_field, 'battery_limit', value, profile)
-            result['value'] = value
+            result = await asyncio.to_thread(
+                _edit_field, "battery_limit", value, profile
+            )
+            result["value"] = value
             return result
 
     async def set_brightness(self, level: str) -> dict:
         async with _lock():
             if level not in BRIGHTNESS_LEVELS:
                 return {"ok": False, "message": "bad brightness level", "failed": []}
-            res = await asyncio.to_thread(_edit_field, 'brightness', level, None)
+            res = await asyncio.to_thread(_edit_field, "brightness", level, None)
         if res["ok"]:
             _save_plugin_state(brightness=level)
         return res
 
     async def get_telemetry(self) -> dict:
-        return telemetry()   # a handful of sysfs reads; cheap enough inline
+        return telemetry()  # a handful of sysfs reads; cheap enough inline
 
     # ---- Lifecycle ----
     async def _main(self):
         self.loop = asyncio.get_event_loop()
         self._crash_reporter = crash_report.install(
-            config_path=INSTALL_JSON, logger=decky.logger, loop=self.loop,
+            config_path=INSTALL_JSON,
+            logger=decky.logger,
+            loop=self.loop,
             fatal_name="fatal-decky.log",
         )
+
         def on_state(state, event):
             if state_events.event_action(event, False) == "refresh":
                 self._backend_state = state or {}
                 future = asyncio.run_coroutine_threadsafe(
-                    decky.emit("profile_state", {"event": event, "state": state}), self.loop)
+                    decky.emit("profile_state", {"event": event, "state": state}),
+                    self.loop,
+                )
                 # Consume errors when unloading races the final notification.
-                future.add_done_callback(lambda f: f.exception() if not f.cancelled() else None)
-        self._state_stream = StateStream(on_state, command=Z13_PROFILE + ["watch"]).start()
+                future.add_done_callback(
+                    lambda f: f.exception() if not f.cancelled() else None
+                )
+
+        self._state_stream = StateStream(
+            on_state, command=Z13_PROFILE + ["watch"]
+        ).start()
         self._enforce_task = self.loop.create_task(self._enforce_max_fans())
         self._desktop_task = self.loop.create_task(self._watch_desktop_app())
         if self._crash_reporter:
             for task in (self._enforce_task, self._desktop_task):
                 task.add_done_callback(self._crash_reporter.task_done)
-        decky.logger.info("z13-helper up. z13ctl=%s exists=%s max_fans=%s",
-                          Z13CTL, os.path.exists(Z13CTL),
-                          _load_max_fans().get("enabled"))
+        decky.logger.info(
+            "z13-helper up. z13ctl=%s exists=%s max_fans=%s",
+            Z13CTL,
+            os.path.exists(Z13CTL),
+            _load_max_fans().get("enabled"),
+        )
 
     async def _unload(self):
         if getattr(self, "_state_stream", None):
             await asyncio.to_thread(self._state_stream.close)
         if getattr(self, "_crash_reporter", None):
             self._crash_reporter.close()
-        for task in (getattr(self, "_enforce_task", None), getattr(self, "_desktop_task", None)):
+        for task in (
+            getattr(self, "_enforce_task", None),
+            getattr(self, "_desktop_task", None),
+        ):
             if task:
                 task.cancel()
         decky.logger.info("z13-helper unloading")
