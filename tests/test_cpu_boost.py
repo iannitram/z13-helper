@@ -2,10 +2,13 @@
 
 The pure parsing lives in src/epp.py (tests/test_epp.py). These tests cover what
 is left: the profile field, the argv that writes every CPU, where it sits in
-apply(), and the read/write helpers the Fans + Power combo calls.
+apply(), the read/write helpers, and the Performance-panel combo dispatch.
 """
 
+import ast
 import os
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -16,6 +19,140 @@ from hardware_controller import HardwareController
 from test_profiles_apply import Z, bare_profile, full_profile, names
 
 PATHS2 = [epp.EPP_PATH.format(n=0), epp.EPP_PATH.format(n=1)]
+
+
+def _methods(module, class_name, method_names, namespace):
+    """Exercise UI methods without importing PyQt6, as required by SPEC.md."""
+    path = Path(__file__).resolve().parents[1] / "src" / module
+    tree = ast.parse(path.read_text())
+    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == class_name)
+    methods = [n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name in method_names]
+    assert {n.name for n in methods} == set(method_names)
+    exec(compile(ast.Module(body=methods, type_ignores=[]), str(path), "exec"), namespace)
+    return namespace
+
+
+@pytest.fixture
+def boost_ui(profiles_env):
+    class Signal:
+        def connect(self, callback):
+            self.callback = callback
+
+        def emit(self, *args):
+            if hasattr(self, "callback"):
+                self.callback(*args)
+
+    class Combo:
+        def __init__(self):
+            self.items = []
+            self.index = 0
+            self.blocked = False
+            self.currentIndexChanged = Signal()
+
+        def addItem(self, label, value):
+            self.items.append((label, value))
+
+        def findData(self, value):
+            return next((i for i, item in enumerate(self.items) if item[1] == value), -1)
+
+        def blockSignals(self, blocked):
+            self.blocked = blocked
+
+        def setCurrentIndex(self, index):
+            changed = index != self.index
+            self.index = index
+            if changed and not self.blocked:
+                self.currentIndexChanged.emit(index)
+
+        def currentData(self):
+            return self.items[self.index][1]
+
+    class Layout:
+        def __init__(self):
+            self.widgets = []
+
+        def addWidget(self, widget, *args):
+            self.widgets.append(widget)
+
+    jobs, writes, rows = [], [], []
+    controller = SimpleNamespace(get_epp_choices=lambda: ["power", "performance"],
+                                 set_epp=lambda value: writes.append(value))
+    control = SimpleNamespace(controller=controller, changed=Signal(),
+                              active_name=lambda: "Balanced",
+                              shown=lambda: profiles.get_profile("Balanced"),
+                              _submit=lambda label, fn: jobs.append(fn))
+    methods = _methods("profile_control.py", "ProfileControl", ["save", "_pusher"],
+                       {"profiles": profiles})
+    for name in ("save", "_pusher"):
+        setattr(control, name, methods[name].__get__(control))
+    methods = _methods("dashboard_ui.py", "DashboardUI",
+                       ["_build_epp_ui", "_refresh_epp_ui", "_on_epp"],
+                       {"QComboBox": Combo, "QHBoxLayout": Layout, "QLabel": lambda text: text,
+                        "EPP_LABELS": {"power": "Power", "performance": "Performance"}})
+    ui = SimpleNamespace(control=control, controller=controller,
+                         perf=SimpleNamespace(body=SimpleNamespace(addLayout=rows.append)))
+    for name in ("_build_epp_ui", "_refresh_epp_ui", "_on_epp"):
+        setattr(ui, name, methods[name].__get__(ui))
+    ui._build_epp_ui()
+    control.changed.connect(lambda: ui._refresh_epp_ui(control.shown()))
+    return SimpleNamespace(ui=ui, jobs=jobs, writes=writes, rows=rows)
+
+
+def test_performance_panel_contains_cpu_boost(boost_ui):
+    b = boost_ui
+    assert b.rows[0].widgets == ["CPU Boost", b.ui.epp_combo]
+    assert b.ui.epp_combo.items == [("Unchanged", ""), ("Power", "power"),
+                                     ("Performance", "performance")]
+    # Verify the real window construction and profile refresh call these methods.
+    source = (Path(__file__).resolve().parents[1] / "src/dashboard_ui.py").read_text()
+    cls = next(n for n in ast.parse(source).body if isinstance(n, ast.ClassDef)
+               and n.name == "DashboardUI")
+    for method, called in [("_build_ui", "_build_epp_ui"),
+                           ("_refresh_profile_ui", "_refresh_epp_ui")]:
+        fn = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == method)
+        assert any(isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                   and n.func.attr == called for n in ast.walk(fn))
+
+
+def test_performance_cpu_boost_persists_and_dispatches_only_epp(boost_ui):
+    b = boost_ui
+    before = profiles.get_profile("Balanced")
+    b.ui.epp_combo.setCurrentIndex(b.ui.epp_combo.findData("power"))
+    assert profiles.get_profile("Balanced") == dict(before, epp="power")
+    assert b.writes == []  # the worker owns the hardware write
+    assert len(b.jobs) == 1
+    b.jobs.pop()()
+    assert b.writes == ["power"]
+
+
+@pytest.mark.parametrize("value", [None, "power", "performance"])
+def test_performance_cpu_boost_refresh_does_not_write(boost_ui, value):
+    b = boost_ui
+    b.ui._refresh_epp_ui(dict(profiles.get_profile("Balanced"), epp=value))
+    assert b.ui.epp_combo.currentData() == (value or "")
+    assert b.jobs == [] and b.writes == []
+
+
+def test_performance_cpu_boost_unchanged_clears_override_without_write(boost_ui):
+    b = boost_ui
+    p = profiles.get_profile("Balanced")
+    profiles.upsert_profile(dict(p, epp="power"))
+    b.ui._refresh_epp_ui(dict(p, epp="power"))
+    b.ui.epp_combo.setCurrentIndex(0)
+    assert profiles.get_profile("Balanced")["epp"] is None
+    assert len(b.jobs) == 1
+    assert b.jobs.pop()() == "unchanged"
+    assert b.writes == []
+
+
+def test_performance_cpu_boost_edits_the_shown_pending_profile(boost_ui):
+    b = boost_ui
+    before = profiles.get_profile("Balanced")
+    b.ui.control.shown = lambda: profiles.get_profile("Turbo")
+    b.ui.epp_combo.setCurrentIndex(b.ui.epp_combo.findData("performance"))
+    assert profiles.get_profile("Turbo")["epp"] == "performance"
+    assert profiles.get_profile("Balanced") == before
+    assert b.jobs == [] and b.writes == []
 
 
 @pytest.fixture

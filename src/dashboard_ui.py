@@ -38,7 +38,7 @@ from fan_watchdog import FanTrace, FanWatchdog, FanWatchdogRunner
 from screen_brightness import ScreenBrightness, MIN_PERCENT
 from apply_worker import ApplyWorker
 from profile_control import ProfileControl
-from fans_window import FansWindow
+from fans_window import FansWindow, EPP_LABELS
 from updates_dialog import UpdatesDialog, UpdateCheckThread
 from theme import (STYLESHEET, ModeTile, Panel, pill, tip, ECO, STANDARD, TURBO, CUSTOM,
                    ACCENT_FOR_BASE, BORDER)
@@ -360,6 +360,7 @@ class DashboardUI(QMainWindow):
         prow.addWidget(self.profile_combo, 1)
         prow.addWidget(self.maxfans_pill)
         self.perf.body.addLayout(prow)
+        self._build_epp_ui()
         col.addWidget(self.perf)
         col.addWidget(self._sep())
 
@@ -505,6 +506,30 @@ class DashboardUI(QMainWindow):
     # Profiles
     # ------------------------------------------------------------------
 
+    def _build_epp_ui(self):
+        row = QHBoxLayout()
+        row.addWidget(QLabel("CPU Boost"))
+        self.epp_combo = QComboBox()
+        self.epp_combo.addItem("Unchanged", "")
+        for key in self.controller.get_epp_choices():
+            self.epp_combo.addItem(EPP_LABELS.get(key, key), key)
+        self.epp_combo.currentIndexChanged.connect(self._on_epp)
+        row.addWidget(self.epp_combo, 1)
+        self.perf.body.addLayout(row)
+
+    def _refresh_epp_ui(self, profile):
+        self.epp_combo.blockSignals(True)
+        try:
+            index = self.epp_combo.findData(profile.get("epp") or "")
+            self.epp_combo.setCurrentIndex(max(0, index))
+        finally:
+            self.epp_combo.blockSignals(False)
+
+    def _on_epp(self, _index):
+        profile = dict(self.control.shown())
+        profile["epp"] = self.epp_combo.currentData() or None
+        self.control.save(profile, "epp")
+
     def _refresh_profile_ui(self):
         active = self.control.shown()       # the clicked profile lights up at once
         name = active["name"]
@@ -523,6 +548,7 @@ class DashboardUI(QMainWindow):
             self.profile_combo.addItems(names)
         self.profile_combo.setCurrentText(name)
         self.profile_combo.blockSignals(False)
+        self._refresh_epp_ui(active)
         self._refresh_lighting_ui(active)
         if self._tray is not None:
             if set(self._tray_profile_actions) != set(names):
