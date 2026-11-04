@@ -290,6 +290,33 @@ def test_permission_failure_after_chmod_is_rolled_back():
     assert m.stats[RULE].startswith("666") and "chown" in plan.record["permission:" + RULE]["rollback_error"]
 
 
+def test_permission_first_chmod_failing_changed_nothing_and_is_not_rolled_back():
+    m = Machine(stats={RULE: "666 deck:deck"}, fail=["chmod"])
+    plan, results = one(m, "permission:" + RULE)
+    assert results == [("permission:" + RULE, "failed (nothing changed)")]
+    assert [c for c in m.calls if c[0] == "chmod"] == [["chmod", "644", RULE]]   # no rollback chmod
+    assert "rollback_error" not in plan.record["permission:" + RULE]
+    assert m.readonly is True
+
+
+def test_permission_change_is_recorded_and_rolled_back_when_chown_fails():
+    m = Machine(stats={RULE: "666 deck:deck"}, fail=["chown"])
+    plan, results = one(m, "permission:" + RULE)
+    assert plan.record["permission:" + RULE]["status"] in ("rollback failed", "rolled back")
+    assert [c for c in m.calls if c[0] == "chmod"][-1] == ["chmod", "666", RULE]   # rollback tried
+
+
+def test_permission_on_etc_uses_the_readonly_window_and_restores_it():
+    m = Machine(stats={RULE: "666 deck:deck"})
+    plan, results = one(m, "permission:" + RULE)
+    names = [c[:2] for c in m.root]
+    assert names[0] == ["steamos-readonly", "disable"] and names[-1] == ["steamos-readonly", "enable"]
+    assert m.readonly is True
+    plan.steps[0].rollback()
+    assert m.root[-2][:2] == ["chown", "deck:deck"] or m.root[-2][0] == "chown"
+    assert m.root[-1] == ["steamos-readonly", "enable"] and m.stats[RULE] == "666 deck:deck"
+
+
 def test_permission_on_a_missing_file_changes_nothing():
     m = Machine()
     plan, results = one(m, "permission:" + RULE)

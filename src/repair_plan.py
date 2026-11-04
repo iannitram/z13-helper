@@ -292,6 +292,9 @@ def _permission_step(io: RepairIO, check_id: str, path: str, entry: dict) -> Rep
     entry.update(changed=[path], backup={},
                  undo=f"chmod/chown {path} back to the mode and owner recorded as 'before'")
     before = {}
+    # A file under /etc is on the root filesystem, read-only on SteamOS: same window as the
+    # grub and package steps. A sysfs node (the ppt file) is not, so it needs no window.
+    window = (lambda body: _writable(io, body)) if path.startswith("/etc/") else (lambda body: body())
 
     def apply():
         rc, out = io.run(stat)
@@ -301,11 +304,14 @@ def _permission_step(io: RepairIO, check_id: str, path: str, entry: dict) -> Rep
         entry["before"] = before["value"]
         entry["undo"] = (f"chmod {before['value'].split()[0]} {path} and "
                          f"chown {before['value'].split()[1]} {path}")
-        entry["status"] = "changed"
-        for argv in fix:
-            rc, out = _root(io, argv)
-            if rc != 0:
-                raise RuntimeError(f"{' '.join(argv)} failed: {out}")
+
+        def change():
+            for argv in fix:
+                rc, out = _root(io, argv)
+                if rc != 0:
+                    raise RuntimeError(f"{' '.join(argv)} failed: {out}")
+                entry["status"] = "changed"   # from the first success there is something to undo
+        window(change)
 
     def verify():
         rc, out = io.run(stat)
@@ -313,10 +319,13 @@ def _permission_step(io: RepairIO, check_id: str, path: str, entry: dict) -> Rep
 
     def rollback():
         mode, owner = before["value"].split()
-        for argv in (["chmod", mode, path], ["chown", owner, path]):
-            rc, out = _root(io, argv)
-            if rc != 0:
-                raise RuntimeError(f"{' '.join(argv)} failed: {out}")
+
+        def undo():
+            for argv in (["chmod", mode, path], ["chown", owner, path]):
+                rc, out = _root(io, argv)
+                if rc != 0:
+                    raise RuntimeError(f"{' '.join(argv)} failed: {out}")
+        window(undo)
 
     return RepairStep(check_id, f"set {path} to mode {mode}, owner {owner}", apply, verify, rollback,
                       needs_root=True, commands=tuple(_text(a, True) for a in fix),

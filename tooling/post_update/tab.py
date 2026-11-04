@@ -1,8 +1,9 @@
 """Rows and status for the After SteamOS update tab (issues #70, #72).
 
 Pure assembly: the Qt dialog and the Decky panel only draw what `status` returns, as JSON
-from `python3 -m post_update --tab-json`. Checks are read-only; the one write is the saved
-last-seen state file (atomic), and `--ack` clears the re-verify flag.
+from `python3 -m post_update --tab-json`. Checks are read-only, with one deliberate
+exception: `status()` saves the last-seen state file (atomic) on the first run and when it
+changes. `--ack` clears the re-verify flag.
 """
 
 import json
