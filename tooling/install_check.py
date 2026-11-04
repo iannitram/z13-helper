@@ -49,6 +49,9 @@ DECKY_PLUGIN = os.path.join(HOME, "homebrew", "plugins", "z13-helper")
 DECKY_LOGS = os.path.join(HOME, "homebrew", "logs", "z13-helper")
 DECKY_FILES = ["plugin.json", "package.json", "main.py", "dist/index.js",
                "py_modules/fan_watchdog.py", "py_modules/sensor_reader.py", "py_modules/host.py",
+               "py_modules/state_authority.py", "py_modules/state_stream.py", "py_modules/state_events.py",
+               "py_modules/z13ctl_client.py", "py_modules/z13ctl_profiles.py", "py_modules/profiles.py",
+               "py_modules/hardware_controller.py", "py_modules/max_fans_state.py", "py_modules/epp.py",
                "py_modules/power_range.py", "py_modules/crash_report.py", "py_modules/crash_queue.py",
                "py_modules/crash_scrub.py", "py_modules/_crash_build.json"]
 
@@ -66,6 +69,16 @@ MANIFEST = [
     ("src/profiles.py", f"{BIN}/z13-profile", "755", False),
     # z13-profile's host seam (profiles.py puts this folder on sys.path).
     ("src/host.py", f"{LIB}/host.py", "644", False),
+    ("src/state_authority.py", f"{LIB}/state_authority.py", "644", False),
+    ("src/state_stream.py", f"{LIB}/state_stream.py", "644", False),
+    ("src/state_events.py", f"{LIB}/state_events.py", "644", False),
+    ("src/z13ctl_client.py", f"{LIB}/z13ctl_client.py", "644", False),
+    ("src/z13ctl_profiles.py", f"{LIB}/z13ctl_profiles.py", "644", False),
+    ("src/profiles.py", f"{LIB}/profiles.py", "644", False),
+    ("src/hardware_controller.py", f"{LIB}/hardware_controller.py", "644", False),
+    ("src/max_fans_state.py", f"{LIB}/max_fans_state.py", "644", False),
+    ("src/epp.py", f"{LIB}/epp.py", "644", False),
+
     ("tooling/profiles/z13-max", f"{BIN}/z13-max", "755", False),
     ("tooling/profiles/z13-balanced", f"{BIN}/z13-balanced", "755", False),
     ("tooling/profiles/z13-cool", f"{BIN}/z13-cool", "755", False),

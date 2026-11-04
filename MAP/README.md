@@ -12,14 +12,17 @@ flowchart TD
     PC --> Worker[src/apply_worker.py]
     PC --> Prof[src/profiles.py]
     PC --> HC[src/hardware_controller.py]
-    Prof --> Host[src/host.py]
-    HC --> Host
+    Prof --> Authority[src/state_authority.py]
+    HC --> Authority
+    Authority --> Host[src/host.py]
+    Authority --> Socket[src/z13ctl_client.py]
+    Socket --> CLI
     Host -->|Flatpak: flatpak-spawn --host| CLI[z13ctl CLI / daemon]
     Prof -->|z13-profile host CLI| CLI
     PC -->|reads/writes| ProfileStore[(profiles.json)]
     PC -->|reads/writes| MaxStore[(max-fans.json)]
     Watch[src/fan_watchdog.py] -->|reads sensors and shared intent| MaxStore
-    Watch -->|queued recovery through worker| HC
+    Watch -->|recovery transaction| Authority
     Sensors[src/sensor_reader.py] -->|hwmon reads only| HW[Kernel hwmon]
     PowerRange[src/power_range.py] -->|range metadata only| Armoury[Armoury attributes]
     PowerRange -->|Flatpak metadata probe via host.py| Host
@@ -27,13 +30,26 @@ flowchart TD
     DeckyUI[decky/src React panel] --> Callable[decky/src/backend.ts]
     Callable --> Backend[decky/main.py backend, runs as deck]
     Backend -->|profile apply as deck| Prof
-    Backend -->|host.run| CLI
+    Backend --> Authority
     Backend -->|reads/writes| ProfileStore
     Backend -->|reads/writes| MaxStore
     Install[install.sh / tooling/install_check.py] --> Copies[host CLI and Decky py_modules copies]
 ```
 
-The desktop Flatpak and Decky are two frontends to the same profile and Max Fans files under `~/.config/z13-helper/`. They read those files when needed; transient UI state such as a pending profile selection and watchdog counters remain in memory. The z13ctl daemon has its own persisted custom-profile state under `~/.local/state/z13ctl/`, separate from the app's profile store. The profile engine explicitly applies or resets z13ctl curves and clears stale custom TDP state when required; the two stores are not interchangeable.
+The desktop app, tray, host profile CLI, Decky plugin and fan recovery all route writes
+through `src/state_authority.py`. It holds a shared hardware transaction lock across
+profile applies/recoveries and validates queued field edits against fresh backend
+selection. `z13ctl` owns named performance settings; `profiles.json` mirrors that state
+and retains app-only hooks, base, lighting and EPP intent. `max-fans.json` retains the
+restore snapshot and confirmed intent. No second app daemon is introduced.
+
+A host `z13-profile watch` subscribes before its first snapshot and resnapshots after
+reconnect, reconciling backend selection/settings without a hardware write. The shared
+`state_stream.py` reader delivers those records to the desktop Qt signal and Decky
+`profile_state` event. Both frontends refresh from those events; the desktop profile
+poll has been removed. Telemetry, fan safety checks and screen brightness keep their
+independent sampling. Older daemons retain the bounded legacy command path; they
+cannot provide named-profile identity or field targeting.
 
 `src/host.py` selects its execution mode once per process. Flatpak calls use `flatpak-spawn --host`; the host `z13-profile` CLI runs directly as the invoking user; Decky runs as the `deck` user with that session's runtime environment. `runuser -u deck` is used only for a root process that explicitly requests `as_deck=True`, not for every Decky command. The Decky plugin includes root-owned copies of shared Python helpers under `py_modules/`; the backend itself runs as `deck`.
 
@@ -45,9 +61,11 @@ The desktop Flatpak and Decky are two frontends to the same profile and Max Fans
 | `src/dashboard_ui.py` | Main window, profile picker, Max Fans control, lighting, battery, telemetry and tray behavior; opens Fans + Power and the side-button reader (host evdev reader, legacy InputPlumber fallback). Key class: `DashboardUI`; constants `APP_VERSION`, `_CONFIG_PATH`. Called by `main.py` and `tooling/screenshots.py`. |
 | `src/fans_window.py` | Fans + Power window: TDP/PL1-PL3 sliders with range-aware bounds, Curve Optimizer and the fan curve editor host. Key classes: `FansWindow`, `_SliderRow`. Uses `power_range.py`, `profile_control.py`, `profiles.py`. Called by `DashboardUI`. |
 | `src/fan_curve_widget.py` | Interactive 8-point fan curve editor. Key: `FanCurveWidget`, `floor_pct`. Called by `FansWindow`. |
-| `src/profile_control.py` | Shared profile model for both desktop windows; persists edits and dispatches live field updates through `ApplyWorker`. Key class: `ProfileControl` (`switch`, `save`, `reapply_active`, `factory_defaults`). Called by `DashboardUI` and `FansWindow`. |
+| `src/profile_control.py` | Desktop adapter: profile editor, worker submissions, and Qt event dispatch for both windows and tray; delegates hardware edits to the shared authority. Key class: `ProfileControl` (`switch`, `save`, `reapply_active`, `factory_defaults`). Called by `DashboardUI` and `FansWindow`. |
+| `src/state_authority.py` | Shared transaction/write owner: named API probe, explicit thermal targets, field edits, Max Fans, platform-profile switch, lighting, sysfs screen-backlight write (`set_screen_backlight`) and named fan recovery. Edits to an inactive profile are stored and mirrored without a live push; `apply_profile` runs the GUI switch/re-apply as one transaction. Never retries failed socket writes through the CLI. |
+| `src/z13ctl_client.py` | Stdlib newline-JSON socket client, Flatpak/root host bridge, named-profile mirroring and cancellable subscription/reconnect loop. |
 | `src/apply_worker.py` | Serial background queue for desktop hardware work, including profile applies and watchdog recovery. Key class: `ApplyWorker` (`submit`, signal `done`). Called by `DashboardUI` and `ProfileControl`. |
-| `src/profiles.py` | Key API: `load_store`, `upsert_profile`, `apply`, `apply_by_name`, `validate`, `apply_tdp`, `apply_epp`, `recover_lightbar`, `main` (the CLI). Profile schema and JSON store, built-ins and migrations, `z13-profile` CLI, ordered profile apply, and lightbar recovery. Each profile may also carry per-device lighting intent (`LIGHTING_MODES`, `LIGHTING_COLORS`, `set_profile_lighting`), and enter/exit hooks are bounded by `HOOK_TIMEOUT_S` (120 s). Used by the app and installed host CLI; Decky invokes that same CLI for app-profile changes. |
+| `src/profiles.py` | Key API: `load_store`, `upsert_profile`, `apply`, `apply_by_name`, `validate`, `apply_tdp`, `apply_epp`, `recover_lightbar`, `main` (the CLI). Profile schema and JSON store, built-ins and migrations, `z13-profile` CLI, ordered profile apply, and lightbar recovery. The legacy TDP cleanup before a curve write runs only after the socket JSON profile-list probe succeeds, never on CLI listing headers. Each profile may also carry per-device lighting intent (`LIGHTING_MODES`, `LIGHTING_COLORS`, `set_profile_lighting`), and enter/exit hooks are bounded by `HOOK_TIMEOUT_S` (120 s). Used by the app and installed host CLI; Decky invokes that same CLI for app-profile changes. |
 | `src/max_fans_state.py` | Shared Max Fans intent and saved-curve snapshot in `max-fans.json`, with inter-process locking and atomic writes. Key: `load`, `is_enabled`, `save`, `restore_plan`, `record_profile_curve`, `file_lock`, `migrate_legacy`. Called by `DashboardUI`, `ProfileControl` and `tooling/install_check.py`; `profiles.py` and `decky/main.py` carry their own copies of the same file handling. |
 | `src/fan_watchdog.py` | Shared Desktop/Game Mode recovery rules. In the desktop app, recoveries use the worker queue; stale dropped-curve recoveries are canceled if the queued profile operation has already changed Max Fans intent or restored a curve. Key: `FanWatchdog` (`tick`, `finished`), `FanWatchdogRunner`, `FanTrace`, `FAN_RECOVERY_LABEL`. Called by `DashboardUI`, `ProfileControl` and `decky/main.py` (installed copy). |
 | `src/sensor_reader.py` | Read-only hwmon temperatures, fan RPM, custom-curve mode and points. It does not write hardware. Key class: `SensorReader` (`get_fan_speeds`, `get_apu_temp`, `custom_fan_curve_enabled`, `custom_fan_curve_points`, `expected_fan_pwm`, `get_battery`). Called by `DashboardUI`, `main.py`, `decky/main.py` (installed copy) and `tooling/install_check.py`. |
@@ -70,8 +88,10 @@ The desktop Flatpak and Decky are two frontends to the same profile and Max Fans
 | `src/updates_dialog.py` | Updates and Repair install window; feeds `installers.py` and `install.sh --repair` to a host Python through stdin and streams the log. Key: `UpdatesDialog`, `InstallDialog`, `InstallThread`, `UpdateCheckThread`, `installer_plan`. Called by `DashboardUI`. |
 | `src/installers.py` | Installation actions run on the host: sha256-verified z13ctl release, z13ctl daemon units, Decky Loader and SteamOS checks. Key: `install_z13ctl`, `repair_z13ctl`, `install_decky`, `repair_decky`, `plan_z13ctl`, `plan_decky`, `main`. Run by `install.sh` and, through stdin, by `UpdatesDialog`; imports `versions.py`. |
 | `src/post_update_state.py` | Pure helpers for the post-SteamOS-update notice: `read_build_id`, `needs_attention`, `banner`, `row_state`. Imported only by its tests on this branch (no UI caller yet, M7 / #154). |
-| `src/state_events.py` | Pure mapping of a z13ctl event name to `refresh` or `toggle-window`, plus operation status: `event_action`, `op_status`. Imported only by its tests on this branch (no caller yet; the event wiring is #23 / #153). |
-| `src/screen_brightness.py` | Built-in display brightness through KDE PowerDevil over D-Bus, falling back to the backlight sysfs node written on the host. Key: `ScreenBrightness`, `to_percent`, `to_raw`, `find_backlight`. Called by `DashboardUI` and `tooling/screenshots.py`. |
+| `src/state_events.py` | PyQt-free event action/status table and callback dispatch (`event_action`, `op_status`, `dispatch_event`, `lighting_level`); used by desktop signals and Decky event forwarding. |
+| `src/z13ctl_profiles.py` | Pure built-in named-profile mapping and strict socket JSON capability decision (`profile-list` well-formed rows only); never treats firmware listing text as target support. Proven: the daemon answers `profile-list` with well-formed rows. Not proven: that it honours `request.profile` (inferred from the two shipping together upstream; unverifiable without the device, see issue #23). |
+| `src/state_stream.py` | Shared cancellable host `z13-profile watch` reader; owns child termination/reaping and forwards records to frontend callbacks. |
+| `src/screen_brightness.py` | Built-in display brightness through KDE PowerDevil over D-Bus, falling back to the backlight sysfs node; the sysfs write goes through `state_authority.set_screen_backlight`. Key: `ScreenBrightness`, `to_percent`, `to_raw`, `find_backlight`. Called by `DashboardUI` and `tooling/screenshots.py`. |
 | `src/evdev_listener.py` | Desktop Mode side-button reader (`Asus WMI hotkeys`, `KEY_PROG3` = 202). Key: `find_side_button_device`, `EvdevListener`, `run_emit_loop` (the stdin-fed host reader, `--emit`). Called by `DashboardUI`; run directly as a diagnostic. |
 
 ### Profile apply and Max Fans ordering
@@ -175,3 +195,25 @@ The route and registry assumptions follow Decky's upstream
 and [`plugin-loader.tsx`](https://github.com/SteamDeckHomebrew/decky-loader/blob/main/frontend/src/plugin-loader.tsx).
 The route, registry/export shape and buffered error replay still need confirmation on the device,
 including one changed-plugin repair passing with Steam's gamepad UI running.
+
+The named-profile capability contract is the JSON value returned by socket
+`profile-list`; a human-readable `profile --list` firmware line is insufficient.
+Upstream added `profile-list` and `request.profile` together (see
+[api/client.go](https://github.com/dahui/z13ctl/blob/main/api/client.go) and
+[daemon/server.go](https://github.com/dahui/z13ctl/blob/main/internal/daemon/server.go)).
+Malformed successful replies fail closed; only missing/old daemons select legacy
+behavior. Custom names use stable hashed identifiers; built-ins reuse
+`z13ctl_profiles.named_profile_for`. No speculative write is used as a probe.
+
+`host.open_stream` preserves the same host environment as `host.run`; callers own
+the process lifecycle. Installer manifests deploy every authority/client/stream
+and controller dependency for the host CLI and root-owned Decky copies. Regression
+coverage includes `tests/test_state_authority.py`, `tests/test_state_stream.py`,
+`tests/test_z13ctl_client.py` and PyQt-free dispatch tests. Live firmware behavior,
+mode switches and subsecond convergence remain device acceptance checks.
+
+Profiles without thermal overrides are mirrored as empty backend definitions and
+select their firmware base, because z13ctl refuses to activate an empty custom
+profile. Reconciliation retains the app alias; selecting it by app name uses
+`z13-profile apply`. Snapshots also read the cached platform-profile metadata once
+per event, since the daemon custom-profile name does not encode that base.

@@ -5,8 +5,8 @@ import {
   DropdownItem,
   staticClasses,
 } from "@decky/ui";
-import { definePlugin, toaster } from "@decky/api";
-import { useCallback, useEffect, useState } from "react";
+import { addEventListener, removeEventListener, definePlugin, toaster } from "@decky/api";
+import { useEffect, useRef, useState } from "react";
 import { FaFan } from "react-icons/fa";
 import {
   getMaxFans,
@@ -21,6 +21,7 @@ import {
 } from "./backend";
 import { cancelPendingCommits } from "./hooks";
 import { switchProfile } from "./profileSwitch";
+import { clearAllDirty, dirtySet, mergePowerState, pendingEdits } from "./powerMerge";
 import { TelemetryRow } from "./components/Telemetry";
 import { PowerLimits } from "./components/PowerLimits";
 import { BatteryLimit } from "./components/BatteryLimit";
@@ -40,25 +41,54 @@ function Content() {
   // The active profile's TDP / battery limit (+ last brightness). Re-read after a profile switch.
   const [power, setPower] = useState<PowerState | null>(null);
 
-  const loadPower = useCallback(() => {
-    getPowerState()
-      .then(setPower)
-      .catch(() => setPower(null));
-  }, []);
+  // The profile_state listener below owns every write to `power`; this lets the dropdown request a refresh.
+  const refreshRef = useRef<() => Promise<void>>(async () => {});
 
   useEffect(() => {
-    getMaxFans().then(setMaxFansState);
-    getProfiles().then((r) => {
-      if (r && r.names && r.names.length) {
-        setOptions(r.names.map((n) => ({ data: n, label: n })));
-        setProfileState(r.active);
-        setAppProfiles(true);
-      } else {
-        getProfile().then(setProfileState);
+    let disposed = false;
+    let sequence = 0;
+    let lastActive: string | null = null; // active profile this effect last applied
+    const refresh = async () => {
+      const current = ++sequence;
+      try {
+        const [r, fans, nextPower] = await Promise.all([getProfiles(), getMaxFans(), getPowerState()]);
+        if (disposed || current !== sequence) return;
+        let active: string;
+        if (r && r.names && r.names.length) {
+          setOptions(r.names.map((n) => ({ data: n, label: n })));
+          active = r.active;
+          setAppProfiles(true);
+        } else {
+          active = await getProfile();
+          if (disposed || current !== sequence) return;
+        }
+        setProfileState(active);
+        setMaxFansState(fans);
+        // A profile switch drops every pending edit. Any other event refreshes all fields except
+        // those the user has edited and not yet committed.
+        const changed = active !== lastActive;
+        lastActive = active;
+        if (changed) {
+          cancelPendingCommits();
+          clearAllDirty();
+        }
+        const dirty = dirtySet();
+        const pending = pendingEdits();
+        setPower((previous) =>
+          mergePowerState<PowerState>({ previous, pending, dirty, incoming: nextPower, changed }).render,
+        );
+      } catch {
+        // keep the previous state so pending edits stay protected by the next merge
       }
-    });
-    loadPower();
-  }, [loadPower]);
+    };
+    refreshRef.current = refresh;
+    const listener = addEventListener("profile_state", refresh);
+    void refresh();
+    return () => {
+      disposed = true;
+      removeEventListener("profile_state", listener);
+    };
+  }, []);
 
   return (
     <>
@@ -87,6 +117,7 @@ function Content() {
             onChange={async (o) => {
               const name = o.data as string;
               cancelPendingCommits(); // a slider edit must not land on the profile we switch to
+              clearAllDirty();
               const previous = profile;
               setProfileState(name);
               const r = await switchProfile(
@@ -113,7 +144,7 @@ function Content() {
                       : `Could not switch to ${name}`,
                 });
               }
-              loadPower(); // TDP / battery limit belong to the (new) active profile
+              void refreshRef.current(); // TDP / battery limit belong to the (new) active profile
             }}
           />
         </PanelSectionRow>

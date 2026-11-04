@@ -37,6 +37,8 @@ import update_watch
 from fan_watchdog import FanTrace, FanWatchdog, FanWatchdogRunner
 from screen_brightness import ScreenBrightness, MIN_PERCENT
 from apply_worker import ApplyWorker
+import state_authority as authority
+import state_events
 from profile_control import ProfileControl
 from fans_window import FansWindow
 from updates_dialog import UpdatesDialog, UpdateCheckThread
@@ -135,6 +137,9 @@ class DashboardUI(QMainWindow):
         self._setup_tray()
         self._refresh_profile_ui()
         self._load_initial_state()
+        self.control.toggle_window.connect(self._toggle_window)
+        self.control.start_events()
+        QApplication.instance().aboutToQuit.connect(self.control.close_events)
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._tick)
@@ -394,6 +399,7 @@ class DashboardUI(QMainWindow):
             self._lighting_combos[device] = (mode_combo, color_combo)
         brow = QHBoxLayout()
         brow.setSpacing(6)
+        self.light_target.currentIndexChanged.connect(lambda _index: self._refresh_profile_ui())
         self._bright_tiles = {}
         for label, level in _BRIGHTNESS:
             t = ModeTile(label, STANDARD, height=36)
@@ -506,6 +512,16 @@ class DashboardUI(QMainWindow):
     # ------------------------------------------------------------------
 
     def _refresh_profile_ui(self):
+        state = self.control.backend_state
+        if isinstance(state.get("battery_limit"), int) and not self.battery_slider.isSliderDown():
+            self.battery_slider.blockSignals(True)
+            self.battery_slider.setValue(state["battery_limit"])
+            self.battery_slider.blockSignals(False)
+            self.batt_100.setChecked(state["battery_limit"] == 100)
+        devices = _LIGHT_TARGETS[self.light_target.currentIndex()][1]
+        level = state_events.lighting_level(state, devices[0])
+        if isinstance(level, int) and 0 <= level <= 3:
+            self._highlight_brightness(("off", "low", "medium", "high")[level])
         active = self.control.shown()       # the clicked profile lights up at once
         name = active["name"]
         # Title: "Performance Mode: Balanced+ 20W" — '+' = custom curve, W = custom SPL
@@ -563,33 +579,7 @@ class DashboardUI(QMainWindow):
     # ------------------------------------------------------------------
 
     def _toggle_max_fans(self, checked):
-        c = self.controller
-
-        def on():
-            try:
-                info = c.get_fancurve()
-                pts = info.get("points") or []
-                if len(pts) == 8 and not all(pwm >= 255 for _, pwm, _ in pts):
-                    max_fans_state.save(saved_curve=[[int(t), int(pwm)] for t, pwm, _ in pts])
-            except Exception:
-                pass
-            c.set_fans_max()
-            max_fans_state.save(enabled=True)
-            return "Max Fans ON — both fans at 100%"
-
-        def off():
-            kind, saved = max_fans_state.restore_plan()
-            curve = self.control.active().get("fan_curve")
-            if kind == "curve":
-                c.set_fancurve_pwm(saved)
-            elif kind == "unknown" and curve:
-                c.set_fancurve(curve)
-            else:
-                c.reset_fancurve()
-            max_fans_state.save(enabled=False)
-            return "Max Fans OFF — profile curve restored"
-
-        self.control._submit("Max Fans", on if checked else off)
+        self.control._submit("Max Fans", lambda: authority.set_max_fans(checked))
 
     # ------------------------------------------------------------------
     # Lighting
@@ -599,8 +589,9 @@ class DashboardUI(QMainWindow):
         devices = _LIGHT_TARGETS[self.light_target.currentIndex()][1]
         self._highlight_brightness(level)
 
+        target = self.control.active_name()
         def go():
-            failed = self.controller.set_brightness(level, devices=devices)
+            failed = authority.set_field("brightness", level, target, devices=devices)
             self.config.set("brightness", level)
             return f"Brightness {label}" + (f" ({', '.join(failed)} not responding)" if failed else "")
         self.control._submit("Brightness", go)
@@ -632,20 +623,9 @@ class DashboardUI(QMainWindow):
         mode_combo, color_combo = self._lighting_combos[device]
         mode = mode_combo.currentData()
         setting = None if mode is None else {"mode": mode, "color": color_combo.currentData()}
-        try:
-            profile = profiles.set_profile_lighting(
-                name, device, setting, brightness=self.config.get("brightness", "medium"))
-        except (OSError, ValueError) as exc:
-            self.status_bar.showMessage(f"Lighting setting failed: {exc}", 8000)
-            self._refresh_lighting_ui(self.control.shown())
-            return
-        self._refresh_lighting_ui(profile)
-        if setting is None:
-            self.control._submit("Lighting", lambda: "profile override cleared; current lighting left unchanged")
-            return
-        brightness = profile.get("brightness") or self.config.get("brightness", "high")
+        brightness = self.config.get("brightness", "medium")
         self.control._submit(f"Lighting → {device}",
-                              lambda: self.controller.set_lighting(device, setting, brightness))
+                             lambda: authority.set_lighting(name, device, setting, brightness))
 
     # ------------------------------------------------------------------
     # Screen brightness
@@ -688,8 +668,9 @@ class DashboardUI(QMainWindow):
     def _apply_battery_limit(self):
         value = self.battery_slider.value()
         self.batt_100.setChecked(value == 100)
-        self.control._submit(f"Battery limit {value}%", lambda: (self.controller.set_battery_limit(value),
-                                                                 self.config.set("battery_limit", value)))
+        target = self.control.active_name()
+        self.control._submit(f"Battery limit {value}%",
+                             lambda: authority.set_field("battery_limit", value, target))
 
     def _battery_100(self):
         self.battery_slider.setValue(100)
@@ -847,13 +828,6 @@ class DashboardUI(QMainWindow):
         self._show_fan_message(self._fan_runner.tick())
         if self.isVisible():
             self._sync_screen_brightness()
-        # The Decky plugin (or z13-profile on the host) may have switched profiles.
-        try:
-            if self.control.shown()["name"] != self.profile_combo.currentText() or \
-                    self.maxfans_pill.isChecked() != self.control.shown_max_fans():
-                self._refresh_profile_ui()
-        except Exception:
-            pass
 
     def _show_fan_message(self, msg):
         if msg:
