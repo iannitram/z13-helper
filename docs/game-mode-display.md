@@ -30,5 +30,5 @@ remove the manifest row locally.
 
 The Screen Refresh row in the main window lists only the rates `kscreen-doctor -o` shows for the
 panel at its current resolution. A change is read back; if the panel is not in the requested mode
-the previous mode is restored and the row says so. "Back" returns to the mode before the last
+the previous mode is restored and the row says so (prefixed with ⚠) until the next change. "Back" returns to the mode before the last
 change. The choice is not persisted: Plasma's own display settings still decide after login.
