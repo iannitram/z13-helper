@@ -20,7 +20,6 @@ DMI_PRODUCT = "/sys/class/dmi/id/product_name"
 CMDLINE = "/proc/cmdline"
 GRUB_FILE = "/etc/default/grub-steamos"
 KEEP_DIR = "/etc/atomic-update.conf.d"
-OUR_KEEP_FILE = "z13-bucket1.conf"  # Z13-Helper's own keep list (tooling/install_check.py)
 
 AMDGPU_ARGS = ("dcdebugmask=0x20e10", "gpu_recovery=1", "cwsr_enable=0", "sg_display=0", "abmlevel=0")
 
@@ -119,22 +118,17 @@ def _keyring_apply(io: HostIO) -> None:
             raise RuntimeError(f"{' '.join(argv)} failed: {out}")
 
 
-# 3. Carry-forward list health: info only. Our own keep-list file is "needs"; others are "info".
+# 3. Carry-forward list health: info only, so a missing path is "info" and never "needs"
+# (apply changes nothing, so "needs" could never clear).
 
 def _carry_forward_check(io: HostIO) -> str:
     if not supported_device(io):
         return "na"
-    ours, others = [], []
+    texts = []
     for name in sorted(io.listdir(KEEP_DIR)):
-        if not name.endswith(".conf"):
-            continue
-        text = io.read(f"{KEEP_DIR}/{name}") or ""
-        (ours if name == OUR_KEEP_FILE else others).append(text)
-    if carry_forward_missing(ours, io.exists):
-        return "needs"
-    if carry_forward_missing(others, io.exists):
-        return "info"
-    return "ok"
+        if name.endswith(".conf"):
+            texts.append(io.read(f"{KEEP_DIR}/{name}") or "")
+    return "info" if carry_forward_missing(texts, io.exists) else "ok"
 
 
 def _carry_forward_apply(io: HostIO) -> None:

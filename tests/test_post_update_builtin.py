@@ -251,11 +251,11 @@ def test_carry_forward_ok_when_every_path_exists():
     assert recipe(h, "carry-forward").check() == "ok"
 
 
-def test_carry_forward_needs_when_our_file_lists_a_missing_path():
+def test_carry_forward_is_info_never_needs_when_our_file_lists_a_missing_path():
     spec = _listing(OUR_CONF, [("50-other.conf", "/etc/b\n")])
     h = host(files=spec["files"], listing=spec["listing"])
     h.files["/etc/b"] = "x"
-    assert recipe(h, "carry-forward").check() == "needs"
+    assert recipe(h, "carry-forward").check() == "info"
 
 
 def test_carry_forward_is_info_when_only_another_file_is_missing():
