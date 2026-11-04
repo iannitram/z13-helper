@@ -99,26 +99,8 @@ PL1_SAFE_MAX = 75
 DEFAULT_TDP = (70, 86, 86)
 BATTERY_MIN, BATTERY_MAX, BATTERY_STEP = 40, 100, 5
 BRIGHTNESS_LEVELS = ("off", "low", "medium", "high")
-# One z13ctl call per device: z13ctl's default --device all aborts on the first
-# write error, so a wedged lightbar would starve the keyboard (ROADMAP §1, 2026-10-09).
-LIGHTING_DEVICES = ("keyboard", "lightbar")
 Z13CTL_WRITE_TIMEOUT_S = host.Z13CTL_WRITE_TIMEOUT_S
 PROFILE_APPLY_TIMEOUT_S = 180
-LIGHTING_TIMEOUT_S = Z13CTL_WRITE_TIMEOUT_S
-# Wedged-lightbar recovery: copy of src/profiles.py recover_lightbar() (this backend
-# runs as root and can't import src/). Keep the two in step.
-LIGHTBAR_RESET_UNIT = "z13-lightbar-reset.service"
-LIGHTBAR_RESET_MIN_GAP_S = 120
-LIGHTBAR_RESET_SETTLE_S = 3
-# Same stamp the host-side z13-profile CLI uses (deck's runtime dir), so the
-# rate limit holds across both.
-LIGHTBAR_STAMP = "/run/user/1000/z13-lightbar-reset.stamp"
-# The reset re-enumerates the lightbar under new hidraw nodes, but the z13ctl
-# user daemon caches the old path and keeps writing to the dead node -- it
-# has to be restarted too (copy of src/profiles.py; same reasoning there).
-Z13CTL_SERVICE = "z13ctl.service"
-LIGHTBAR_DAEMON_RESTART_WAIT_S = 2
-LIGHTBAR_DAEMON_STAMP = "/run/user/1000/z13-lightbar-daemon-restart.stamp"
 
 
 def _run(args, timeout=15, *, as_deck=False):
@@ -384,19 +366,6 @@ def _save_max_fans(state):
     _atomic_write_text(MAX_FANS_STATE, json.dumps(state), owner=(DECK_UID, DECK_GID))
 
 
-def _update_max_fans(**changes):
-    with _file_lock(MAX_FANS_STATE):
-        state = _load_max_fans()
-        state.update(changes)
-        _save_max_fans(state)
-
-
-def _current_curve_pwm():
-    """Parse `z13ctl fancurve --get` into a list of (temp, pwm) tuples."""
-    _, out = _run([Z13CTL, "fancurve", "--get"])
-    return [(int(t), int(pwm)) for t, pwm in re.findall(r"(\d+)\D+C:\s+(\d+)/255", out)]
-
-
 _sensors = SensorReader()
 
 
@@ -513,66 +482,6 @@ def active_profile(store):
     return None
 
 
-def update_active_profile(store, **fields):
-    """Set `fields` on the active profile, in place. Returns its name.
-
-    Only existing schema keys this panel edits are allowed, so the schema can't
-    grow by accident. Raises KeyError if there is no active profile.
-    """
-    bad = set(fields) - {"tdp", "battery_limit"}
-    if bad:
-        raise ValueError(f"not editable from Decky: {sorted(bad)}")
-    p = active_profile(store)
-    if p is None:
-        raise KeyError("no active profile in profiles.json")
-    p.update(fields)
-    return p["name"]
-
-
-def write_store_atomic(store, path=None):
-    """tmp + rename in the same dir; keep it deck-owned although we run as root."""
-    path = path or PROFILES_STORE
-    d = os.path.dirname(path)
-    dfd = _open_dir_chain(d, (DECK_UID, DECK_GID))   # refuses a symlink anywhere on the way
-    try:
-        owner = None
-        if os.geteuid() == 0:
-            st = os.fstat(dfd)
-            owner = (st.st_uid, st.st_gid) if st.st_uid != 0 else (DECK_UID, DECK_GID)
-        _write_in_dir(dfd, os.path.basename(path), json.dumps(store, indent=2), 0o644, owner)
-    finally:
-        os.close(dfd)
-
-
-def _stale_message(store, profile):
-    """Why a request aimed at `profile` must not run, or None. No target = the active one."""
-    if not profile or not store or store.get("active") == profile:
-        return None
-    return (f"Not applied: the active profile is now {store.get('active') or 'another one'}, "
-            f"not {profile}")
-
-
-def _set_active_field(profile=None, **fields):
-    """Read-modify-write the active profile. Returns (name, error-or-None).
-    With `profile`, refuses (STALE_PREFIX error) unless it is still the active one."""
-    # Seed first: it runs z13-profile, which takes the same lock.
-    if _ensure_store() is None:
-        return None, "profiles.json missing (is z13-profile installed?)"
-    try:
-        with _file_lock(PROFILES_STORE):
-            store = _read_store()   # re-read under the lock: never write an older snapshot
-            if store is None:
-                return None, "profiles.json missing (is z13-profile installed?)"
-            stale = _stale_message(store, profile)   # after the re-read, so `store` is the fresh one
-            if stale:
-                return None, stale
-            name = update_active_profile(store, **fields)
-            write_store_atomic(store)
-    except (KeyError, ValueError, OSError) as e:
-        return None, str(e)
-    return name, None
-
-
 def _live_battery_limit():
     """charge_control_end_threshold from sysfs (a read, never a write), or None."""
     base = "/sys/class/power_supply"
@@ -595,142 +504,6 @@ def telemetry():
     """
     f1, f2 = _sensors.get_fan_speeds()
     return {"apu": _sensors.get_apu_temp(), "gpu": _sensors.get_gpu_temp(), "fan1": f1, "fan2": f2}
-
-
-def lightbar_failure_kind(out):
-    """Copy of profiles.lightbar_failure_kind."""
-    low = (out or "").lower()
-    if "timed out" in low or "timeout" in low:
-        return "wedged"
-    if "no such device" in low or "enodev" in low:
-        return "stale"
-    return None
-
-
-def lightbar_timed_out(out):
-    """Copy of profiles.lightbar_timed_out: the wedged endpoint's failure text."""
-    return lightbar_failure_kind(out) == "wedged"
-
-
-def _stamp_rate_limited(stamp, now, skipped_msg):
-    """Copy of profiles._stamp_rate_limited, with the deck-ownership chown
-    the desktop-app side doesn't need (we run as root)."""
-    try:
-        age = now() - os.stat(stamp).st_mtime
-        if 0 <= age < LIGHTBAR_RESET_MIN_GAP_S:
-            return False, skipped_msg(int(age))
-    except OSError:
-        pass
-    try:
-        # deck-owned: the deck-side CLI rewrites it too
-        _atomic_write_text(stamp, f"{now():.0f}\n", owner=(DECK_UID, DECK_GID))
-    except OSError:
-        pass
-    return True, None
-
-
-def restart_lightbar_daemon(*, sleep=time.sleep):
-    """Copy of profiles.restart_lightbar_daemon(). Reaches the deck user's z13ctl
-    daemon as deck (host.run's as_deck), even if this backend runs as root."""
-    rc, out = _run(["systemctl", "--user", "restart", "--no-ask-password", Z13CTL_SERVICE],
-                   timeout=30, as_deck=True)
-    if rc != 0:
-        return False, f"daemon restart failed ({out or f'rc={rc}'})"
-    sleep(LIGHTBAR_DAEMON_RESTART_WAIT_S)
-    return True, "daemon restarted"
-
-
-def recover_lightbar(*, sleep=time.sleep, now=time.time, stamp=None):
-    """Copy of profiles.recover_lightbar(). Returns (ok, message).
-
-    Starts the root oneshot that re-authorizes the lightbar's USB device (we are
-    root here, so no polkit involved), at most once per LIGHTBAR_RESET_MIN_GAP_S,
-    waits for the device to come back, then restarts the z13ctl daemon (it
-    caches the hidraw path, which the reset invalidates). Never loops; never
-    touches the keyboard. A daemon-restart failure is folded into the message,
-    not into `ok` -- the USB reset itself did succeed, so the caller still
-    retries once, and that retry's own failure will report why.
-    """
-    stamp = stamp or LIGHTBAR_STAMP
-    ok, msg = _stamp_rate_limited(stamp, now,
-                                   lambda age: f"lightbar reset skipped (last one {age} s ago)")
-    if not ok:
-        return False, msg
-    rc, out = _run(["systemctl", "start", "--no-ask-password", LIGHTBAR_RESET_UNIT], timeout=30)
-    if rc != 0:
-        return False, f"lightbar reset failed ({out or f'rc={rc}'})"
-    sleep(LIGHTBAR_RESET_SETTLE_S)
-    daemon_ok, daemon_msg = restart_lightbar_daemon(sleep=sleep)
-    if not daemon_ok:
-        return True, f"lightbar reset, but {daemon_msg}"
-    return True, "lightbar reset"
-
-
-def recover_lightbar_stale(*, sleep=time.sleep, now=time.time, stamp=None):
-    """Copy of profiles.recover_lightbar_stale(). Recovers a stale daemon
-    handle (ENODEV) without a USB reset: restart the daemon alone. Rate-limited
-    like recover_lightbar(), via its own stamp. Never loops."""
-    stamp = stamp or LIGHTBAR_DAEMON_STAMP
-    ok, msg = _stamp_rate_limited(stamp, now,
-                                   lambda age: f"daemon restart skipped (last one {age} s ago)")
-    if not ok:
-        return False, msg
-    return restart_lightbar_daemon(sleep=sleep)
-
-
-def set_brightness_per_device(level, recover=None, recover_stale=None):
-    """One z13ctl call per lighting device. Returns {"ok", "failed", "message"}.
-
-    ok is True when at least one device took the level; a failed device is
-    reported, not fatal (a wedged lightbar must not block the keyboard). The
-    keyboard goes first; a lightbar timeout gets one USB reset + daemon restart
-    (`recover`) and one retry, a stale daemon handle (ENODEV) gets one daemon
-    restart only (`recover_stale`) and one retry.
-    """
-    recover = recover or recover_lightbar
-    recover_stale = recover_stale or recover_lightbar_stale
-    if level not in BRIGHTNESS_LEVELS:
-        return {"ok": False, "failed": list(LIGHTING_DEVICES), "message": f"bad level {level!r}"}
-    failed = []
-    notes = []
-    for dev in LIGHTING_DEVICES:
-        argv = [Z13CTL, "--device", dev, "brightness", level]
-        rc, out = _run(argv, timeout=LIGHTING_TIMEOUT_S, as_deck=True)
-        timeout_prefix = "z13ctl write timed out after "
-        if out.startswith(timeout_prefix):
-            return {"ok": False, "failed": [dev], "message": out}
-        if rc != 0 and dev == "lightbar":
-            kind = lightbar_failure_kind(out)
-            if kind == "wedged":
-                rec_ok, rec_msg = recover()
-            elif kind == "stale":
-                rec_ok, rec_msg = recover_stale()
-            else:
-                rec_ok = None
-            if rec_ok is not None:
-                if rec_ok:
-                    rc, out = _run(argv, timeout=LIGHTING_TIMEOUT_S, as_deck=True)
-                    if rc == 0:
-                        notes.append("lightbar recovered")
-                    elif out.startswith(timeout_prefix):
-                        return {"ok": False, "failed": [dev], "message": out}
-                    else:
-                        notes.append("lightbar still wedged after a reset" if kind == "wedged"
-                                      else "lightbar still failing after a daemon restart")
-                else:
-                    notes.append(rec_msg)
-        if rc != 0:
-            failed.append(dev)
-    ok = len(failed) < len(LIGHTING_DEVICES)
-    if not failed:
-        msg = f"Brightness {level}"
-    elif ok:
-        msg = f"Brightness {level} ({', '.join(failed)} not responding)"
-    else:
-        msg = "Brightness failed: no lighting device responded"
-    if notes:
-        msg += f" [{'; '.join(notes)}]"
-    return {"ok": ok, "failed": failed, "message": msg}
 
 
 def _save_plugin_state(**changes):
@@ -772,40 +545,6 @@ def power_state():
     }
 
 
-def apply_tdp(enabled, pl1, pl2, pl3, profile=None):
-    """Store the active profile's TDP, then push it. Returns a result dict.
-
-    ON  -> `z13ctl tdp --set` as deck: the same targeted write the desktop Fans +
-           Power window does (a full profile re-apply would rewrite the platform
-           profile and the fan curve, i.e. a 5-10 s fan dip per slider release).
-    OFF -> `z13-profile apply <active> --no-hooks`: the platform-profile rewrite is
-           what hands the limits back to the firmware (desktop does the same).
-    """
-    tdp = clamp_tdp(pl1, pl2, pl3, tdp_ranges())
-    name, err = _set_active_field(profile, tdp=tdp if enabled else None)
-    if err and err.startswith("Not applied:"):
-        return {"ok": False, "saved": False, "stale": True, "message": err}
-    if err:
-        return {"ok": False, "saved": False, "message": f"Not saved: {err}", "tdp": tdp}
-    if enabled:
-        rc, out = _run(tdp_argv(tdp), timeout=Z13CTL_WRITE_TIMEOUT_S, as_deck=True)
-        ok = rc == 0
-        msg = (f"{name}: {tdp['pl1']}/{tdp['pl2']}/{tdp['pl3']} W" if ok
-               else out if out.startswith("z13ctl write timed out after ")
-               else f"{name}: saved, but z13ctl tdp failed ({out[-120:] or f'rc={rc}'})")
-    else:
-        # This command runs several independently bounded z13ctl writes. Keep a
-        # separate aggregate budget instead of cutting off the profile at 20 s.
-        rc, out = _run(Z13_PROFILE + ["apply", name, "--no-hooks"],
-                       timeout=PROFILE_APPLY_TIMEOUT_S, as_deck=True)
-        ok = rc == 0 and "ERR  profile" not in out
-        timeout_message = _extract_z13ctl_timeout(out)
-        msg = (f"{name}: power limits back to the firmware" if ok
-               else timeout_message if timeout_message
-               else f"{name}: saved, but re-apply failed ({out[-120:] or f'rc={rc}'})")
-    return {"ok": ok, "saved": True, "message": msg, "tdp": tdp}
-
-
 def _extract_z13ctl_timeout(output):
     """Return the per-write timeout, including its profile step when available."""
     prefix = "z13ctl write timed out after "
@@ -822,57 +561,6 @@ def _extract_z13ctl_timeout(output):
                     return f"{message} (step: {step})"
             return message
     return ""
-
-
-def apply_battery_limit(value, profile=None):
-    """Store the active profile's battery_limit, then `z13ctl batterylimit --set` as deck.
-    The hardware write still happens if the store can't be written (reported)."""
-    v = clamp_battery(value)
-    name, err = _set_active_field(profile, battery_limit=v)
-    if err and err.startswith("Not applied:"):
-        return {"ok": False, "saved": False, "stale": True, "message": err,
-                "value": v, "profile": ""}
-    rc, out = _run([Z13CTL, "batterylimit", "--set", str(v)],
-                   timeout=Z13CTL_WRITE_TIMEOUT_S, as_deck=True)
-    ok = rc == 0
-    msg = (f"Charge limit {v}%" if ok else out if out.startswith("z13ctl write timed out after ")
-           else f"Charge limit failed ({out[-120:] or f'rc={rc}'})")
-    if err:
-        msg += f" (not saved to profile: {err})"
-    return {"ok": ok, "saved": err is None, "message": msg, "value": v, "profile": name or ""}
-
-
-def max_fans_off_argv(state, store):
-    """z13ctl argv for Max Fans OFF; same order as the desktop app's off()
-    (src/dashboard_ui.py): the saved snapshot ([temp, pwm]), else the ACTIVE
-    profile's curve ([temp, pct]), else firmware auto. saved_curve null means
-    "the profile had no curve" (profiles.apply), so it is firmware auto and must
-    not fall back to a curve; a missing key (unknown) takes the profile fallback."""
-    state = state or {}
-    saved = state.get("saved_curve")
-    if saved:
-        return [Z13CTL, "fancurve", "--set", ",".join(f"{int(t)}:{int(p)}" for t, p in saved)]
-    curve = None if ("saved_curve" in state and saved is None) else (active_profile(store) or {}).get("fan_curve")
-    if curve:
-        return [Z13CTL, "fancurve", "--set", ",".join(f"{int(t)}:{int(p)}%" for t, p in curve)]
-    return [Z13CTL, "fancurve", "--reset"]
-
-
-def set_max_fans_blocking(enabled):
-    """Max Fans ON/OFF (blocking; run it in a thread). Returns status + message."""
-    if enabled:
-        # Snapshot the current custom curve (unless already maxed) so OFF restores it exactly.
-        cur = _current_curve_pwm()
-        if len(cur) == 8 and not all(pwm >= 255 for _, pwm in cur):
-            _update_max_fans(saved_curve=cur)
-        rc, out = _run([Z13CTL, "fancurve", "--set", MAX_FANS_SPEC], timeout=Z13CTL_WRITE_TIMEOUT_S)
-    else:
-        rc, out = _run(max_fans_off_argv(_load_max_fans(), _read_store()), timeout=Z13CTL_WRITE_TIMEOUT_S)
-    ok = rc == 0
-    if ok:
-        _update_max_fans(enabled=enabled)
-    return {"ok": ok, "message": ("Max Fans ON" if enabled else "Max Fans OFF")
-            if ok else out or f"z13ctl fancurve failed (rc={rc})"}
 
 
 class DeckyFans:

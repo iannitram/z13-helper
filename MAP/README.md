@@ -61,10 +61,10 @@ cannot provide named-profile identity or field targeting.
 | `src/dashboard_ui.py` | Main window, profile picker, Max Fans control, telemetry and tray behavior; opens Fans + Power. |
 | `src/fans_window.py`, `src/fan_curve_widget.py` | TDP/PL1-PL3 and Curve Optimizer controls, fan curve editor, and range-aware power sliders. |
 | `src/profile_control.py` | Desktop adapter: profile editor, worker submissions, and Qt event dispatch for both windows and tray; delegates hardware edits to the shared authority. |
-| `src/state_authority.py` | Shared transaction/write owner: named API probe, explicit thermal targets, field edits, Max Fans, platform-profile switch, lighting and named fan recovery. Refuses stale profile edits and never retries failed socket writes through the CLI. |
+| `src/state_authority.py` | Shared transaction/write owner: named API probe, explicit thermal targets, field edits, Max Fans, platform-profile switch, lighting, sysfs screen-backlight write (`set_screen_backlight`) and named fan recovery. Refuses stale profile edits and never retries failed socket writes through the CLI. |
 | `src/z13ctl_client.py` | Stdlib newline-JSON socket client, Flatpak/root host bridge, named-profile mirroring and cancellable subscription/reconnect loop. |
 | `src/state_events.py` | PyQt-free event action/status table and callback dispatch; used by desktop signals and Decky event forwarding. |
-| `src/z13ctl_profiles.py` | Pure built-in named-profile mapping and strict socket JSON capability decision; never treats firmware listing text as target support. |
+| `src/z13ctl_profiles.py` | Pure built-in named-profile mapping and strict socket JSON capability decision (`profile-list` well-formed rows only); never treats firmware listing text as target support. That the daemon honours `request.profile` is inferred from `profile-list` shipping with it upstream and cannot be verified without the device. |
 | `src/state_stream.py` | Shared cancellable host `z13-profile watch` reader; owns child termination/reaping and forwards records to frontend callbacks. |
 | `src/apply_worker.py` | Serial background queue for desktop hardware work, including profile applies and watchdog recovery. |
 | `src/profiles.py` | Profile schema and JSON store, built-ins and migrations, `z13-profile` CLI, ordered profile apply, and lightbar recovery. The legacy TDP cleanup before a curve write runs only after the socket JSON profile-list probe succeeds, never on CLI listing headers. Each profile may also carry per-device lighting intent (`LIGHTING_MODES`, `LIGHTING_COLORS`, `set_profile_lighting`), and enter/exit hooks are bounded by `HOOK_TIMEOUT_S` (120 s). Used by the app and installed host CLI; Decky invokes that same CLI for app-profile changes. |
@@ -79,7 +79,7 @@ cannot provide named-profile identity or field targeting.
 | `src/crash_report.py`, `src/crash_scrub.py`, `src/crash_queue.py` | Shared automatic crash reporting: startup hooks, scrubbed ZIPs, bounded offline queue and daily upload limit. Build configuration and the default-on Error log toggle are described in [`docs/crash-reporting.md`](../docs/crash-reporting.md); live delivery verification remains pending (#82). |
 | `src/versions.py` | Shared version floor (`DECKY_MIN`, 3.3.0) and `older_than`; used by `installers.py` and `update_watch.py`. |
 | `src/update_watch.py`, `src/updates_dialog.py`, `src/installers.py` | Upstream checks, updates/repair UI and installation actions. |
-| `src/screen_brightness.py`, `src/evdev_listener.py` | Built-in display brightness and the Desktop Mode side-button reader. |
+| `src/screen_brightness.py`, `src/evdev_listener.py` | Built-in display brightness (reads/KDE calls local; the sysfs backlight write goes through `state_authority.set_screen_backlight`) and the Desktop Mode side-button reader. |
 
 ### Profile apply and Max Fans ordering
 

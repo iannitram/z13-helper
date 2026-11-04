@@ -39,7 +39,7 @@ def dmain(monkeypatch, tmp_path):
 
 
 def _decky_store(tmp, dm):
-    dm.write_store_atomic({"active": "A", "profiles": []}, str(tmp / "profiles.json"))
+    dm._atomic_write_text(str(tmp / "profiles.json"), json.dumps({"active": "A", "profiles": []}), owner=(dm.DECK_UID, dm.DECK_GID))
 
 
 def _decky_fans(tmp, dm):
@@ -48,7 +48,7 @@ def _decky_fans(tmp, dm):
 
 
 def _decky_stamp(tmp, dm):
-    dm._stamp_rate_limited(str(tmp / "stamp"), lambda: 100.0, lambda a: "x")
+    dm._atomic_write_text(str(tmp / "stamp"), "100\n", owner=(dm.DECK_UID, dm.DECK_GID))
 
 
 def _decky_state(tmp, dm):
@@ -151,7 +151,7 @@ def test_temp_name_is_not_predictable(dmain, tmp_path, monkeypatch, pid):
         monkeypatch.setattr(dmain.secrets, "token_hex", lambda n: next(tokens))
     monkeypatch.setattr(os, "replace", lambda a, b, **kw: (seen.append(os.path.basename(a)), real(a, b, **kw)))
     for _ in range(3):
-        dmain.write_store_atomic({"active": "A", "profiles": []}, str(tmp_path / "p.json"))
+        dmain._atomic_write_text(str(tmp_path / "p.json"), json.dumps({"active": "A", "profiles": []}), owner=(dmain.DECK_UID, dmain.DECK_GID))
     assert len(set(seen)) == 3
     assert all(re.fullmatch(r"\.p\.json\.[0-9a-f]{16}\.tmp", n) for n in seen)
 
@@ -161,7 +161,7 @@ def test_write_failure_leaves_no_temp(dmain, tmp_path, monkeypatch):
         raise OSError("replace failed")
     monkeypatch.setattr(os, "replace", boom)
     with pytest.raises(OSError):
-        dmain.write_store_atomic({"active": "A", "profiles": []}, str(tmp_path / "p.json"))
+        dmain._atomic_write_text(str(tmp_path / "p.json"), json.dumps({"active": "A", "profiles": []}), owner=(dmain.DECK_UID, dmain.DECK_GID))
     with pytest.raises(OSError):
         profiles._write_json(str(tmp_path / "q.json"), {"a": 1})
     assert list(tmp_path.iterdir()) == []
@@ -170,7 +170,7 @@ def test_write_failure_leaves_no_temp(dmain, tmp_path, monkeypatch):
 def test_content_round_trips(dmain, tmp_path):
     store = {"active": "A", "profiles": [{"name": "A"}]}
     p = tmp_path / "p.json"
-    dmain.write_store_atomic(store, str(p))
+    dmain._atomic_write_text(str(p), json.dumps(store), owner=(dmain.DECK_UID, dmain.DECK_GID))
     assert json.loads(p.read_text()) == store
     assert oct(p.stat().st_mode & 0o777) == "0o644"
     q = tmp_path / "q.json"
@@ -185,31 +185,8 @@ def test_symlinked_store_dir_is_refused(dmain, tmp_path):
     link = tmp_path / "link"
     link.symlink_to(real)
     with pytest.raises(OSError):
-        dmain.write_store_atomic({"active": "A", "profiles": []}, str(link / "profiles.json"))
+        dmain._atomic_write_text(str(link / "profiles.json"), json.dumps({"active": "A", "profiles": []}), owner=(dmain.DECK_UID, dmain.DECK_GID))
     assert list(real.iterdir()) == []
-
-
-@pytest.mark.parametrize("dir_owner, expected", [
-    ((1234, 1235), (1234, 1235)),
-    ((0, 0), (4242, 4243)),
-])
-def test_store_owner_comes_from_the_dir_fd(dmain, tmp_path, monkeypatch, dir_owner, expected):
-    got = []
-    real_fstat = os.fstat
-
-    def fstat(fd):
-        fields = list(real_fstat(fd))
-        fields[4:6] = dir_owner
-        return os.stat_result(fields)
-
-    monkeypatch.setattr(os, "geteuid", lambda: 0)
-    monkeypatch.setattr(os, "fchown", lambda fd, u, g: got.append((u, g)))
-    monkeypatch.setattr(os, "chown", lambda *a, **k: pytest.fail("path chown"))
-    monkeypatch.setattr(dmain, "DECK_UID", 4242)
-    monkeypatch.setattr(dmain, "DECK_GID", 4243)
-    monkeypatch.setattr(os, "fstat", fstat)
-    dmain.write_store_atomic({"active": "A", "profiles": []}, str(tmp_path / "p.json"))
-    assert got == [expected]
 
 
 def test_symlink_at_trace_dir_is_not_chowned(dmain, tmp_path, monkeypatch):
@@ -281,16 +258,13 @@ def _writers(dm, home, owner):
     state = home / ".local" / "state" / "z13-helper"
 
     def store():
-        dm.write_store_atomic({"active": "A", "profiles": []}, str(cfg / "profiles.json"))
+        dm._atomic_write_text(str(cfg / "profiles.json"), json.dumps({"active": "A", "profiles": []}), owner=(dm.DECK_UID, dm.DECK_GID))
 
     def fans():
         dm.MAX_FANS_STATE = str(cfg / "max-fans.json")
         dm._save_max_fans({"enabled": True})
 
     def stamp():
-        if not dm._stamp_rate_limited(str(cfg / "stamp"), lambda: 1.0, lambda a: "x")[0]:
-            raise AssertionError
-        # the stamp swallows OSError; surface it for the test
         dm._atomic_write_text(str(cfg / "stamp"), "1\n", owner=owner)
 
     def trace():

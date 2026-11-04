@@ -229,6 +229,19 @@ def set_lighting(name, device, setting, brightness):
 
 
 @serialized
+def set_screen_backlight(path, raw):
+    """Write the sysfs display backlight under the shared hardware lock.
+
+    Display state, not z13ctl state, but every GUI hardware write goes through
+    this owner so it cannot interleave with a profile transaction.
+    """
+    res = host.run(["tee", os.path.join(path, "brightness")], timeout=10, input=f"{raw}\n")
+    if res[0] != 0:
+        raise RuntimeError(res[1])
+    return raw
+
+
+@serialized
 def set_platform_profile(profile, *, z13ctl=None, timeout=None):
     """Switch the firmware platform profile under the shared hardware lock."""
     z13ctl = z13ctl or os.path.expanduser('~/.local/bin/z13ctl')

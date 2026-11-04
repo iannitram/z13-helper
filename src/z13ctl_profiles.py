@@ -28,6 +28,11 @@ def profile_target_supported(list_output: str) -> bool:
     rejects profile-list. A CLI firmware listing proves neither capability.
     This is protocol detection, not an experimental setting write: probing a
     write on an old daemon could change live hardware when it ignores profile.
+
+    Limit of this check: it proves only that the daemon answers ``profile-list``
+    with well-formed rows. That ``request.profile`` is honoured is inferred from
+    the two shipping together upstream; it cannot be verified without hardware
+    (see PR-NOTES device steps).
     """
     import json
     try:
