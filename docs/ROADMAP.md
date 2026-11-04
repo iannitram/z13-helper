@@ -309,8 +309,9 @@ events (not in 1.4.2's CLI — check the socket API) instead of polling.
   adds no device config, and the system-bus policy lets only `root` own the
   `com.steampowered.SteamOSManager1` name, so a third-party service cannot serve these interfaces
   beside Valve's. Options (owner's decision): replace the package's service with a shim that calls
-  z13ctl (principle 1), or ask Valve for a `GZ302EA` entry. Measurements and open decisions:
-  [`steamos-manager.md`](steamos-manager.md) (#29).
+  z13ctl (principle 1), ship a device TOML into the immutable image (re-applied after every update,
+  joining the post-update repair list, #27), or ask Valve for a `GZ302EA` entry. Measurements and
+  open decisions: [`steamos-manager.md`](steamos-manager.md) (#29).
 - **48–180 Hz VRR profile for gamescope** (`~/.config/gamescope/scripts/`, modelled on
   `asus.rogally.lcd.lua`). The repository now includes a Gamescope display script matched only
   to EDID vendor `TMA`, product `0x0803`, model `TL134ADXP03`; it derives 48–180 Hz fixed-clock
