@@ -167,7 +167,7 @@ flowchart LR
 | `tooling/post_update/cmdline.py` | Kernel command-line helpers: `missing_args`, `add_grub_args`. Used by `builtin.py`. |
 | `tooling/post_update/cli.py` | Argument parsing for the post-update CLI: `parse_args`. |
 | `packaging/host/systemd/user/` | `z13-helper.service` (resident Flatpak, `--quit` stop), `z13-button-watcher.service` and `z13-restore-profile.service` (login restore). |
-| `packaging/host/systemd/system/` | `z13-fan-resume.service` + `.sh` (re-apply the profile after resume), `z13-lightbar-reset.service` + `.sh` (USB re-authorize of the wedged lightbar) and `z13ctl-perms.service` (reference only; `z13ctl setup` owns it). |
+| `packaging/host/systemd/system/` | `z13-fan-resume.service` + `.sh` (re-apply the profile after resume from suspend or hibernate; `tests/test_fan_resume_unit.py` pins the sleep targets, #81), `z13-lightbar-reset.service` + `.sh` (USB re-authorize of the wedged lightbar) and `z13ctl-perms.service` (reference only; `z13ctl setup` owns it). |
 | `packaging/host/polkit/50-z13-lightbar-reset.rules` | Lets `deck` start the lightbar reset unit without a password; nothing else. |
 | `packaging/host/udev/99-z13ctl.rules`, `packaging/host/asusd/50-rog_flow_z13.yaml` | Reference copies only; `z13ctl setup` owns the udev rule and permissions. |
 | `packaging/host/xdg/io.github.iannitram.Z13Helper.desktop` | Host desktop entry for the Flatpak app. |
