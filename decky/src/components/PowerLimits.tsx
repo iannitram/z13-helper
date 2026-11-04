@@ -3,7 +3,7 @@ import { toaster } from "@decky/api";
 import { useEffect, useRef, useState } from "react";
 import { clampTdp, isWriteTimeout, PowerState, safely, setTdp, TdpResult } from "../backend";
 import { useCommitOnRelease } from "../hooks";
-import { clearDirty, isDirty, markDirty } from "../powerMerge";
+import { clearDirtyIf, isDirty, markDirty } from "../powerMerge";
 
 type Rails = { pl1: number; pl2: number; pl3: number };
 
@@ -39,7 +39,7 @@ export function PowerLimits({ state }: { state: PowerState | null }) {
     setMsg("Applying…");
     const res = await safely<TdpResult>(setTdp(on, r.pl1, r.pl2, r.pl3, target));
     setMsg(res.message);
-    if (res.ok) clearDirty("pl1", "pl2", "pl3");
+    if (res.ok) clearDirtyIf({ pl1: r.pl1, pl2: r.pl2, pl3: r.pl3 });
     if (isWriteTimeout(res.message)) toaster.toast({ title: "Z13-Helper", body: res.message });
     if ("tdp" in res && res.tdp) setRails({ pl1: res.tdp.pl1, pl2: res.tdp.pl2, pl3: res.tdp.pl3 });
     return res;

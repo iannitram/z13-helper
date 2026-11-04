@@ -6,7 +6,7 @@ import {
   staticClasses,
 } from "@decky/ui";
 import { addEventListener, removeEventListener, definePlugin, toaster } from "@decky/api";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { FaFan } from "react-icons/fa";
 import {
   getMaxFans,
@@ -41,11 +41,8 @@ function Content() {
   // The active profile's TDP / battery limit (+ last brightness). Re-read after a profile switch.
   const [power, setPower] = useState<PowerState | null>(null);
 
-  const loadPower = useCallback(() => {
-    getPowerState()
-      .then(setPower)
-      .catch(() => setPower(null));
-  }, []);
+  // The profile_state listener below owns every write to `power`; this lets the dropdown request a refresh.
+  const refreshRef = useRef<() => Promise<void>>(async () => {});
 
   useEffect(() => {
     let disposed = false;
@@ -81,9 +78,10 @@ function Content() {
           mergePowerState<PowerState>({ previous, pending, dirty, incoming: nextPower, changed }).render,
         );
       } catch {
-        if (!disposed) setPower(null);
+        // keep the previous state so pending edits stay protected by the next merge
       }
     };
+    refreshRef.current = refresh;
     const listener = addEventListener("profile_state", refresh);
     void refresh();
     return () => {
@@ -146,7 +144,7 @@ function Content() {
                       : `Could not switch to ${name}`,
                 });
               }
-              loadPower(); // TDP / battery limit belong to the (new) active profile
+              void refreshRef.current(); // TDP / battery limit belong to the (new) active profile
             }}
           />
         </PanelSectionRow>

@@ -3,7 +3,7 @@ import { toaster } from "@decky/api";
 import { useEffect, useRef, useState } from "react";
 import { isWriteTimeout, PowerState, safely, setBatteryLimit } from "../backend";
 import { useCommitOnRelease } from "../hooks";
-import { clearDirty, isDirty, markDirty } from "../powerMerge";
+import { clearDirtyIf, isDirty, markDirty } from "../powerMerge";
 
 /** Battery charge limit 40..100 % in steps of 5, applied on release and saved to the active profile. */
 export function BatteryLimit({ state }: { state: PowerState | null }) {
@@ -19,7 +19,7 @@ export function BatteryLimit({ state }: { state: PowerState | null }) {
     setMsg("Applying…");
     const res = await safely(setBatteryLimit(v, state?.active ?? ""));
     setMsg(res.message);
-    if (res.ok) clearDirty("battery_limit");
+    if (res.ok) clearDirtyIf({ battery_limit: v });
     if (isWriteTimeout(res.message)) toaster.toast({ title: "Z13-Helper", body: res.message });
   });
 

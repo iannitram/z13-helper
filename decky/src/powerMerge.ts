@@ -19,11 +19,13 @@ export interface MergeResult<S> {
 
 export function mergePowerState<S extends object>(input: MergeInput<S>): MergeResult<S> {
   const { previous, pending, dirty, incoming, changed } = input;
-  if (changed || previous === null) return { render: incoming, keep: [] };
+  if (changed) return { render: incoming, keep: [] };
   const render: S = { ...incoming };
   const keep: (EditableField & keyof S)[] = [];
   dirty.forEach((f) => {
-    const v = f in pending ? pending[f] : previous[f];
+    // With no previous state (e.g. an earlier refresh failed) only a pending value can be kept.
+    if (!(f in pending) && previous === null) return;
+    const v = f in pending ? pending[f] : previous![f];
     render[f] = v as S[typeof f];
     keep.push(f);
   });
@@ -38,6 +40,11 @@ export function markDirty(field: EditableField, value: number) {
 }
 export function clearDirty(...fields: EditableField[]) {
   fields.forEach((f) => pendingValues.delete(f));
+}
+/** Clear dirty marks only where the stored value still equals the one that was committed. */
+export function clearDirtyIf(committed: Partial<Record<EditableField, number>>) {
+  const fields = Object.keys(committed) as EditableField[];
+  if (fields.every((f) => pendingValues.get(f) === committed[f])) clearDirty(...fields);
 }
 export function clearAllDirty() {
   pendingValues.clear();
