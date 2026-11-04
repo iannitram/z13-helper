@@ -16,6 +16,8 @@ from collections.abc import Callable, Sequence
 from .builtin import HostIO, builtin_recipes
 from .builtin_4_6 import Sys, builtin_recipes_4_6
 from .cli import parse_args
+from .local_recipes import load_local_recipes
+from .packs import pack_recipes
 from .recipe import order_tasks, plan_text, with_keyring
 from .runner import Env, run_plan
 from .tab import status as tab_status
@@ -24,7 +26,7 @@ _log = logging.getLogger(__name__)
 
 BACKUP_ROOT = os.path.join(".local", "state", "z13-helper", "post-update-backups")
 # Commands that must run as root; anything else runs as the current user.
-_ROOT_CMDS = {"update-grub", "pacman-key", "pacman", "ldconfig"}
+_ROOT_CMDS = {"update-grub", "pacman-key", "pacman", "ldconfig", "mkdir", "bsdtar"}
 
 
 def _host():
@@ -32,9 +34,16 @@ def _host():
     return host
 
 
+def _needs_root(argv: Sequence[str]) -> bool:
+    name = os.path.basename(argv[0])
+    if name == "pacman" and len(argv) > 1 and argv[1].startswith("-Q"):
+        return False  # querying the package database is read-only
+    return name in _ROOT_CMDS
+
+
 def _run(argv: Sequence[str], timeout: int = 600, escalate: bool = True) -> tuple:
     argv = list(argv)
-    if os.path.basename(argv[0]) in _ROOT_CMDS and os.geteuid() != 0:
+    if _needs_root(argv) and os.geteuid() != 0:
         if not escalate:
             raise PermissionError(f"{argv[0]} needs root; not run when only listing")
         argv = ["sudo", "-n", *argv]
@@ -112,8 +121,17 @@ def make_env(home: str, run: Callable = _run, tool_name: Callable[[str], str] | 
                readonly_enable=lambda: toggle("enable"))
 
 
+def collect(home: str, escalate: bool = True) -> tuple:
+    """(recipes, errors): built-ins 1-6, the optional packs, then the local recipes."""
+    io = make_hostio(escalate)
+    recipes = builtin_recipes(io) + builtin_recipes_4_6(make_sys(home, escalate)) + pack_recipes(io)
+    local, errors = load_local_recipes(home, lambda argv: _run(argv, escalate=escalate),
+                                       is_root=os.geteuid() == 0, taken=[r.id for r in recipes])
+    return recipes + local, errors
+
+
 def all_recipes(home: str, escalate: bool = True) -> list:
-    return builtin_recipes(make_hostio(escalate)) + builtin_recipes_4_6(make_sys(home, escalate))
+    return collect(home, escalate)[0]
 
 
 def pending(recipes: Sequence) -> list:
@@ -159,10 +177,15 @@ def main(argv: Sequence[str], recipes: Sequence | None = None, env: Env | None =
         return 2
     home = os.path.expanduser("~")
     tab_json = "--tab-json" in argv
-    recipes = list(recipes) if recipes is not None else all_recipes(home, escalate=not (list_pending or tab_json))
+    if recipes is not None:
+        recipes, errors = list(recipes), []
+    else:
+        recipes, errors = collect(home, escalate=not (list_pending or tab_json))
     if tab_json:
-        print(json.dumps(tab_status(home, make_hostio(False), recipes, [], ack="--ack" in argv)))
+        print(json.dumps(tab_status(home, make_hostio(False), recipes, errors, ack="--ack" in argv)))
         return 0
+    for err in errors:
+        print(f"post-update: local recipe skipped: {err}", file=sys.stderr)
     if list_pending:
         needs = pending(recipes)
         print("Post-update tasks pending: " + (", ".join(r.id for r in needs) if needs else "none"))
