@@ -1420,6 +1420,10 @@ def apply(
         # represents confirmed enforcement, so keep it suspended rather than
         # letting the watchdog issue another curve write against uncertain state.
         return finish(results)
+    if not base_ok:
+        # The firmware profile did not change. Writing TDP or a curve now would
+        # land them on the wrong base profile, so report and stop here.
+        return finish(results)
 
     # 2b. CPU Boost (EPP), after the platform-profile write, which can reset it.
     results.extend(apply_epp(profile))

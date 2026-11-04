@@ -384,11 +384,7 @@ def test_curve_without_tdp_does_not_clear_custom_tdp_if_base_switch_fails(
     assert [Z, "tdp", "--help"] not in fake_host.argvs
     assert [Z, "tdp", "--reset", "--profile", "custom"] not in fake_host.argvs
     assert [Z, "fancurve", "--set", profiles.curve_spec(CURVE)] not in fake_host.argvs
-    assert (
-        "fans",
-        False,
-        "saved custom TDP could not be safely cleared; fan curve was not applied",
-    ) in results
+    assert results == [("profile", False, "profile switch failed")]
 
 
 def test_curve_without_tdp_is_skipped_when_custom_tdp_cleanup_fails(
@@ -423,11 +419,7 @@ def test_failed_base_switch_restores_initial_max_fans_flag(profiles_env, fake_ho
 
     assert not max_fans_state.is_enabled()
     assert [Z, "fancurve", "--set", profiles.MAX_FANS_SPEC] not in fake_host.argvs
-    assert (
-        "fans",
-        False,
-        "saved custom TDP could not be safely cleared; fan curve was not applied",
-    ) in results
+    assert results == [("profile", False, "profile switch failed")]
 
 
 def test_failed_cleanup_disables_max_fans_before_watchdog_tick(
@@ -866,7 +858,6 @@ def test_brightness_has_short_timeout(profiles_env, fake_host):
 @pytest.mark.parametrize(
     "failing",
     [
-        "profile",
         "tdp",
         "fancurve",
         "undervolt",
@@ -885,6 +876,15 @@ def test_one_failing_step_does_not_stop_the_rest(profiles_env, failing, fake_hos
     bad = [(s, msg) for s, ok, msg in results if not ok]
     assert len(bad) == 1
     assert "broke" in bad[0][1]
+
+
+def test_failed_base_write_skips_tdp_and_fan_curve(profiles_env, fake_host):
+    fake_host.fail("profile --set", rc=1, out="profile switch failed")
+
+    results = profiles.apply(full_profile(), z13ctl=Z)
+
+    assert results == [("profile", False, "profile switch failed")]
+    assert all(a[1] not in ("tdp", "fancurve") for a in fake_host.argvs)
 
 
 def test_failure_message_falls_back_to_rc(profiles_env, fake_host):
