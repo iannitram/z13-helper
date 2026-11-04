@@ -11,8 +11,6 @@ import importlib.util
 import json
 import logging
 import os
-import sys
-import types
 from pathlib import Path
 
 import pytest

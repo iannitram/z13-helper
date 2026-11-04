@@ -169,6 +169,17 @@ def test_history_has_count_bound_even_when_clock_does_not_advance(clock):
     assert len(wd.trace._history) == wd.trace.HISTORY_MAX_ENTRIES
 
 
+def test_burst_over_cap_loses_oldest_context(clock):
+    wd, _, _, _, _ = make(clock)
+    n = wd.trace.HISTORY_MAX_ENTRIES + 50
+    for _ in range(n):
+        wd.trace.record(clock(), {}, (None, None))
+        clock.advance(0.01)
+    assert len(wd.trace._history) == wd.trace.HISTORY_MAX_ENTRIES
+    # the newest entry survives; the oldest 50 were evicted
+    assert wd.trace._history[-1][0] > wd.trace._history[0][0]
+
+
 def test_history_still_expires_old_samples(clock):
     wd, _, _, _, _ = make(clock)
     wd.trace.record(clock(), {}, (None, None))

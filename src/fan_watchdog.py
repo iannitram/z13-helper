@@ -529,7 +529,9 @@ class FanTrace:
     SAMPLE_S = 30
     SUSPECT_S = 30
     HISTORY_S = 120
-    HISTORY_MAX_ENTRIES = 256  # also bounded if ticks burst or the clock stalls
+    # Also bounded by count against bursts or a stalled clock. Over the cap the oldest
+    # unwritten context entries are dropped, so an event may replay fewer than HISTORY_S.
+    HISTORY_MAX_ENTRIES = 256
     AFTER_S = 60
 
     def __init__(self, logger, sensors=None, wall=time.time):

@@ -133,22 +133,37 @@ def _feed(stream, data):
             pass
 
 
+def _reap(p):
+    try:
+        p.kill()
+    except OSError:
+        pass
+    try:
+        p.wait(5)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
 def run(argv, timeout=30, *, as_deck=False, input=None):
     """Run argv on the host and wait. Returns Result(rc, out, timed_out); never raises.
 
-    stdout+stderr are merged and only the first MAX_OUTPUT_BYTES are kept in memory.
+    Output is stdout followed by stderr (as before); each stream keeps only its first
+    MAX_OUTPUT_BYTES in memory. Text is UTF-8, undecodable bytes replaced.
     """
     cmd, env = command(argv, as_deck=as_deck)
-    chunks, threads = [], []
+    out_chunks, err_chunks, threads = [], [], []
     try:
         p = subprocess.Popen(cmd, env=env, stdin=None if input is None else subprocess.PIPE,
-                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     except FileNotFoundError as e:
         return Result(RC_NOT_FOUND, str(e), False)
     except (OSError, ValueError, subprocess.SubprocessError) as e:
         return Result(1, str(e), False)
+    timed_out = False
     try:
-        threads.append(threading.Thread(target=_drain, args=(p.stdout, chunks, MAX_OUTPUT_BYTES),
+        threads.append(threading.Thread(target=_drain, args=(p.stdout, out_chunks, MAX_OUTPUT_BYTES),
+                                        daemon=True))
+        threads.append(threading.Thread(target=_drain, args=(p.stderr, err_chunks, MAX_OUTPUT_BYTES),
                                         daemon=True))
         if input is not None:
             threads.append(threading.Thread(target=_feed, args=(p.stdin, input.encode()),
@@ -158,14 +173,25 @@ def run(argv, timeout=30, *, as_deck=False, input=None):
         try:
             rc = p.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
-            p.kill()
-            p.wait()
+            timed_out = True
+            _reap(p)
             return Result(RC_TIMEOUT, f"timed out after {timeout} s", True)
         for t in threads:
             t.join(5)
-    except (OSError, ValueError, subprocess.SubprocessError) as e:
-        p.kill()
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as e:
+        _reap(p)
         return Result(1, str(e), False)
     finally:
-        p.stdout.close()
-    return Result(rc, b"".join(chunks).decode(errors="replace").strip(), False)
+        if timed_out:
+            for t in threads:
+                t.join(0.5)
+        # Closing a pipe a drain thread is still blocked on (a grandchild holds it open)
+        # can hang; leave those to the daemon threads.
+        for pipe in (p.stdout, p.stderr, p.stdin):
+            if pipe is not None and not any(t.is_alive() for t in threads):
+                try:
+                    pipe.close()
+                except OSError:
+                    pass
+    text = b"".join(out_chunks).decode(errors="replace") + b"".join(err_chunks).decode(errors="replace")
+    return Result(rc, text.strip(), False)

@@ -1081,7 +1081,8 @@ def backend_rss_kib(path="/proc/self/status"):
 class BackendMemoryGuard:
     """One stoppable monitor per backend; no sample history or child processes.
 
-    Exit rather than restarting plugin_loader (which would disrupt all plugins).
+    Fatal exit is opt-in (Z13_RSS_GUARD_EXIT=1); by default a trip only logs. When
+    enabled, exit rather than restarting plugin_loader (which would disrupt all plugins).
     Per-plugin process isolation and any respawn are UNVERIFIED assumptions
     (no Decky version/source cited); reloading this plugin after a trip is a
     device/operator recovery step.
@@ -1089,10 +1090,21 @@ class BackendMemoryGuard:
 
     def __init__(self, read_rss=None, terminate=None):
         self._read_rss = read_rss or backend_rss_kib
-        self._terminate = terminate or os._exit
+        self._terminate = terminate or self._default_terminate
+        self._tripped = False
         self._stop = threading.Event()
         self._read_failed = False
         self._thread = threading.Thread(target=self._run, name="z13-rss-guard", daemon=True)
+
+    def _default_terminate(self, code):
+        """Exit only when the operator opted in (Z13_RSS_GUARD_EXIT=1) after the device
+        check in PR-NOTES step 4; otherwise log once and keep the plugin (and its fan
+        watchdog and API) running."""
+        if os.environ.get("Z13_RSS_GUARD_EXIT") == "1":
+            os._exit(code)
+        if not self._tripped:
+            self._tripped = True
+            decky.logger.error("Backend RSS over limit; not exiting (set Z13_RSS_GUARD_EXIT=1 to enable)")
 
     def start(self):
         self._thread.start()

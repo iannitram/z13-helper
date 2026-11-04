@@ -96,8 +96,8 @@ def test_library_path_dropped_when_no_original():
 # ----------------------------------------------------------------------
 
 class FakeProc:
-    def __init__(self, out=b"out\nerr\n", rc=0, wait_exc=None):
-        self.stdout, self.stdin = io.BytesIO(out), io.BytesIO()
+    def __init__(self, out=b"out\n", err=b"err\n", rc=0, wait_exc=None):
+        self.stdout, self.stderr, self.stdin = io.BytesIO(out), io.BytesIO(err), io.BytesIO()
         self.stdin.close = lambda: None
         self.rc, self.wait_exc, self.killed = rc, wait_exc, False
 
@@ -130,7 +130,7 @@ def test_run_combines_stdout_and_stderr(recorded):
     assert r == host.Result(0, "out\nerr", False)
     cmd, kw = recorded.calls[0]
     assert cmd == ["z13ctl", "status"]
-    assert kw["env"] is None and kw["stdout"] == subprocess.PIPE and kw["stderr"] == subprocess.STDOUT
+    assert kw["env"] is None and kw["stdout"] == subprocess.PIPE and kw["stderr"] == subprocess.PIPE
 
 
 def test_run_passes_input(recorded):
@@ -146,7 +146,7 @@ def test_run_passes_input(recorded):
 
 def test_run_caps_captured_output(recorded, monkeypatch):
     monkeypatch.setattr(host, "MAX_OUTPUT_BYTES", 10)
-    recorded.answer[0] = lambda cmd, kw: FakeProc(out=b"x" * 200000)
+    recorded.answer[0] = lambda cmd, kw: FakeProc(out=b"x" * 200000, err=b"")
     r = host.run(["noisy"])
     assert r == host.Result(0, "x" * 10, False)
 
@@ -156,7 +156,33 @@ def test_run_cap_real_child_drains_everything(real_subprocess, monkeypatch):
     monkeypatch.setattr(host, "MAX_OUTPUT_BYTES", 100)
     code = "import sys; sys.stdout.write('a'*3000000); sys.stderr.write('b'*10)"
     r = host.run([sys.executable, "-c", code], timeout=30)
-    assert r.rc == 0 and r.out == "a" * 100 and not r.timed_out
+    assert r.rc == 0 and r.out == "a" * 100 + "b" * 10 and not r.timed_out
+
+
+def test_run_stdout_then_stderr_not_interleaved(real_subprocess, monkeypatch):
+    monkeypatch.setattr(host, "MODE", "host")
+    code = "import sys; print('{'); sys.stderr.write('warn\\n'); sys.stderr.flush(); print('}')"
+    r = host.run([sys.executable, "-c", code], timeout=30)
+    assert r.out == "{\n}\nwarn"
+
+
+def test_run_timeout_with_grandchild_holding_pipe(real_subprocess, monkeypatch):
+    import time
+    monkeypatch.setattr(host, "MODE", "host")
+    t0 = time.monotonic()
+    r = host.run(["sh", "-c", "sleep 5 & echo started; sleep 5"], timeout=1)
+    assert r.rc == host.RC_TIMEOUT and r.timed_out
+    assert time.monotonic() - t0 < 4
+
+
+def test_run_thread_start_failure_never_raises(recorded, monkeypatch):
+    proc = FakeProc()
+    recorded.answer[0] = lambda cmd, kw: proc
+    def boom(self):
+        raise RuntimeError("can't start new thread")
+    monkeypatch.setattr(host.threading.Thread, "start", boom)
+    r = host.run(["x"])
+    assert r.rc == 1 and proc.killed
 
 
 def test_run_uses_the_detected_mode(recorded, monkeypatch):
