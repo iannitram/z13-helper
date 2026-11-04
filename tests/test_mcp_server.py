@@ -242,6 +242,61 @@ def test_profile_set_dispatches_a_clamped_field(owner, profiles_env):
 
 
 @pytest.mark.parametrize(
+    "arguments",
+    [
+        {"pl1": 4},
+        {"pl1": 100},
+        {"pl2": 4},
+        {"pl2": 100},
+        {"pl3": 4},
+        {"pl3": 100},
+        {"pl1": 40, "pl2": 30},
+        {"pl1": 40, "pl2": 50, "pl3": 20},
+    ],
+)
+def test_profile_set_rejects_bad_pl_fields_before_the_owner(
+    owner, profiles_env, arguments
+):
+    calls, record = owner
+    record("edit")
+    result = mcp_server.call_tool("profile_set", {"name": "Turbo", **arguments})
+    assert result["isError"] is True
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "tdp",
+    ["4,50,60", "40,50,100", "40,30,50", "40,50"],
+)
+def test_profile_set_rejects_bad_tdp_string_before_the_owner(owner, profiles_env, tdp):
+    calls, record = owner
+    record("edit")
+    result = mcp_server.call_tool("profile_set", {"name": "Turbo", "tdp": tdp})
+    assert result["isError"] is True
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "curve",
+    [
+        "20:20,30:30,40:40,50:50,60:60,70:70,80:80,90:101",
+        "10:20,30:30,40:40,50:50,60:60,70:70,80:80,90:90",
+        "20:20,30:30,40:40,50:50,60:60,70:70,80:80",
+        "20:20,30:30,40:40,50:50,60:60,70:70,80:80,90:90,100:100",
+        "20:20,30:30,40:40,50:50,60:60,70:70,80:80,90:90,bad",
+    ],
+)
+def test_profile_set_rejects_bad_curve_string_before_the_owner(
+    owner, profiles_env, curve
+):
+    calls, record = owner
+    record("edit")
+    result = mcp_server.call_tool("profile_set", {"name": "Turbo", "curve": curve})
+    assert result["isError"] is True
+    assert calls == []
+
+
+@pytest.mark.parametrize(
     "name, arguments",
     [
         ("max_fans_set", {"enabled": "false"}),

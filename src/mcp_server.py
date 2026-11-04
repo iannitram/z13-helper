@@ -494,6 +494,29 @@ def _validate_tdp_set(arguments):
     _check_tdp_numbers(rails)
 
 
+def _validate_profile_set(arguments):
+    rails = [
+        arguments[rail]
+        for rail in ("pl1", "pl2", "pl3")
+        if arguments.get(rail) is not None
+    ]
+    if rails:
+        _check_tdp_numbers(rails)
+    if arguments.get("tdp") is not None:
+        try:
+            numbers = cli._parse_tdp_values(arguments["tdp"])
+        except cli.CliError as exc:
+            raise ToolError(str(exc)) from None
+        _check_tdp_numbers(numbers)
+    curve = arguments.get("curve")
+    if curve is not None:
+        try:
+            points = cli._parse_curve(curve)
+        except (cli.CliError, ValueError) as exc:
+            raise ToolError(str(exc)) from None
+        _validate_curve({"curve": points})
+
+
 def _validate_curve(arguments):
     curve = arguments.get("curve")
     if curve is None:
@@ -541,6 +564,8 @@ def _validated(name, arguments):
         _validate_tdp_set(arguments)
     if name == "fans_curve_set":
         _validate_curve(arguments)
+    if name == "profile_set":
+        _validate_profile_set(arguments)
     return arguments
 
 
