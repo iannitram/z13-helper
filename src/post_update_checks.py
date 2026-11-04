@@ -27,14 +27,19 @@ class CheckResult:
     detail: str
 
 
-EXPECTED_OWNER = "root:root"
-EXPECTED_MODE = {PERMISSION_PATHS[0]: "644", PERMISSION_PATHS[1]: "644"}
+# Per path, matching packaging/host/udev/99-z13ctl.rules: the ppt value is root:users g+w
+# (0664) so z13ctl can write it; the rules file itself is plain root:root 0644.
+EXPECTED = {PERMISSION_PATHS[0]: ("664", "root:users"), PERMISSION_PATHS[1]: ("644", "root:root")}
+
+
+def expected_for(path):
+    return EXPECTED.get(path, ("644", "root:root"))
 
 
 def permission_problem(path, value):
     """Why `value` ("644 root:root", from stat -c '%a %U:%G') is wrong for `path`, else None.
 
-    Wrong = not owned by root:root, or writable by group or others.
+    Wrong = not the owner expected for the path, or writable beyond the expected mode.
     """
     parts = (value or "").split()
     if len(parts) != 2:
@@ -44,11 +49,14 @@ def permission_problem(path, value):
         bits = int(mode, 8)
     except ValueError:
         return f"unreadable mode {mode!r}"
+    want_mode, want_owner = expected_for(path)
     problems = []
-    if owner != EXPECTED_OWNER:
-        problems.append(f"owner is {owner}, expected {EXPECTED_OWNER}")
-    if bits & 0o022:
-        problems.append(f"mode {mode} is writable by group or others, expected {EXPECTED_MODE.get(path, '644')}")
+    if owner != want_owner:
+        problems.append(f"owner is {owner}, expected {want_owner}")
+    if bits & ~int(want_mode, 8) & 0o777:
+        problems.append(f"mode {mode} is writable beyond the expected {want_mode}")
+    elif bits & 0o022 and not int(want_mode, 8) & 0o020:
+        problems.append(f"mode {mode} is writable by group or others, expected {want_mode}")
     return "; ".join(problems) or None
 
 

@@ -15,7 +15,7 @@ GOOD = {
     ("pacman", "-Q", "vulkan-radeon"): "vulkan-radeon 26.0.1-1\n",
     ("z13ctl", "--version"): "z13ctl 1.4.2\n",
     ("systemctl", "--user", "is-enabled", "z13-helper.service"): "enabled\n",
-    ("stat", "-c", "%a %U:%G", PERMISSION_PATHS[0]): "644 root:root\n",
+    ("stat", "-c", "%a %U:%G", PERMISSION_PATHS[0]): "664 root:users\n",
 }
 
 
@@ -48,7 +48,7 @@ def test_every_key_is_collected_from_the_seam():
     assert inv["units"]["user:z13-helper.service"] == "enabled"
     assert inv["units"]["user:z13ctl.socket"] is None
     assert set(inv["units"]) == {"user:" + u for u in USER_UNITS} | {"system:" + u for u in SYSTEM_UNITS}
-    assert inv["permissions"][PERMISSION_PATHS[0]] == "644 root:root"
+    assert inv["permissions"][PERMISSION_PATHS[0]] == "664 root:users"
     assert inv["permissions"][PERMISSION_PATHS[1]] is None
 
 

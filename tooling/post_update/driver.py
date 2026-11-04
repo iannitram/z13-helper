@@ -179,7 +179,8 @@ def make_env(home: str, run: Callable = _run, tool_name: Callable[[str], str] | 
             raise RuntimeError(f"{tool} {verb} failed: {out}")
 
     return Env(backup=backup, readonly_disable=lambda: toggle("disable"),
-               readonly_enable=lambda: toggle("enable"), restore=restore, record=record)
+               readonly_enable=lambda: toggle("enable"), restore=restore, record=record,
+               readonly_tool=tool)
 
 
 def make_repair_io(home: str, stamp: str | None = None,

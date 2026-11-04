@@ -10,7 +10,7 @@ import re
 from post_update_checks import CheckResult
 
 MEM_SLEEP = "/sys/power/mem_sleep"
-JOURNAL = ("journalctl", "-b", "-k", "--no-pager", "-n", "5000")
+JOURNAL = ("journalctl", "-b", "-k", "--no-pager")   # the whole boot: no window to cut a cycle
 _ENTRY = re.compile(r"PM: suspend entry")
 _EXIT = re.compile(r"PM: suspend exit")
 _PROBLEM = re.compile(
@@ -40,11 +40,24 @@ def diagnose(read) -> list:
         rows.append(CheckResult("suspend_errors", False, "kernel log could not be read"))
         return rows
     lines = log.splitlines()
-    entries = sum(1 for l in lines if _ENTRY.search(l))
-    exits = sum(1 for l in lines if _EXIT.search(l))
-    rows.append(CheckResult("suspend_cycles", entries == exits,
+    entries = exits = 0
+    open_cycle, balanced = False, True
+    for l in lines:
+        if _ENTRY.search(l):
+            entries += 1
+            balanced = balanced and not open_cycle   # an entry while one is open: its exit is missing
+            open_cycle = True
+        elif _EXIT.search(l):
+            exits += 1
+            if open_cycle:
+                open_cycle = False
+            elif entries:
+                balanced = False                      # an exit with no entry after a cycle began
+            # else: the log starts mid-cycle (entry rotated away); not a missing resume
+    balanced = balanced and not open_cycle
+    rows.append(CheckResult("suspend_cycles", balanced,
                             f"{entries} suspend(s), {exits} resume(s) this boot"
-                            + ("" if entries == exits else ": a resume is missing")))
+                            + ("" if balanced else ": a resume is missing")))
     problems = [l for l in lines if _PROBLEM.search(l)]
     rows.append(CheckResult("suspend_errors", not problems,
                             "no suspend/resume errors" if not problems

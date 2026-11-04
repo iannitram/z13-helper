@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 
 from post_update.builtin import AMDGPU_ARGS, GRUB_FILE
 from post_update.cmdline import add_grub_args, missing_args
-from post_update_checks import permission_problem
+from post_update_checks import expected_for, permission_problem
 from post_update_state import read_build_id
 from system_inventory import BIOS_VERSION, KERNEL_RELEASE, OS_RELEASE, PERMISSION_PATHS
 
@@ -168,12 +168,11 @@ def _kernel_args_step(io: RepairIO, entry: dict) -> RepairStep:
         if idx is None:
             raise RuntimeError(f"no GRUB_CMDLINE_LINUX_DEFAULT line in {GRUB_FILE}")
         io.write(backup, text)               # backup before replace
-        entry["status"] = "backed up"
         lines[idx] = add_grub_args(lines[idx], AMDGPU_ARGS)
 
         def change():
             _write_root(io, GRUB_FILE, "\n".join(lines))
-            entry["status"] = "changed"
+            entry["status"] = "changed"   # only now is there something to roll back
             rc, out = _root(io, ["update-grub"])
             if rc != 0:
                 raise RuntimeError(f"update-grub failed: {out}")
@@ -257,10 +256,10 @@ def _package_step(io: RepairIO, check_id: str, packages: tuple, entry: dict) -> 
                                "here (no partial upgrades): run steamos-update or ./install.sh --repair")
 
         def change():
-            entry["status"] = "changed"
             rc, out = _root(io, install)
             if rc != 0:
                 raise RuntimeError(f"pacman -S failed: {out}")
+            entry["status"] = "changed"
         _writable(io, change)
 
     def verify():
@@ -286,9 +285,10 @@ def _package_step(io: RepairIO, check_id: str, packages: tuple, entry: dict) -> 
 
 
 def _permission_step(io: RepairIO, check_id: str, path: str, entry: dict) -> RepairStep:
-    """chmod 644 and chown root:root, after recording the current mode and owner."""
+    """chmod/chown to the mode and owner the udev rule expects, after recording the current ones."""
     stat = ["stat", "-c", "%a %U:%G", path]
-    fix = [["chmod", "644", path], ["chown", "root:root", path]]
+    mode, owner = expected_for(path)
+    fix = [["chmod", mode, path], ["chown", owner, path]]
     entry.update(changed=[path], backup={},
                  undo=f"chmod/chown {path} back to the mode and owner recorded as 'before'")
     before = {}
@@ -318,7 +318,7 @@ def _permission_step(io: RepairIO, check_id: str, path: str, entry: dict) -> Rep
             if rc != 0:
                 raise RuntimeError(f"{' '.join(argv)} failed: {out}")
 
-    return RepairStep(check_id, f"set {path} to mode 644, owner root:root", apply, verify, rollback,
+    return RepairStep(check_id, f"set {path} to mode {mode}, owner {owner}", apply, verify, rollback,
                       needs_root=True, commands=tuple(_text(a, True) for a in fix),
                       rollback_note="chmod and chown it back to the 'before' value in the record")
 

@@ -64,7 +64,10 @@ class Machine:
         if argv[:2] == ["pacman", "-S"]:
             self.installed.update(a for a in argv[2:] if not a.startswith("-"))
         if argv[:2] == ["pacman", "-R"]:
-            self.installed.difference_update(argv[3:])
+            gone = [a for a in argv[2:] if not a.startswith("-")]
+            if any(a not in self.installed for a in gone):
+                return 1, "error: target not found"
+            self.installed.difference_update(gone)
         if argv[:1] == ["stat"]:
             return (0, self.stats[argv[-1]]) if argv[-1] in self.stats else (1, "no such file")
         if argv[:1] == ["chmod"]:
@@ -171,6 +174,15 @@ def test_rollback_that_cannot_finish_is_recorded_not_hidden():
     assert "update-grub failed" in plan.record["kernel_args"]["rollback_error"]
 
 
+def test_kernel_args_readonly_disable_failure_changed_nothing_and_is_not_rolled_back():
+    m = Machine({GRUB_FILE: GRUB}, fail=["steamos-readonly"])
+    plan, results = one(m, "kernel_args")
+    assert results == [("kernel_args", "failed (nothing changed)")]
+    assert m.root_writes == [] and m.files[GRUB_FILE] == GRUB
+    assert "disable failed" in plan.record["kernel_args"]["error"]
+    assert "rollback_error" not in plan.record["kernel_args"]
+
+
 def test_unreadable_grub_file_writes_nothing_and_is_not_a_failed_rollback():
     m = Machine()
     plan, results = one(m, "kernel_args")
@@ -237,8 +249,10 @@ def test_firmware_package_apply_verify_and_readonly_window():
 def test_firmware_install_failure_rolls_back_and_restores_readonly():
     m = Machine(installed=(), fail=["pacman -S"])
     plan, results = one(m, "firmware")
-    assert results == [("firmware", "rolled back")] and m.readonly is True
+    assert results == [("firmware", "failed (nothing changed)")] and m.readonly is True
     assert "pacman -S failed" in plan.record["firmware"]["error"]
+    assert not any(c[:2] == ["pacman", "-R"] for c in m.calls)
+    assert "rollback_error" not in plan.record["firmware"]
 
 
 def test_mesa_vulkan_rollback_removes_only_what_the_step_installed():
@@ -280,6 +294,21 @@ def test_permission_on_a_missing_file_changes_nothing():
     m = Machine()
     plan, results = one(m, "permission:" + RULE)
     assert results[0][1] == "failed (nothing changed)" and not m.root
+
+
+def test_ppt_permission_repair_keeps_group_write_for_users():
+    ppt = PERMISSION_PATHS[0]
+    m = Machine(stats={ppt: "666 deck:deck"})
+    plan, results = one(m, "permission:" + ppt)
+    assert results == [("permission:" + ppt, "applied")]
+    assert m.stats[ppt] == "664 root:users"
+    healthy = Machine(stats={ppt: "664 root:users"})
+    assert permission_ok(healthy, ppt)
+
+
+def permission_ok(m, path):
+    from post_update_checks import permission_problem
+    return permission_problem(path, m.stats[path]) is None
 
 
 # ---- version reads: guided, read-only diagnostics

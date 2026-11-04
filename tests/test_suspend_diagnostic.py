@@ -38,3 +38,17 @@ def test_only_reads_and_never_a_repair_step():
     rows, seen = run(log="PM: Some devices failed to suspend\n")
     assert seen == [MEM_SLEEP, JOURNAL] and JOURNAL[0] == "journalctl"
     assert plan_for(list(rows.values()), None).steps == []
+
+
+def test_cycle_cut_at_the_start_is_not_a_missing_resume():
+    rows, _ = run(log="PM: suspend exit\n" + HEALTHY)
+    assert rows["suspend_cycles"].passed
+
+
+def test_whole_boot_is_read_with_no_line_window():
+    assert "-n" not in JOURNAL
+
+
+def test_trailing_entry_without_exit_is_missing():
+    rows, _ = run(log=HEALTHY + "PM: suspend entry (s2idle)\n")
+    assert not rows["suspend_cycles"].passed

@@ -14,6 +14,7 @@ class Env:
     readonly_enable: Callable[[], None]
     restore: "Callable[[str, str | None], None] | None" = None  # put a backup back; None = remove path
     record: "Callable[[dict], None] | None" = None              # persist one rollback record entry
+    readonly_tool: str = "steamos-readonly"                     # named in log messages
 
 
 def check_all(recipes: Sequence) -> dict:
@@ -100,5 +101,5 @@ def run_plan(ordered: Sequence, env: Env) -> list:
             try:
                 env.readonly_enable()
             except Exception:  # noqa: BLE001 - run_plan never raises
-                _log.exception("could not re-enable steamos-readonly")
+                _log.exception("could not re-enable %s", env.readonly_tool)
     return results

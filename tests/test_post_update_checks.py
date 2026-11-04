@@ -35,6 +35,17 @@ def test_missing_kernel_args_are_named():
     assert "gpu_recovery=1" not in rows["kernel_args"].detail
 
 
+def test_ppt_value_with_group_write_for_users_is_healthy():
+    from post_update_checks import permission_problem
+    ppt = PERMISSION_PATHS[0]
+    assert permission_problem(ppt, "664 root:users") is None
+    assert "owner" in permission_problem(ppt, "664 root:root")
+    assert "writable" in permission_problem(ppt, "666 root:users")
+    table = dict(GOOD)
+    table[("stat", "-c", "%a %U:%G", ppt)] = "664 root:users\n"
+    assert by_id(run_checks(collect_inventory(fake(table))))["permission:" + ppt].passed
+
+
 def test_run_checks_does_not_mutate_inventory():
     inv = collect_inventory(fake(GOOD))
     before = repr(inv)
@@ -48,6 +59,7 @@ def test_permission_mode_and_owner_are_compared_not_just_present():
     assert permission_problem(p, "644 root:root") is None
     assert "writable" in permission_problem(p, "666 root:root")
     assert "writable" in permission_problem(p, "664 root:root")
+    assert permission_problem(p, "664 root:users") is not None
     assert "owner" in permission_problem(p, "644 deck:deck")
     assert permission_problem(p, None) == "missing or unreadable"
     assert permission_problem(p, "zzz root:root").startswith("unreadable mode")
