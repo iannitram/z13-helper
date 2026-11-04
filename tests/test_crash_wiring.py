@@ -369,6 +369,23 @@ def test_decky_packaging_includes_helpers_and_replaces_missing_config_with_empty
     assert install_check.decky_source("py_modules/_crash_build.json") == str(generated)
 
 
+def test_missing_account_without_home_still_uploads(wiring, monkeypatch):
+    import pwd
+
+    for name in ("HOME", "USER", "LOGNAME", "LNAME", "USERNAME"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(pwd, "getpwuid", mock.Mock(side_effect=KeyError))
+
+    reporter = wiring.start()
+    reporter.capture(ValueError("anonymous uid without home"))
+    reporter.worker.join(timeout=3)
+
+    assert not reporter.worker.is_alive()
+    assert len(wiring.sent) == 1
+    report, _ = unpack(wiring.sent[0])
+    assert report["message"] == "anonymous uid without home"
+
+
 def test_disk_failures_and_missing_account_do_not_escape_or_echo_credentials(wiring, monkeypatch, caplog):
     import pwd
 

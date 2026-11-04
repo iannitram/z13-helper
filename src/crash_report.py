@@ -279,7 +279,11 @@ class CrashReporter:
             login = getpass.getuser()
         except Exception:  # noqa: BLE001 -- a failed lookup only loses a scrub target
             login = None
-        identities = {"home": str(Path.home()), "hostname": socket.gethostname(), "user": login}
+        try:
+            home = str(Path.home())
+        except Exception:  # noqa: BLE001 -- a failed lookup only loses a scrub target
+            home = ""
+        identities = {"home": home, "hostname": socket.gethostname(), "user": login}
         try:
             account = pwd.getpwuid(os.getuid())
         except KeyError:
