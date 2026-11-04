@@ -130,6 +130,90 @@ def test_battery_set_rounds_and_clamps_through_the_owner(owner):
     assert calls == [("set_field", ("battery_limit", 85), {})]
 
 
+def test_fans_curve_set_dispatches_a_valid_point_array(owner):
+    calls, record = owner
+    record("set_field", "Fan curve applied")
+    curve = [[temp, temp - 20] for temp in range(20, 100, 10)]
+    data = payload_of(mcp_server.call_tool("fans_curve_set", {"curve": curve}))
+    assert data["curve"] == curve
+    assert calls == [("set_field", ("fan_curve", curve), {})]
+
+
+@pytest.mark.parametrize(
+    "curve",
+    [
+        "20:20,30:30,40:40,50:50,60:60,70:70,80:80,90:90",
+        [[20, 20]],
+        [
+            [20, 20],
+            [30, 30],
+            [40, 40],
+            [50, 50],
+            [60, 60],
+            [70, 70],
+            [80, 80],
+            [90, 101],
+        ],
+        [
+            [10, 20],
+            [30, 30],
+            [40, 40],
+            [50, 50],
+            [60, 60],
+            [70, 70],
+            [80, 80],
+            [90, 90],
+        ],
+        [
+            [20, 20],
+            [30, 30],
+            [40, 40],
+            [50, 50],
+            [60, 60],
+            [70, 70],
+            [80, 80],
+            [90, "90"],
+        ],
+        [
+            [20, 20, 1],
+            [30, 30],
+            [40, 40],
+            [50, 50],
+            [60, 60],
+            [70, 70],
+            [80, 80],
+            [90, 90],
+        ],
+        [
+            [30, 20],
+            [20, 30],
+            [40, 40],
+            [50, 50],
+            [60, 60],
+            [70, 70],
+            [80, 80],
+            [90, 90],
+        ],
+        [
+            [20, 30],
+            [30, 20],
+            [40, 40],
+            [50, 50],
+            [60, 60],
+            [70, 70],
+            [80, 80],
+            [90, 90],
+        ],
+    ],
+)
+def test_fans_curve_set_rejects_bad_curves_before_the_owner(owner, curve):
+    calls, record = owner
+    record("set_field")
+    result = mcp_server.call_tool("fans_curve_set", {"curve": curve})
+    assert result["isError"] is True
+    assert calls == []
+
+
 def test_max_fans_set_uses_the_owner(owner):
     calls, record = owner
     record("set_max_fans", "Max Fans ON")

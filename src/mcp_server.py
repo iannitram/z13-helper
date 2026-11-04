@@ -158,8 +158,14 @@ def _tool_specs():
             "Save and apply a fan curve, clamped and owned by the state authority.",
             {
                 "curve": {
-                    "type": "string",
-                    "description": "eight temp:pct points, comma separated",
+                    "type": "array",
+                    "description": "eight [temp_c, percent] points",
+                    "items": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "minItems": 2,
+                        "maxItems": 2,
+                    },
                 }
             },
             required=("curve",),
@@ -364,7 +370,12 @@ _BUILDERS = {
     "tdp_set": _tdp_set,
     "tdp_reset": lambda args: ["tdp", "reset"],
     "fans_curve_get": lambda args: ["fans", "curve", "get"],
-    "fans_curve_set": lambda args: ["fans", "curve", "set", str(args["curve"])],
+    "fans_curve_set": lambda args: [
+        "fans",
+        "curve",
+        "set",
+        json.dumps(args["curve"]),
+    ],
     "max_fans_status": lambda args: ["fans", "max-fans", "status"],
     "max_fans_set": lambda args: [
         "fans",
@@ -483,6 +494,30 @@ def _validate_tdp_set(arguments):
     _check_tdp_numbers(rails)
 
 
+def _validate_curve(arguments):
+    curve = arguments.get("curve")
+    if curve is None:
+        return
+    points = []
+    for point in curve:
+        if not isinstance(point, list) or len(point) != 2:
+            raise ToolError("curve points must be [temp_c, percent]")
+        temp, percent = point
+        if not isinstance(temp, int) or isinstance(temp, bool):
+            raise ToolError("curve temperatures must be whole numbers")
+        if not isinstance(percent, int) or isinstance(percent, bool):
+            raise ToolError("curve percentages must be whole numbers")
+        if not 20 <= temp <= 110:
+            raise ToolError("curve temperatures must be 20..110 C")
+        if not 0 <= percent <= 100:
+            raise ToolError("curve percentages must be 0..100")
+        points.append([temp, percent])
+    try:
+        cli.profiles.validate_curve(points)
+    except ValueError as exc:
+        raise ToolError(str(exc)) from None
+
+
 def _validated(name, arguments):
     tool = _BY_NAME.get(name)
     if tool is None:
@@ -504,6 +539,8 @@ def _validated(name, arguments):
         _validate_value(key, value, properties[key])
     if name == "tdp_set":
         _validate_tdp_set(arguments)
+    if name == "fans_curve_set":
+        _validate_curve(arguments)
     return arguments
 
 
