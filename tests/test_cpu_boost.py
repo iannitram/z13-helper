@@ -5,6 +5,9 @@ is left: the profile field, the argv that writes every CPU, where it sits in
 apply(), and the read/write helpers the Fans + Power combo calls.
 """
 
+import os
+import subprocess
+
 import pytest
 
 import epp
@@ -59,6 +62,7 @@ def test_epp_argv_writes_the_value_to_each_cpu_node(value):
     assert argv[5:] == PATHS2
     assert value not in argv[2]                # never spliced into the script
     assert "|| exit 1" in argv[2] and '[ -e "$f" ] || continue' in argv[2]
+    assert '[ "$n" -gt 0 ]' in argv[2]         # no node written is a failure, not success
 
 
 def test_epp_argv_refuses_an_unknown_value():
@@ -176,3 +180,14 @@ def test_set_epp_raises_with_the_host_message(fake_host, two_cpus):
     fake_host.fail("printf", rc=1, out="Permission denied")
     with pytest.raises(RuntimeError, match="CPU Boost not set: Permission denied"):
         HardwareController(z13ctl_path="z13ctl").set_epp("power")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="needs a POSIX sh")
+def test_epp_script_fails_when_no_node_exists_and_writes_when_one_does(tmp_path):
+    script = profiles.epp_argv("power", 1)[2]
+    missing = str(tmp_path / "none")
+    assert subprocess.run(["sh", "-c", script, "sh", "power", missing]).returncode != 0
+    node = tmp_path / "node"
+    node.write_text("x")
+    assert subprocess.run(["sh", "-c", script, "sh", "power", missing, str(node)]).returncode == 0
+    assert node.read_text() == "power"

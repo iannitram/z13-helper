@@ -946,13 +946,14 @@ def epp_argv(value, cpu_count):
     z13ctl has no EPP command, so this goes through host.run like the rest of the
     host seam. The value is checked against EPP_CHOICES and travels as an argv item
     (never spliced into the script). Offline CPUs have no node and are skipped; the
-    script stops at the first write that fails.
+    script stops at the first write that fails and fails when no node was written
+    (e.g. a kernel without amd-pstate), so that never reads as success.
     """
     if value not in EPP_CHOICES:
         raise ValueError(f"epp must be one of {EPP_CHOICES}")
     paths = [EPP_SYSFS.format(n=i) for i in range(cpu_count)]
-    script = ('v=$1; shift; for f in "$@"; do [ -e "$f" ] || continue; '
-              'printf %s "$v" > "$f" || exit 1; done')
+    script = ('v=$1; shift; n=0; for f in "$@"; do [ -e "$f" ] || continue; '
+              'printf %s "$v" > "$f" || exit 1; n=$((n+1)); done; [ "$n" -gt 0 ]')
     return ["sh", "-c", script, "sh", value, *paths]
 
 
