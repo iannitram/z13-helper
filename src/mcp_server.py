@@ -127,9 +127,21 @@ def _tool_specs():
                     "type": "string",
                     "description": "PL1,PL2,PL3 (or one PL1 value) in watts",
                 },
-                "pl1": {"type": "integer"},
-                "pl2": {"type": "integer"},
-                "pl3": {"type": "integer"},
+                "pl1": {
+                    "type": "integer",
+                    "minimum": cli.PL_MIN,
+                    "maximum": cli.PL_MAX,
+                },
+                "pl2": {
+                    "type": "integer",
+                    "minimum": cli.PL_MIN,
+                    "maximum": cli.PL_MAX,
+                },
+                "pl3": {
+                    "type": "integer",
+                    "minimum": cli.PL_MIN,
+                    "maximum": cli.PL_MAX,
+                },
             },
             annotations=_WRITE,
         ),
@@ -446,6 +458,31 @@ def _validate_value(key, value, schema):
                 _validate_value(key, item, items)
 
 
+def _check_tdp_numbers(numbers):
+    for value in numbers:
+        if not cli.PL_MIN <= value <= cli.PL_MAX:
+            raise ToolError(f"TDP values must be {cli.PL_MIN}..{cli.PL_MAX} W")
+    if list(numbers) != sorted(numbers):
+        raise ToolError("TDP values must satisfy PL1 <= PL2 <= PL3")
+
+
+def _validate_tdp_set(arguments):
+    if arguments.get("values") is not None:
+        try:
+            numbers = cli._parse_tdp_values(arguments["values"], allow_one=True)
+        except cli.CliError as exc:
+            raise ToolError(str(exc)) from None
+        _check_tdp_numbers(numbers)
+    elif arguments.get("pl1") is None:
+        raise ToolError("tdp_set needs values or pl1")
+    rails = [
+        arguments[rail]
+        for rail in ("pl1", "pl2", "pl3")
+        if arguments.get(rail) is not None
+    ]
+    _check_tdp_numbers(rails)
+
+
 def _validated(name, arguments):
     tool = _BY_NAME.get(name)
     if tool is None:
@@ -465,6 +502,8 @@ def _validated(name, arguments):
         raise ToolError("missing argument(s): " + ", ".join(missing))
     for key, value in arguments.items():
         _validate_value(key, value, properties[key])
+    if name == "tdp_set":
+        _validate_tdp_set(arguments)
     return arguments
 
 

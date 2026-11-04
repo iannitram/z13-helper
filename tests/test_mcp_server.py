@@ -89,7 +89,7 @@ def owner(monkeypatch):
     return calls, record
 
 
-def test_tdp_set_clamps_with_the_cli_ranges(owner, monkeypatch):
+def test_tdp_set_dispatches_with_the_cli_ranges(owner, monkeypatch):
     calls, record = owner
     record("set_field")
     monkeypatch.setattr(
@@ -97,9 +97,29 @@ def test_tdp_set_clamps_with_the_cli_ranges(owner, monkeypatch):
         "detect_ranges",
         lambda: {"pl1": (20, 40), "pl2": (20, 60), "pl3": (20, 93)},
     )
-    data = payload_of(mcp_server.call_tool("tdp_set", {"values": "100,10,50"}))
-    assert data["tdp"] == {"pl1": 40, "pl2": 40, "pl3": 50, "force": False}
+    data = payload_of(mcp_server.call_tool("tdp_set", {"values": "39,50,60"}))
+    assert data["tdp"] == {"pl1": 39, "pl2": 50, "pl3": 60, "force": False}
     assert calls == [("set_field", ("tdp", data["tdp"]), {})]
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"values": "100,10,50"},
+        {"values": "40,30,50"},
+        {"values": "40,50"},
+        {"pl1": 4},
+        {"pl1": 100},
+        {"pl1": 40, "pl2": 30},
+        {"pl1": 40, "pl2": 50, "pl3": 20},
+    ],
+)
+def test_tdp_set_rejects_out_of_range_or_ordered_pls_before_the_owner(owner, arguments):
+    calls, record = owner
+    record("set_field")
+    result = mcp_server.call_tool("tdp_set", arguments)
+    assert result["isError"] is True
+    assert calls == []
 
 
 def test_battery_set_rounds_and_clamps_through_the_owner(owner):
