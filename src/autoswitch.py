@@ -28,7 +28,7 @@ def normalize(config, names):
         if isinstance(value, str) and value in known:
             out[source] = value
     out["hold"] = bool(config.get("hold"))
-    out["enabled"] = bool(out["ac"] or out["battery"]) and not out["hold"]
+    out["enabled"] = bool(config.get("enabled"))
     return out
 
 
@@ -39,11 +39,7 @@ def decision(config, on_ac):
     value is not a profile name. The daemon is the writer; this is the pure
     decision the UI and tests share.
     """
-    if (
-        not isinstance(config, dict)
-        or config.get("hold")
-        or config.get("enabled") is False
-    ):
+    if not isinstance(config, dict) or not config.get("enabled") or config.get("hold"):
         return None
     target = config.get("ac" if on_ac else "battery")
     return target if isinstance(target, str) and target else None
@@ -72,13 +68,18 @@ def backend_argv(config, targets):
     if not ac and not battery:
         return ["autoswitch", "--clear"]
     argv = ["autoswitch", "--ac", ac or "", "--battery", battery or ""]
-    argv.append("--off" if config.get("hold") else "--on")
+    off = not config.get("enabled") or config.get("hold")
+    argv.append("--off" if off else "--on")
     return argv
 
 
 def describe(config):
     """One line for the status bar."""
-    if not isinstance(config, dict) or not (config.get("ac") or config.get("battery")):
+    if (
+        not isinstance(config, dict)
+        or not config.get("enabled")
+        or not (config.get("ac") or config.get("battery"))
+    ):
         return "Autoswitch off"
     ac = config.get("ac") or "leave unchanged"
     battery = config.get("battery") or "leave unchanged"
