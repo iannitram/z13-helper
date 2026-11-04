@@ -13,9 +13,11 @@ from system_inventory import PERMISSION_PATHS
 _PRESENT = (
     ("steamos_build", "SteamOS build"),
     ("kernel", "kernel"),
-    ("bios_ec", "BIOS/EC"),
+    ("bios", "BIOS version"),
+    ("ec", "EC version"),
     ("firmware", "firmware package"),
-    ("mesa_vulkan", "Mesa/Vulkan"),
+    ("mesa", "Mesa package"),
+    ("vulkan_radeon", "vulkan-radeon package"),
     ("backend_version", "z13ctl backend"),
 )
 

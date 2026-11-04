@@ -31,13 +31,14 @@ from post_update.builtin import AMDGPU_ARGS, GRUB_FILE
 from post_update.cmdline import add_grub_args, missing_args
 from post_update_checks import expected_for, permission_problem
 from post_update_state import read_build_id
-from system_inventory import BIOS_VERSION, KERNEL_RELEASE, OS_RELEASE, PERMISSION_PATHS
+from system_inventory import BIOS_VERSION, EC_VERSION, KERNEL_RELEASE, OS_RELEASE, PERMISSION_PATHS
 
 _GRUB_VALUE = re.compile(r'^[ \t]*GRUB_CMDLINE_LINUX_DEFAULT="((?:[^"\\]|\\.)*)"', re.MULTILINE)
 _UNIT = re.compile(r"unit:(user|system):([A-Za-z0-9@:._-]+)\Z")
 _PERMISSION = "permission:"
 # Package names behind the inventory checks that read a package version.
-_PACKAGES = {"firmware": ("linux-firmware",), "mesa_vulkan": ("mesa", "vulkan-radeon")}
+_PACKAGES = {"firmware": ("linux-firmware",), "mesa": ("mesa",),
+             "vulkan_radeon": ("vulkan-radeon",)}
 
 
 @dataclass(frozen=True)
@@ -216,6 +217,9 @@ def _unit_step(io: RepairIO, check_id: str, scope: str, unit: str, entry: dict) 
         entry["was_enabled"] = prior["enabled"]
         rc, out = run(base + ["enable", "--now", unit])
         if rc != 0:
+            # enable --now makes the symlinks first and fails if the start fails: ask what is left
+            if io.run(base + ["is-enabled", unit])[1].strip() == "enabled" and not prior["enabled"]:
+                entry["status"] = "changed"   # partly applied: the rollback must disable it
             raise RuntimeError(f"enable {unit} failed: {out}")
         entry["status"] = "changed"
 
@@ -356,10 +360,12 @@ def _diagnostic(io: RepairIO, check_id: str, entry: dict):
         return _diagnostic_step(io, check_id, ["uname", "-r"],
                                 lambda: bool((io.read(KERNEL_RELEASE) or "").strip()),
                                 "kernel release unreadable: /proc is not available here", entry)
-    if check_id == "bios_ec":
-        return _diagnostic_step(io, check_id, ["cat", BIOS_VERSION],
-                                lambda: bool((io.read(BIOS_VERSION) or "").strip()),
-                                "BIOS/EC unreadable: update the BIOS from ASUS, the app cannot", entry)
+    if check_id in ("bios", "ec"):
+        path = BIOS_VERSION if check_id == "bios" else EC_VERSION
+        return _diagnostic_step(io, check_id, ["cat", path],
+                                lambda: bool((io.read(path) or "").strip()),
+                                f"{check_id.upper()} version unreadable: update the BIOS from ASUS, "
+                                "the app cannot", entry)
     if check_id == "backend_version":
         return _diagnostic_step(io, check_id, ["z13ctl", "--version"],
                                 lambda: io.run(["z13ctl", "--version"])[0] == 0,

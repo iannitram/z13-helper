@@ -15,9 +15,11 @@ from post_update_state import read_build_id
 INVENTORY_KEYS = (
     "steamos_build",
     "kernel",
-    "bios_ec",
+    "bios",
+    "ec",
     "firmware",
-    "mesa_vulkan",
+    "mesa",
+    "vulkan_radeon",
     "backend_version",
     "units",
     "permissions",
@@ -77,11 +79,6 @@ def _pacman_version(read, package):
     return parts[1] if len(parts) == 2 and parts[0] == package else None
 
 
-def _joined(*parts, sep="/"):
-    found = [p for p in parts if p]
-    return sep.join(found) if found else None
-
-
 def collect_inventory(read=None) -> dict:
     """Return one entry per inventory key. Every read goes through `read`; None = unknown."""
     if read is None:
@@ -98,10 +95,11 @@ def collect_inventory(read=None) -> dict:
     return {
         "steamos_build": read_build_id(os_release) if os_release else None,
         "kernel": _text(read, KERNEL_RELEASE),
-        "bios_ec": _joined(_text(read, BIOS_VERSION), _text(read, EC_VERSION)),
+        "bios": _text(read, BIOS_VERSION),
+        "ec": _text(read, EC_VERSION),
         "firmware": _pacman_version(read, "linux-firmware"),
-        "mesa_vulkan": _joined(_pacman_version(read, "mesa"),
-                               _pacman_version(read, "vulkan-radeon")),
+        "mesa": _pacman_version(read, "mesa"),
+        "vulkan_radeon": _pacman_version(read, "vulkan-radeon"),
         "backend_version": _first_version(_text(read, ("z13ctl", "--version"))),
         "units": units,
         "permissions": permissions,

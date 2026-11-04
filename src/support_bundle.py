@@ -17,7 +17,8 @@ EXCLUDED_CLASSES = (
 # Only these scalar version fields have a known, non-private representation.
 # Units, permissions and kernel arguments can contain arbitrary private values.
 _VERSION_FIELDS = {
-    "steamos_build", "kernel", "bios_ec", "firmware", "mesa_vulkan",
+    "steamos_build", "kernel", "bios", "ec", "firmware", "mesa",
+    "vulkan_radeon",
     "backend_version",
 }
 _VERSION = re.compile(r"[0-9A-Za-z][0-9A-Za-z.+_/-]{0,127}\Z")

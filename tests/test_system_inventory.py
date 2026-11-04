@@ -40,9 +40,9 @@ def test_every_key_is_collected_from_the_seam():
     assert tuple(inv) == INVENTORY_KEYS
     assert inv["steamos_build"] == "20261101.1"
     assert inv["kernel"] == "7.2.7-valve2-2-neptune"
-    assert inv["bios_ec"] == "GZ302EA.313/0.1"
+    assert inv["bios"] == "GZ302EA.313" and inv["ec"] == "0.1"
     assert inv["firmware"] == "20261020-1"
-    assert inv["mesa_vulkan"] == "26.0.1-1/26.0.1-1"
+    assert inv["mesa"] == "26.0.1-1" and inv["vulkan_radeon"] == "26.0.1-1"
     assert inv["backend_version"] == "1.4.2"
     assert inv["kernel_args"] == "quiet gpu_recovery=1"
     assert inv["units"]["user:z13-helper.service"] == "enabled"
@@ -57,7 +57,7 @@ def test_unreadable_things_are_none_and_a_raising_seam_is_survived():
         raise OSError("nope")
     inv = collect_inventory(boom)
     assert tuple(inv) == INVENTORY_KEYS
-    assert inv["kernel"] is None and inv["bios_ec"] is None
+    assert inv["kernel"] is None and inv["bios"] is None
     assert all(v is None for v in inv["units"].values())
 
 

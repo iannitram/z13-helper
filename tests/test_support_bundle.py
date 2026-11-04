@@ -9,8 +9,8 @@ from support_bundle import EXCLUDED_CLASSES, build_bundle, preview, share
 
 
 def test_clean_bundle_does_not_claim_exclusions():
-    bundle = build_bundle({"kernel": "6.12.0-valve", "bios_ec": None}, [])
-    assert bundle["inventory"] == {"kernel": "6.12.0-valve", "bios_ec": None}
+    bundle = build_bundle({"kernel": "6.12.0-valve", "bios": None}, [])
+    assert bundle["inventory"] == {"kernel": "6.12.0-valve", "bios": None}
     assert bundle["include_hooks"] is False
     assert bundle["include_credentials"] is False
     assert set(bundle["excluded"]) == set(EXCLUDED_CLASSES)
@@ -116,7 +116,7 @@ def test_hook_credential_serial_and_network_lines_are_absent_by_default():
         "dmi: Serial Number: SN-9988776655",
         "wlan0: ssid HomeNet-5G mac aa:bb:cc:dd:ee:ff ip 192.168.1.20",
     ]
-    inventory = {"kernel": "7.2.7-valve", "bios_ec": "GZ302EA.313/0.1", "firmware": "20261020-1"}
+    inventory = {"kernel": "7.2.7-valve", "bios": "GZ302EA.313", "firmware": "20261020-1"}
     bundle = build_bundle(inventory, lines)
     text = preview(bundle)
     for secret in ("after.sh", "abc123secret", "SN-9988776655", "HomeNet-5G",

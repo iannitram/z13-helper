@@ -68,3 +68,37 @@ def test_permission_mode_and_owner_are_compared_not_just_present():
     rows = by_id(run_checks(collect_inventory(fake(table))))
     assert not rows["permission:" + PERMISSION_PATHS[0]].passed
     assert "666" in rows["permission:" + PERMISSION_PATHS[0]].detail
+
+
+def checks_for(**overrides):
+    table = dict(GOOD)
+    table.update(overrides)
+    return by_id(run_checks(collect_inventory(fake(table))))
+
+
+def test_missing_vulkan_radeon_fails_even_with_mesa_present():
+    table = {k: v for k, v in GOOD.items() if k != ("pacman", "-Q", "vulkan-radeon")}
+    rows = by_id(run_checks(collect_inventory(fake(table))))
+    assert rows["mesa"].passed and not rows["vulkan_radeon"].passed
+
+
+def test_missing_mesa_fails_even_with_vulkan_radeon_present():
+    table = {k: v for k, v in GOOD.items() if k != ("pacman", "-Q", "mesa")}
+    rows = by_id(run_checks(collect_inventory(fake(table))))
+    assert rows["vulkan_radeon"].passed and not rows["mesa"].passed
+
+
+def test_both_graphics_packages_present_pass():
+    rows = checks_for()
+    assert rows["mesa"].passed and rows["vulkan_radeon"].passed
+
+
+def test_bios_and_ec_are_each_checked():
+    no_ec = {k: v for k, v in GOOD.items() if k != "/sys/class/dmi/id/ec_firmware_release"}
+    rows = by_id(run_checks(collect_inventory(fake(no_ec))))
+    assert rows["bios"].passed and not rows["ec"].passed
+    no_bios = {k: v for k, v in GOOD.items() if k != "/sys/class/dmi/id/bios_version"}
+    rows = by_id(run_checks(collect_inventory(fake(no_bios))))
+    assert rows["ec"].passed and not rows["bios"].passed
+    rows = checks_for()
+    assert rows["bios"].passed and rows["ec"].passed

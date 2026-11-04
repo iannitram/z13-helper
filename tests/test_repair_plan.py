@@ -257,7 +257,7 @@ def test_firmware_install_failure_rolls_back_and_restores_readonly():
 
 def test_mesa_vulkan_rollback_removes_only_what_the_step_installed():
     m = Machine(installed=("mesa",))                  # vulkan-radeon is the missing one
-    plan = plan_for([CheckResult("mesa_vulkan", False, "")], m.io())
+    plan = plan_for([CheckResult("vulkan_radeon", False, "")], m.io())
     plan.steps[0].apply()
     assert plan.steps[0].verify() and "vulkan-radeon" in m.installed
     plan.steps[0].rollback()
@@ -267,8 +267,8 @@ def test_mesa_vulkan_rollback_removes_only_what_the_step_installed():
 
 def test_installed_package_is_not_reinstalled_over_a_partial_upgrade():
     m = Machine(installed=("mesa", "vulkan-radeon"))
-    plan, results = one(m, "mesa_vulkan")
-    assert results == [("mesa_vulkan", "failed (nothing changed)")]
+    plan, results = one(m, "mesa")
+    assert results == [("mesa", "failed (nothing changed)")]
     assert not any(c[:2] == ["pacman", "-S"] for c in m.calls)
 
 
@@ -341,7 +341,7 @@ def permission_ok(m, path):
 # ---- version reads: guided, read-only diagnostics
 def test_version_read_steps_only_read_and_never_write():
     m = Machine(fail=["z13ctl"])
-    for check_id in ("steamos_build", "kernel", "bios_ec", "backend_version"):
+    for check_id in ("steamos_build", "kernel", "bios", "ec", "backend_version"):
         plan = plan_for([CheckResult(check_id, False, "")], m.io())
         step = plan.steps[0]
         assert step.guided and not step.needs_root and not step.changes and step.commands
@@ -359,3 +359,44 @@ def test_version_read_that_now_works_is_applied():
 def test_suspend_rows_are_not_repaired():
     plan = plan_for([CheckResult("suspend_cycles", False, "")], Machine().io())
     assert plan.steps == [] and plan.record["unplanned"] == ["suspend_cycles"]
+
+
+# ---- enable --now that fails after creating the symlinks
+class StartFails(Machine):
+    """`systemctl enable --now` fails; `leaves_enabled` says whether the symlinks were made first."""
+
+    def __init__(self, leaves_enabled, **kw):
+        super().__init__(**kw)
+        self.leaves_enabled = leaves_enabled
+
+    def run(self, argv, root=False):
+        if "enable" in argv and argv[0] == "systemctl":
+            self.calls.append(list(argv))
+            if root:
+                self.root.append(list(argv))
+            if self.leaves_enabled:
+                self.enabled.add(("u:" if argv[1] == "--user" else "s:") + argv[-1])
+            return 1, "start failed"
+        return super().run(argv, root)
+
+
+def test_failed_start_that_left_the_unit_enabled_is_rolled_back():
+    m = StartFails(True)
+    plan, results = one(m, "unit:user:z13ctl.socket")
+    assert results == [("unit:user:z13ctl.socket", "rolled back")]
+    assert ["systemctl", "--user", "disable", "--now", "z13ctl.socket"] in m.calls
+    assert not m.enabled
+
+
+def test_failed_start_that_left_the_unit_not_enabled_runs_no_rollback():
+    m = StartFails(False)
+    plan, results = one(m, "unit:user:z13ctl.socket")
+    assert results == [("unit:user:z13ctl.socket", "failed (nothing changed)")]
+    assert not any("disable" in c for c in m.calls)
+
+
+def test_each_bios_ec_and_package_check_has_its_own_step():
+    m = Machine(installed=("mesa",))
+    plan = plan_for([CheckResult("vulkan_radeon", False, ""), CheckResult("ec", False, "")], m.io())
+    assert [s.check_id for s in plan.steps] == ["vulkan_radeon", "ec"]
+    assert "vulkan-radeon" in plan.steps[0].description and "mesa " not in plan.steps[0].description
