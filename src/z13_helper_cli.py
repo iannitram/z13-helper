@@ -23,6 +23,7 @@ CLI:
     z13-helper button [status]
     z13-helper post-update list|run
     z13-helper crash queue|list|upload
+    z13-helper mcp
     z13-helper version
 
 Every command accepts `--json`.
@@ -185,6 +186,12 @@ def _parser():
     csub.add_parser("list", parents=[common], help="list queued reports")
     s = csub.add_parser("upload", parents=[common], help="upload queued reports")
     s.add_argument("names", nargs="*")
+
+    sub.add_parser(
+        "mcp",
+        parents=[common],
+        help="local stdio MCP server (JSON-RPC over stdin/stdout)",
+    )
 
     sub.add_parser("version", parents=[common], help="print the app version")
     return ap
@@ -404,6 +411,12 @@ def cmd_version(args):
     payload = {"name": "z13-helper", "version": APP_VERSION}
     _emit(args, payload, [APP_VERSION])
     return 0
+
+
+def cmd_mcp(args):
+    import mcp_server
+
+    return mcp_server.serve()
 
 
 # ----------------------------------------------------------------------
@@ -1181,6 +1194,7 @@ def main(argv=None):
     handlers = {
         ("status",): cmd_status,
         ("version",): cmd_version,
+        ("mcp",): cmd_mcp,
         ("profile", "list"): cmd_profile_list,
         ("profile", "get"): cmd_profile_get,
         ("profile", "set"): cmd_profile_set,

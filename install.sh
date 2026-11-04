@@ -711,6 +711,30 @@ host_files() {
     fi
 }
 
+# ----------------------------------------------------------------------
+# 6b. local MCP client registration
+# ----------------------------------------------------------------------
+mcp_registration() {
+    say "MCP server (local stdio)"
+    if ! command -v claude >/dev/null 2>&1; then
+        info "claude not installed; register later with: claude mcp add z13-helper -- z13-helper mcp"
+        return 0
+    fi
+    if ((DRY)); then
+        info "(dry run) would run: claude mcp add z13-helper -- z13-helper mcp"
+        return 0
+    fi
+    if claude mcp get z13-helper >/dev/null 2>&1; then
+        info "already registered"
+        return 0
+    fi
+    if act claude mcp add z13-helper -- z13-helper mcp; then
+        CHANGED+=("Claude MCP server z13-helper")
+    else
+        fail "claude mcp add z13-helper"
+    fi
+}
+
 etc_files() {
     say "/etc: resume hook, lightbar reset + polkit rule, atomic-update keep-list"
     local rel dest mode root todo=() keep_missing=() p units_changed=0
@@ -836,6 +860,7 @@ main() {
     fi
     flatpak_app
     host_files
+    mcp_registration
     if ((DRY)) || sudo -n true 2>/dev/null; then
         etc_files
     else
