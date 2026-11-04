@@ -155,3 +155,14 @@ def test_run_lets_the_test_guard_through():
     # conftest's guard is still in place: a test that forgets fake_host fails loudly.
     with pytest.raises(AssertionError):
         host.run(["z13ctl", "status"])
+
+
+def test_flatpak_event_stream_follows_the_spawn_proxy_lifetime(monkeypatch):
+    captured = []
+    token = object()
+    def popen(argv, **kwargs):
+        captured.append((argv, kwargs))
+        return token
+    monkeypatch.setattr(host.subprocess, 'Popen', popen)
+    assert host.open_stream(['z13-profile', 'watch'], mode='flatpak') is token
+    assert captured[0][0] == ['flatpak-spawn', '--host', '--watch-bus', 'z13-profile', 'watch']
