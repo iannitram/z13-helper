@@ -72,6 +72,7 @@ def test_missing_context_and_drift_are_reported(device):
     report = verify.collect(**device)
     assert report["installed_profile"] == "differs"
     assert len(report["preflight_blockers"]) == 4
+    assert "expected SteamOS 3.9.5, found steamos 3.8.28" in report["preflight_blockers"]
     (device["config_home"] / verify.PROFILE).unlink()
     assert verify.collect(**device)["installed_profile"] == "unreadable or missing"
 
@@ -85,3 +86,10 @@ def test_cli_reports_blockers_without_writing(monkeypatch, capsys, device):
     (device["config_home"] / verify.PROFILE).unlink()
     assert verify.main([]) == 1
     assert json.loads(capsys.readouterr().out)["preflight_blockers"]
+
+
+def test_newer_steamos_is_a_note_not_a_blocker(device):
+    device["os_release"].write_text('ID=steamos\nVERSION_ID="3.10.0"\n')
+    report = verify.collect(**device)
+    assert report["preflight_blockers"] == []
+    assert "found newer steamos 3.10.0" in report["preflight_notes"][0]

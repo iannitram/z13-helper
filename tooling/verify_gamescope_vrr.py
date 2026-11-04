@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Read-only #73 preflight, run from the checkout; prints JSON to stdout.
 
-Does not install scripts, change modes or infer physical acceptance. Save stdout
-in the checkout alongside the manual Game Mode observations in PR-NOTES.md.
+Does not install scripts, change modes or infer physical acceptance. Record the
+output and the manual Game Mode observations in the issue #73 comment.
 """
 
 import argparse
@@ -38,6 +38,13 @@ def panel_identity(data):
             "model": model}
 
 
+def version_tuple(value):
+    try:
+        return tuple(int(part) for part in (value or "").split("."))
+    except ValueError:
+        return None
+
+
 def collect(config_home, drm=Path("/sys/class/drm"),
             os_release=Path("/etc/os-release"), proc=Path("/proc"), source=SOURCE):
     installed = config_home / PROFILE
@@ -68,13 +75,20 @@ def collect(config_home, drm=Path("/sys/class/drm"),
         blockers.append("Installed display script does not match this checkout")
     if not any(panel["matches_profile"] for panel in panels):
         blockers.append("No connected eDP panel with the exact profile EDID identity")
-    if os_info.get("ID") != "steamos" or os_info.get("VERSION_ID") != "3.9.5":
-        blockers.append("SteamOS 3.9.5 limiter retest requires recording the target OS")
+    found = " ".join(filter(None, (os_info.get("ID"), os_info.get("VERSION_ID")))) or "unknown"
+    notes = []
+    if os_info.get("ID") != "steamos" or version_tuple(os_info.get("VERSION_ID")) is None:
+        blockers.append(f"expected SteamOS 3.9.5, found {found}")
+    elif version_tuple(os_info["VERSION_ID"]) < (3, 9, 5):
+        blockers.append(f"expected SteamOS 3.9.5, found {found}")
+    elif version_tuple(os_info["VERSION_ID"]) > (3, 9, 5):
+        notes.append(f"expected SteamOS 3.9.5, found newer {found}; record it with the retest")
     if not running:
         blockers.append("No Gamescope process observed; repeat during Game Mode")
     return {
         "os": os_info, "installed_profile": profile_state, "panels": panels,
         "gamescope_process_observed": running, "preflight_blockers": blockers,
+        "preflight_notes": notes,
         "device_acceptance": "pending owner-device verification",
         "manual_checks": [
             {"vrr": "on", "disable_frame_limiter": disabled, "refresh_hz": hz,
