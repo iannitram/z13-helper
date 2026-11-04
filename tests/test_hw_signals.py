@@ -54,6 +54,14 @@ def test_restore_owner_lighting_when_signal_ends():
     assert hs.next_action({}, None, now=5.0, last_write=None, restore=own) == ("none", None)
 
 
+def test_clear_is_rate_limited_like_restore():
+    # the caller applies the profile's lighting on "clear", so it is a write too
+    shown = hs.SIGNALS[hs.PROFILE_CHANGED].pattern
+    assert hs.next_action({}, shown, now=2.9, last_write=0.0) == ("none", None)
+    assert hs.next_action({}, shown, now=0.0 + hs.MIN_WRITE_INTERVAL_S,
+                          last_write=0.0) == ("clear", None)
+
+
 def test_off_switch_never_plays_and_restores_once():
     own = hs.Pattern("static", "white")
     active = {hs.THROTTLING: 0.0}
