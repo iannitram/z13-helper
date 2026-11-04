@@ -32,7 +32,8 @@ def device(tmp_path):
     proc = tmp_path / "proc"
     (proc / "12").mkdir(parents=True)
     (proc / "12" / "comm").write_text("gamescope\n")
-    return dict(config_home=config, drm=drm, os_release=os_release, proc=proc)
+    return dict(config_home=config, drm=drm, os_release=os_release, proc=proc,
+                gamescope_version=verify.GAMESCOPE_VERSION)
 
 
 def test_preflight_never_signs_off_physical_acceptance(device):
@@ -45,7 +46,11 @@ def test_preflight_never_signs_off_physical_acceptance(device):
     assert {(row["disable_frame_limiter"], row["refresh_hz"]) for row in checks} == {
         (disabled, hz) for disabled in (False, True) for hz in (48, 60, 120, 180)}
     assert all(row["result"] == "pending" and row["vrr"] == "on" for row in checks)
-    assert "serial" not in json.dumps(report).lower()
+    assert all(row[k] is None for row in checks
+               for k in ("slider_reach", "panel_stable", "measured_fps"))
+    assert [row["requested_limit_hz"] for row in checks] == [row["refresh_hz"] for row in checks]
+    assert "serial" not in json.dumps(report).lower().replace("serial_number", "")
+    assert "serial" not in json.dumps(report["panels"]).lower()
 
 
 @pytest.mark.parametrize("vendor,product,model", [
@@ -83,8 +88,9 @@ def test_cli_reports_blockers_without_writing(monkeypatch, capsys, device):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(home / "elsewhere"))
     collect = verify.collect
     seen = []
-    monkeypatch.setattr(verify, "collect", lambda config: seen.append(config) or collect(
+    monkeypatch.setattr(verify, "collect", lambda config, gamescope_version=None: seen.append(config) or collect(
         **{**device, "config_home": config}))
+    monkeypatch.setattr(verify, "installed_gamescope_version", lambda: verify.GAMESCOPE_VERSION)
     before = sorted(home.parent.rglob("*"))
     assert verify.main([]) == 0
     assert seen == [device["config_home"]]
@@ -95,15 +101,25 @@ def test_cli_reports_blockers_without_writing(monkeypatch, capsys, device):
     assert sorted(home.parent.rglob("*")) == [p for p in before if p.exists()]
 
 
-def test_newer_steamos_is_a_note_not_a_blocker(device):
+def test_newer_steamos_blocks(device):
     device["os_release"].write_text('ID=steamos\nVERSION_ID="3.10.0"\n')
     report = verify.collect(**device)
-    assert report["preflight_blockers"] == []
-    assert "found newer steamos 3.10.0" in report["preflight_notes"][0]
+    assert any("found newer steamos 3.10.0" in b for b in report["preflight_blockers"])
+
+
+@pytest.mark.parametrize("version", ["3.16.30.1-3", None])
+def test_gamescope_version_mismatch_blocks(device, version):
+    device["gamescope_version"] = version
+    assert any("Gamescope" in b for b in verify.collect(**device)["preflight_blockers"])
+
+
+def test_missing_checkout_source_is_not_blamed_on_installed(device, tmp_path):
+    report = verify.collect(**device, source=tmp_path / "nope.lua")
+    assert report["installed_profile"] == "checkout source missing"
 
 
 @pytest.mark.parametrize("value,blocked", [
-    ("3.9.5-preview", False), ("3.9", True), ("3.10", False), ("junk", True)])
+    ("3.9.5-preview", False), ("3.9", True), ("3.10", True), ("junk", True)])
 def test_version_suffix_and_short_forms(device, value, blocked):
     device["os_release"].write_text(f"ID=steamos\nVERSION_ID={value}\n")
     report = verify.collect(**device)
