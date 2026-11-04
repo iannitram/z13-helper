@@ -72,3 +72,106 @@ def test_goal_not_met_has_its_own_sticky_pattern_between_limit_and_update():
     assert hs.next_action({hs.GOAL_NOT_MET: 0.0}, None, now=0.0, last_write=None) == ("play", sig.pattern)
     patterns = [s.pattern for s in hs.SIGNALS.values()]
     assert len(set(patterns)) == len(patterns)
+
+
+# --- SignalRunner (issue #130) ---------------------------------------------------------
+
+class Rig:
+    """Runner with a fake clock and a fake lightbar; `own` is the owner's lighting."""
+
+    def __init__(self, enabled=True, own=hs.Pattern("static", "white", "medium"), fail=False):
+        self.t = 100.0
+        self.writes = []
+        self.on = enabled
+        self.own = own
+        self.fail = fail
+        self.runner = hs.SignalRunner(self._write, lambda: self.own, lambda: self.on,
+                                      clock=lambda: self.t)
+
+    def _write(self, pattern):
+        self.writes.append(pattern)
+        if self.fail:
+            raise RuntimeError("wedged")
+
+    def advance(self, s):
+        self.t += s
+        return self.runner.tick()
+
+
+def test_profile_change_flashes_then_owner_lighting_returns():
+    rig = Rig()
+    rig.runner.note_external_write()
+    rig.runner.raise_event(hs.PROFILE_CHANGED)
+    assert rig.advance(0) == "none"                     # the apply's own write is too recent
+    assert rig.advance(hs.MIN_WRITE_INTERVAL_S) == "play"
+    assert rig.writes == [hs.SIGNALS[hs.PROFILE_CHANGED].pattern]
+    assert rig.advance(0.5) == "none"                   # still showing, no rewrite
+    assert rig.advance(hs.ONE_SHOT_S) == "restore"
+    assert rig.writes[-1] == rig.own
+    assert rig.advance(30) == "none" and len(rig.writes) == 2
+
+
+def test_signals_off_means_no_lighting_write_at_all():
+    rig = Rig(enabled=False)
+    rig.runner.raise_event(hs.PROFILE_CHANGED)
+    rig.runner.raise_event(hs.THROTTLING)
+    for _ in range(10):
+        assert rig.advance(5) == "none"
+    assert rig.writes == []
+
+
+def test_turning_signals_off_mid_signal_restores_once_then_stays_quiet():
+    rig = Rig()
+    rig.runner.raise_event(hs.THROTTLING)
+    assert rig.advance(0) == "play"
+    rig.on = False
+    assert rig.advance(hs.MIN_WRITE_INTERVAL_S) == "restore"
+    assert rig.advance(10) == "none" and rig.advance(10) == "none"
+    assert rig.writes[-1] == rig.own and len(rig.writes) == 2
+
+
+def test_writes_are_rate_limited_across_event_bursts():
+    rig = Rig()
+    rig.runner.raise_event(hs.CHARGE_LIMIT)
+    assert rig.advance(0) == "play"
+    rig.runner.raise_event(hs.THROTTLING)               # higher priority, but too soon
+    assert rig.advance(0.5) == "none"
+    assert rig.advance(hs.MIN_WRITE_INTERVAL_S) == "play"
+    assert rig.writes[-1] == hs.SIGNALS[hs.THROTTLING].pattern
+
+
+def test_failed_write_drops_the_signal_instead_of_retrying():
+    rig = Rig(fail=True)
+    rig.runner.raise_event(hs.THROTTLING)
+    assert rig.advance(0) == "play"
+    for _ in range(5):
+        assert rig.advance(hs.MIN_WRITE_INTERVAL_S) == "none"
+    assert len(rig.writes) == 1
+
+
+def test_no_known_owner_lighting_leaves_the_bar_alone():
+    rig = Rig(own=None)
+    rig.runner.raise_event(hs.PROFILE_CHANGED)
+    assert rig.advance(0) == "play"
+    assert rig.advance(hs.ONE_SHOT_S + 1) == "none" and len(rig.writes) == 1
+
+
+def test_clearing_a_sticky_event_restores():
+    rig = Rig()
+    rig.runner.raise_event(hs.CHARGE_LIMIT)
+    rig.advance(0)
+    rig.runner.clear_event(hs.CHARGE_LIMIT)
+    assert rig.advance(hs.MIN_WRITE_INTERVAL_S) == "restore"
+
+
+def test_submit_defers_the_write_and_one_is_in_flight_at_a_time():
+    queued = []
+    t = [0.0]
+    writes = []
+    r = hs.SignalRunner(writes.append, lambda: None, clock=lambda: t[0],
+                        submit=lambda label, fn: queued.append((label, fn)))
+    r.raise_event(hs.THROTTLING)
+    assert r.tick() == "play" and r.tick() == "none"
+    assert queued[0][0] == hs.SIGNAL_LABEL and writes == []
+    queued[0][1]()
+    assert len(writes) == 1

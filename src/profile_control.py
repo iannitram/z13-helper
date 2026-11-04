@@ -16,6 +16,7 @@ import max_fans_state
 from hardware_controller import HardwareController
 from apply_worker import ApplyWorker
 from fan_watchdog import FAN_RECOVERY_LABEL
+from hw_signals import SIGNAL_LABEL
 
 
 logger = logging.getLogger("z13.profiles")
@@ -26,6 +27,7 @@ class ProfileControl(QObject):
     changed = pyqtSignal()        # store (active name or contents) changed
     message = pyqtSignal(str)     # human-readable result for the status bar
     busy = pyqtSignal(bool)
+    profile_applied = pyqtSignal(str)   # a profile switch finished (lighting signal hook, #130)
 
     def __init__(self, controller: HardwareController, worker: ApplyWorker, parent=None):
         super().__init__(parent)
@@ -217,9 +219,11 @@ class ProfileControl(QObject):
         self.worker.submit(label, fn)
 
     def _on_done(self, label, result):
-        if label == FAN_RECOVERY_LABEL:   # the fan watchdog shares the worker; not ours
+        if label in (FAN_RECOVERY_LABEL, SIGNAL_LABEL):   # share the worker; not ours
             return
+        applied = None
         if self.pending_name and label == f"Profile → {self.pending_name}":
+            applied = self.pending_name
             self.pending_name = None
         self._pending = max(0, self._pending - 1)
         if self._pending == 0:
@@ -245,3 +249,5 @@ class ProfileControl(QObject):
             text = result if isinstance(result, str) else ""
             self.message.emit(text if text.startswith(_WRITE_TIMEOUT_PREFIX) else f"{label} ✓")
         self.changed.emit()
+        if applied and not isinstance(result, Exception):
+            self.profile_applied.emit(applied)

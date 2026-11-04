@@ -194,7 +194,27 @@ class HardwareController:
     def set_lighting(self, device: str, setting: dict, brightness: str = "high"):
         """Applies one profile's lighting mode and colour to one device."""
         argv = profiles.lighting_argv(device, setting, brightness, self.z13ctl_path)
-        return self._run_command(argv[1:], timeout=Z13CTL_WRITE_TIMEOUT_S)
+        try:
+            return self._run_command(argv[1:], timeout=Z13CTL_WRITE_TIMEOUT_S)
+        except RuntimeError as e:
+            # Same lightbar recovery as set_brightness: one reset/restart, one retry.
+            # A timed-out write may have reached the device: never retried.
+            if device != "lightbar" or str(e).startswith("z13ctl write timed out after "):
+                raise
+            recover = {"wedged": profiles.recover_lightbar,
+                       "stale": profiles.recover_lightbar_stale}.get(
+                           profiles.lightbar_failure_kind(str(e)))
+            if not recover:
+                raise
+            ok, msg = recover()
+            if not ok:
+                raise RuntimeError(f"{e}; {msg}") from e
+            try:
+                return self._run_command(argv[1:], timeout=Z13CTL_WRITE_TIMEOUT_S)
+            except RuntimeError as e2:
+                if str(e2).startswith("z13ctl write timed out after "):
+                    raise
+                raise RuntimeError(f"{e2} (still failing after a {msg})") from e2
 
     # --- CPU Boost (amd-pstate EPP); host helper, not z13ctl ---
 

@@ -5,6 +5,8 @@ result through hardware_controller.set_lighting. Patterns use only modes and col
 profiles.LIGHTING_MODES / LIGHTING_COLORS accept, so profiles.lighting_argv builds them.
 """
 
+import threading
+import time
 from dataclasses import dataclass
 from typing import Mapping, Optional, Tuple
 
@@ -100,3 +102,96 @@ def next_action(active: Mapping[str, Optional[float]], shown: Optional[Pattern],
 
 def _may_write(now: float, last_write: Optional[float]) -> bool:
     return last_write is None or now - last_write >= MIN_WRITE_INTERVAL_S
+
+
+SIGNAL_LABEL = "Lighting signal"
+
+# Config key for the off switch (default on). Off: no lightbar write the user did not ask for.
+CONFIG_KEY = "signals_enabled"
+
+
+class SignalRunner:
+    """Plays the signal language on the lightbar (issue #130, Phase 16b).
+
+    Qt-free. `write(pattern)` does one lightbar write (raises on failure; it should go
+    through hardware_controller.set_lighting, which carries the lightbar recovery).
+    `restore()` returns the owner's lightbar Pattern (the active profile's) or None.
+    `submit(label, fn)` runs `fn` off the caller's thread (ApplyWorker.submit); the
+    default runs it inline. One write is in flight at a time and every write obeys
+    MIN_WRITE_INTERVAL_S, so a burst of events cannot wedge the lightbar. A failed
+    write drops the event (no retry loop against a wedged bar).
+    """
+
+    def __init__(self, write, restore, enabled=lambda: True, *, submit=None,
+                 clock=None, log=None):
+        self._write = write
+        self._restore = restore
+        self._enabled = enabled
+        self._submit = submit or (lambda _label, fn: fn())
+        self._clock = clock or time.monotonic
+        self._log = log or (lambda _msg: None)
+        self._lock = threading.Lock()
+        self._active = {}
+        self._shown = None
+        self._last_write = None
+        self._inflight = False
+
+    def raise_event(self, event):
+        """A condition began (one-shots restart their timer). Ignored while signals are off."""
+        if event not in SIGNALS or not self._enabled():
+            return
+        with self._lock:
+            self._active[event] = self._clock()
+
+    def clear_event(self, event):
+        with self._lock:
+            self._active.pop(event, None)
+
+    def note_external_write(self):
+        """A lighting write the runner did not make (a profile apply): count it for the rate limit."""
+        with self._lock:
+            self._last_write = self._clock()
+
+    def tick(self):
+        """Take at most one step. Returns "none", "play" or "restore"."""
+        enabled = bool(self._enabled())
+        with self._lock:
+            if self._inflight:
+                return "none"
+            now = self._clock()
+            for event in [e for e, t in self._active.items()
+                          if SIGNALS[e].duration_s is not None and now - t >= SIGNALS[e].duration_s]:
+                del self._active[event]
+            if not enabled:
+                self._active.clear()
+            restore = None
+            if self._shown is not None and (not enabled or not self._active):
+                restore = self._restore()
+            action, pattern = next_action(dict(self._active), self._shown, now=now,
+                                          last_write=self._last_write, enabled=enabled,
+                                          restore=restore)
+            if action == "none":
+                return "none"
+            self._inflight = True
+        self._submit(SIGNAL_LABEL, lambda: self._do(action, pattern))
+        return action
+
+    def _do(self, action, pattern):
+        try:
+            self._write(pattern)
+            ok = True
+        except Exception as exc:  # noqa: BLE001 - a signal must never break the app
+            ok = False
+            self._log(f"lighting signal {action} failed: {exc}")
+        with self._lock:
+            self._last_write = self._clock()
+            self._inflight = False
+            if ok:
+                self._shown = pattern if action == "play" else None
+            elif action == "play":
+                # Give up on this signal rather than retry against a wedged lightbar.
+                self._active = {e: t for e, t in self._active.items()
+                                if SIGNALS[e].pattern != pattern}
+            else:
+                self._shown = None
+        return f"{action} {pattern.mode}/{pattern.color}" if ok else f"{action} failed"

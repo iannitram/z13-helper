@@ -28,6 +28,8 @@ from PyQt6.QtGui import QFont, QIcon, QPainter, QColor, QPixmap, QAction
 from hardware_controller import HardwareController
 from sensor_reader import SensorReader
 from config_manager import ConfigManager
+import hw_signals
+from hw_signals import SignalRunner
 import app_log
 import host
 import install_record
@@ -123,6 +125,12 @@ class DashboardUI(QMainWindow):
                                          trace=self._make_fan_trace())
         self._fan_runner = FanWatchdogRunner(self._fan_watchdog, self.worker.submit)
         self.worker.done.connect(self._on_fan_recovery_done)
+        self._signals = SignalRunner(
+            lambda pat: controller.set_lighting(hw_signals.DEVICE, pat.setting(), pat.brightness),
+            self._owner_lightbar_pattern,
+            enabled=lambda: bool(self.config.get(hw_signals.CONFIG_KEY, True)),
+            submit=self.worker.submit, log=logging.getLogger("z13.signals").warning)
+        self.control.profile_applied.connect(self._on_profile_applied)
         self._fans_window = None
         self._updates_dialog = None
         self._update_thread = None
@@ -140,6 +148,9 @@ class DashboardUI(QMainWindow):
         self.timer.timeout.connect(self._tick)
         self.timer.start(TICK_HIDDEN_MS)
         self._tick()
+        self._signal_timer = QTimer(self)
+        self._signal_timer.timeout.connect(self._signals.tick)
+        self._signal_timer.start(1000)
 
         QTimer.singleShot(8000, lambda: self._check_updates(force=False))
         self._update_timer = QTimer(self)
@@ -445,6 +456,12 @@ class DashboardUI(QMainWindow):
         self.startup.setToolTip("Enable the resident z13-helper user service (tray + side button).")
         self.startup.toggled.connect(self._toggle_startup)
         row4.addWidget(self.startup)
+        self.signals_box = QCheckBox("Light signals")
+        self.signals_box.setToolTip("Flash the rear light for events such as a profile change, "
+                                    "then restore your lighting. Off: never touched on its own.")
+        self.signals_box.setChecked(bool(self.config.get(hw_signals.CONFIG_KEY, True)))
+        self.signals_box.toggled.connect(self._toggle_signals)
+        row4.addWidget(self.signals_box)
         row4.addStretch(1)
         self.power_label = QLabel("")
         self.power_label.setObjectName("dim")
@@ -532,6 +549,24 @@ class DashboardUI(QMainWindow):
         self.maxfans_pill.setChecked(self.control.shown_max_fans())
         if not self.control.pending_name:
             self.config.set("profile", active.get("base", "balanced"))
+
+    def _owner_lightbar_pattern(self):
+        """The user's own rear-light setting (the active profile's), to restore after a signal."""
+        profile = self.control.active()
+        setting = (profile.get("lighting") or {}).get(hw_signals.DEVICE)
+        if not setting:
+            return None
+        return hw_signals.Pattern(setting["mode"], setting["color"],
+                                  profile.get("brightness") or self.config.get("brightness", "high"))
+
+    def _on_profile_applied(self, _name):
+        # profiles.apply just wrote the profile's lighting: that write counts for the rate
+        # limit, and the confirmation flashes over it and then the owner's lighting returns.
+        self._signals.note_external_write()
+        self._signals.raise_event(hw_signals.PROFILE_CHANGED)
+
+    def _toggle_signals(self, on):
+        self.config.set(hw_signals.CONFIG_KEY, bool(on))
 
     def _tile_clicked(self, name):
         self._refresh_profile_ui()      # undo the click's own toggle until the apply lands

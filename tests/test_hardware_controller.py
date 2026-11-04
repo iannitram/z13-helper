@@ -186,3 +186,30 @@ def test_set_lighting_builds_per_device_argv(device, mode):
     assert c.calls == [(["--device", device, "apply", "--mode", mode,
                          "--color", "cyan", "--brightness", "low"],
                         Z13CTL_WRITE_TIMEOUT_S)]
+
+
+def test_set_lighting_lightbar_wedged_one_reset_one_retry(recover):
+    c = Fake(lambda _a, calls: WEDGED if len(calls) == 1 else None)
+    c.set_lighting("lightbar", {"mode": "static", "color": "green"})
+    assert len(c.calls) == 2 and len(recover.seen) == 1
+
+
+def test_set_lighting_keyboard_failure_is_not_recovered(recover):
+    c = Fake(lambda _a, _calls: WEDGED)
+    with pytest.raises(RuntimeError):
+        c.set_lighting("keyboard", {"mode": "static", "color": "green"})
+    assert len(c.calls) == 1 and not recover.seen
+
+
+def test_set_lighting_still_wedged_raises_after_one_retry(recover):
+    c = Fake(lambda _a, _calls: WEDGED)
+    with pytest.raises(RuntimeError, match="still failing"):
+        c.set_lighting("lightbar", {"mode": "static", "color": "green"})
+    assert len(c.calls) == 2 and len(recover.seen) == 1
+
+
+def test_set_lighting_write_timeout_is_never_retried(recover):
+    c = Fake(lambda _a, _calls: "z13ctl write timed out after 5 s")
+    with pytest.raises(RuntimeError):
+        c.set_lighting("lightbar", {"mode": "static", "color": "green"})
+    assert len(c.calls) == 1 and not recover.seen
