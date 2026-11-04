@@ -60,6 +60,9 @@ def test_off_switch_never_plays_and_restores_once():
     shown = hs.SIGNALS[hs.THROTTLING].pattern
     assert hs.next_action(active, shown, now=9.0, last_write=0.0, enabled=False,
                           restore=own) == ("restore", own)
+    # already restored: no repeated write
+    assert hs.next_action(active, own, now=20.0, last_write=9.0, enabled=False,
+                          restore=own) == ("none", None)
 
 
 def test_goal_not_met_has_its_own_sticky_pattern_between_limit_and_update():

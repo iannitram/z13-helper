@@ -90,7 +90,8 @@ def next_action(active: Mapping[str, Optional[float]], shown: Optional[Pattern],
     """
     want = active_signal(active, now) if enabled else None
     if want is None:
-        if shown is not None and restore is not None and _may_write(now, last_write):
+        if (shown is not None and restore is not None and shown != restore
+                and _may_write(now, last_write)):
             return "restore", restore
         return "none", None
     if want.pattern == shown or not _may_write(now, last_write):
