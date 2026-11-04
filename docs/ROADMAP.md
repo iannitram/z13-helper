@@ -521,6 +521,16 @@ Not issues (checked, nothing to do): the RDNA1/2 dedicated-GPU resume fix (Strix
 
 **Done when:** Quiet and Max are verified on the Z13 across a Desktop↔Game Mode switch and resume; Comfort and Hold FPS are verified or recorded as a no-go with the reason; no other code path writes a curve while a goal is active.
 
+**15d frame-rate source note (#126, 2026-11-04, desk work only; the Game Mode measurements are still to do):**
+
+| Source | How it reads | Latency / overhead | Status |
+|---|---|---|---|
+| MangoHud CSV log | `src/fps_source.py` reads the tail (4 KB) of the newest `.csv` in `~/.local/state/z13-helper/mangohud/` or `~/.local/share/MangoHud/`; the `fps` column of the last complete row; a log idle for 2 s means no game. Needs MangoHud `output_folder` set and logging on. | One `scandir`, one 4 KB read, no root; unit test holds a 50 000-row log under the 50 ms budget. Per-second rows, so about 1 s of lag. Logging cost inside the game: not measured. | Implemented; unverified on SteamOS 3.9.5 |
+| gamescope's own stats | Not tried. | — | Needs a Game Mode run |
+| Steam client via Decky | Not tried. | — | Needs a Game Mode run |
+
+Pick: none recorded yet. Hold FPS is neither confirmed nor a no-go until the owner runs a game with MangoHud logging on and records the lag and the overhead; 15f keeps hiding Hold FPS until `fps_source.read()` returns a number on the device.
+
 ## 10b. Phase 16 — Hardware as the interface 💤 after 1.0 (added 2026-11-01, the owner's pick)
 **Why:** the Z13 is mostly a tablet, and the app is a dense mouse-sized form. Phase 16 makes the machine's own lights and button carry the everyday interactions, and gives the windows one touch-first look shared by the desktop and Game Mode.
 
