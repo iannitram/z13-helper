@@ -42,11 +42,11 @@ The desktop Flatpak and Decky are two frontends to the same profile and Max Fans
 | Module | Responsibility and connections |
 |---|---|
 | `main.py` | Process entry point, logging, single-instance guard and Qt application. |
-| `src/dashboard_ui.py` | Main window, profile picker, Max Fans control, telemetry and tray behavior; opens Fans + Power. |
+| `src/dashboard_ui.py` | Main window, profile picker, Max Fans control (records goal transitions to `timeline.jsonl`), telemetry, `read_timeline` and tray behavior; opens Fans + Power. |
 | `src/fans_window.py`, `src/fan_curve_widget.py` | TDP/PL1-PL3 and Curve Optimizer controls, fan curve editor, and range-aware power sliders. |
 | `src/profile_control.py` | Shared profile model for both desktop windows; persists edits and dispatches live field updates through `ApplyWorker`. |
 | `src/apply_worker.py` | Serial background queue for desktop hardware work, including profile applies and watchdog recovery. |
-| `src/profiles.py` | Profile schema and JSON store, built-ins and migrations, `z13-profile` CLI, ordered profile apply, and lightbar recovery. Each profile may also carry per-device lighting intent (`LIGHTING_MODES`, `LIGHTING_COLORS`, `set_profile_lighting`), and enter/exit hooks are bounded by `HOOK_TIMEOUT_S` (120 s). Used by the app and installed host CLI; Decky invokes that same CLI for app-profile changes. |
+| `src/profiles.py` | Profile schema and JSON store, built-ins and migrations, `z13-profile` CLI, ordered profile apply (appends each apply with `before`/`after` and rollback snapshot to `timeline.py`, with no journal line since a profile apply is not a Principle 7 host change; recording failures never fail the apply), and lightbar recovery. Each profile may also carry per-device lighting intent (`LIGHTING_MODES`, `LIGHTING_COLORS`, `set_profile_lighting`), and enter/exit hooks are bounded by `HOOK_TIMEOUT_S` (120 s). Used by the app and installed host CLI; Decky invokes that same CLI for app-profile changes. |
 | `src/max_fans_state.py` | Shared Max Fans intent and saved-curve snapshot in `max-fans.json`, with inter-process locking and atomic writes. |
 | `src/fan_watchdog.py` | Shared Desktop/Game Mode recovery rules. In the desktop app, recoveries use the worker queue; stale dropped-curve recoveries are canceled if the queued profile operation has already changed Max Fans intent or restored a curve. |
 | `src/sensor_reader.py` | Read-only hwmon temperatures, fan RPM, custom-curve mode and points. It does not write hardware. |
@@ -55,9 +55,10 @@ The desktop Flatpak and Decky are two frontends to the same profile and Max Fans
 | `src/host.py` | Shared command seam for Flatpak, host, and Decky contexts; owns `Z13CTL_WRITE_TIMEOUT_S`. |
 | `src/config_manager.py`, `src/install_record.py`, `src/single_instance.py`, `src/theme.py` | App preferences, install metadata/logging choice, one-process coordination and styling (including the performance-mode tile icons). |
 | `src/app_log.py`, `src/log_dialog.py` | Rotating app log, crash and fatal reports and the fan-trace files under `~/.local/state/z13-helper/`; the Help -> Error log window that shows them. The Decky backend writes its fan trace through the same `FanTrace`. |
+| `src/timeline.py` | Append-only `~/.local/state/z13-helper/timeline.jsonl` store of hardware and host changes with `before`/`after` snapshots, Phase 12c rollback records, size-capped rotation and partial-line skipping; emits Principle 7 journal lines from the same call for host changes (profile applies and goal changes record with `journal=False`). Callers treat recording as best-effort and catch any `Exception`. Decky's timeline path follows its hardcoded `FAN_TRACE_DIR` (user `deck` only). Read and written by the desktop app, `z13-profile`, `install.sh` / `installers.py`, `post_update/runner.py`, `post_update_state.py` and Decky (`py_modules/timeline.py`). |
 | `src/crash_report.py`, `src/crash_scrub.py`, `src/crash_queue.py` | Shared automatic crash reporting: startup hooks, scrubbed ZIPs, bounded offline queue and daily upload limit. Build configuration and the default-on Error log toggle are described in [`docs/crash-reporting.md`](../docs/crash-reporting.md); live delivery verification remains pending (#82). |
 | `src/versions.py` | Shared version floor (`DECKY_MIN`, 3.3.0) and `older_than`; used by `installers.py` and `update_watch.py`. |
-| `src/update_watch.py`, `src/updates_dialog.py`, `src/installers.py` | Upstream checks, updates/repair UI and installation actions. |
+| `src/update_watch.py`, `src/updates_dialog.py`, `src/installers.py`, `src/post_update_state.py` | Upstream checks, SteamOS `BUILD_ID` transition detection, updates/repair UI (bundles `host`, `versions`, and `timeline` for stdin host runs) and installation actions (records `install` entries to `timeline.jsonl`). |
 | `src/screen_brightness.py`, `src/evdev_listener.py` | Built-in display brightness and the Desktop Mode side-button reader. |
 
 ### Profile apply and Max Fans ordering
@@ -74,7 +75,7 @@ The desktop Fans + Power window and Decky `power_state()` display stored profile
 
 ## Decky/Game Mode
 
-`decky/main.py` exposes callable methods to the QAM panel and imports shared `fan_watchdog.py`, `sensor_reader.py`, `host.py` and `power_range.py` from the plugin's installed `py_modules/` copies. It serializes its writes with an asyncio lock and runs blocking host work in threads. In Game Mode it runs the shared fan watchdog; in Desktop Mode it stands down while the resident PyQt app owns that watchdog. App-profile selection invokes the installed `z13-profile` CLI, which is the same engine used by the desktop app. Direct performance-profile, TDP, charge-limit, brightness and telemetry calls remain separate Decky API methods. See [`decky.md`](decky.md) for the flow and persisted state details.
+`decky/main.py` exposes callable methods to the QAM panel and imports shared `fan_watchdog.py`, `sensor_reader.py`, `host.py`, `power_range.py` and `timeline.py` from the plugin's installed `py_modules/` copies. It serializes its writes with an asyncio lock and runs blocking host work in threads. In Game Mode it runs the shared fan watchdog; in Desktop Mode it stands down while the resident PyQt app owns that watchdog. App-profile selection invokes the installed `z13-profile` CLI, which is the same engine used by the desktop app. Direct performance-profile, TDP, charge-limit, brightness and telemetry calls remain separate Decky API methods. See [`decky.md`](decky.md) for the flow and persisted state details.
 
 ## Planned (after 1.0)
 
@@ -89,7 +90,6 @@ Modules planned by Phases 15 and 16 (`docs/ROADMAP.md` §10a, §10b). Each moves
 | `src/hw_signals.py` | present (mapping #129, runner #130) | Pure event → lightbar pattern mapping: signals (profile change, throttling, charge limit, goal not met, update attention) with priority, one-shot expiry, a 2 s write rate limit, restore of the owner's lighting and an off switch. The mapping has no I/O or clock; `SignalRunner` (#130) plays it through `hardware_controller.set_lighting` (with its lightbar recovery) on `ApplyWorker`, fed by `ProfileControl.profile_applied`, and the `signals_enabled` config switch ("Light signals" checkbox) turns it off. | #129, #130 |
 | `src/evdev_listener.py` (gestures) | present (#131) | `GestureDetector`: a triple press (0.35 s chain; presses 1-2 keep their actions, hold is impossible, see `docs/BUTTON-AND-INPUTPLUMBER.md`) cycles profiles via `CYCLE` in `--emit`, the app's `cycle_profile()` and the `cycle` socket command (Game Mode watcher); `--probe` prints press/release events. Goals follow Phase 15. | #131 |
 | shared touch UI | planned | Desktop window and QAM from one set of parts; shape decided in `docs/adr/0002-shared-touch-ui.md`. | #132, #133 |
-| `src/timeline.py` | planned | Append-only `~/.local/state/z13-helper/timeline.jsonl` of hardware and host changes with Phase 12c rollback records; written by `profiles.py`, `goal_runner.py`, `install.sh`. | #134 |
 | timeline view | planned | Compare and roll back, beside `updates_dialog.py` and in the QAM. | #135 |
 
 ```mermaid
@@ -109,13 +109,13 @@ flowchart LR
 
 | Path | Responsibility |
 |---|---|
-| `install.sh`, `tooling/install_check.py` | Manifest-driven host install/repair and verification. The install copies `src/profiles.py` as `z13-profile`, `src/host.py` beside it, and shared helpers into Decky's `py_modules/`. |
+| `install.sh`, `tooling/install_check.py` | Manifest-driven host install/repair and verification; `record()` writes `install.json` and appends `install` (and `steamos_update` when `BUILD_ID` changed) entries to `timeline.jsonl` with Phase 12c backup rollback maps. Copies `src/profiles.py` as `z13-profile`, `src/host.py` and `src/timeline.py` beside it, and shared helpers into Decky's `py_modules/`. |
 | `packaging/host/` | Reference systemd, polkit and udev files; the z13ctl setup owns its permissions unit and udev rule. The fan-resume and lightbar-reset units each run a small `.sh` beside them. `gamescope/displays/asus.rogflowz13.lcd.lua` is the Gamescope display script for the panel's 48-180 Hz VRR range, installed by `tooling/install_check.py`'s manifest (device acceptance pending). |
 | `tooling/profiles/`, `tooling/boondock` | Compatibility wrappers and Boondock's hardware/session commands. Built-in profile hooks use its session-only commands. |
 | `tooling/diag/`, `tooling/z13_gamemode_report.py`, `tooling/z13_fanlog.sh` | Read-only or explicitly invoked diagnostics, Game Mode reporting and the fan/thermal logger. |
 | `tooling/z13_cdp.py`, `tooling/z13_qam.py`, `tooling/spike1_qam_test.py` | Dependency-free CDP bridge to Steam's Game Mode UI (opens the side menus without input emulation) used by `z13-button-watcher`; `z13_qam.py` is its back-compat alias and `spike1_qam_test.py` is the by-hand Game Mode check. |
 | `tooling/rss_watch.py`, `tooling/screenshots.py` | Bounded RSS sampler for one identified process (used on the Decky backend); renders the README screenshots offscreen from the real app code inside the Flatpak. |
-| `tooling/post_update/recipe.py` | Post-update recipe format: ordering (keyring first, reboot last), keyring insertion and plan text. Pure functions; never runs a recipe's `check` or `apply`. |
+| `tooling/post_update/recipe.py`, `tooling/post_update/runner.py` | Post-update recipe format (ordering, keyring insertion, plan text) and runner (`check_all`, `run_plan`, `make_timeline_recorder` for `timeline.jsonl` + Principle 7 journal lines; wiring into a production `Env` awaits the Env builder, #109/#110). |
 | `tooling/post_update/builtin.py` | Built-in recipes 1-3 (amdgpu args in `grub-steamos` + `update-grub`, pacman keyring, carry-forward list health). Reads and runs only through the injected `HostIO`; checks are `na` off SteamOS on a GZ302 and applies refuse there. |
 | `tooling/post_update/builtin_4_6.py` | Built-in recipes 4 and 6 (SteamOS `/etc` snapshot copied to `~/.local/share/z13-helper/etc-backups`, ROCm pack). Host access only through the injected `Sys`. |
 | `tooling/post_update/local.py` | Local recipe loader: `parse_local` turns one TOML recipe into a plain dict (checked fields, ids and flags); `load_dir` reads every `*.toml` in a folder, in file-name order, and returns `(recipes, errors)` so a bad or duplicate file is an error row and the rest still load. Pure reading; it never runs a recipe's `check` or `apply`. |

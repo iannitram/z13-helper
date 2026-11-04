@@ -58,10 +58,12 @@ def real_subprocess(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def no_real_install_json(tmp_path, monkeypatch):
-    """install_record's default path (the logging choice, the last install) goes
-    to tmp_path, never the real ~/.config/z13-helper/install.json."""
+    """install_record's default path (the logging choice, the last install) and
+    timeline's default path go to tmp_path, never the real ~/.config or ~/.local/state."""
     import install_record
+    import timeline
     monkeypatch.setattr(install_record, "INSTALL_JSON", str(tmp_path / "install.json"))
+    monkeypatch.setattr(timeline, "TIMELINE_PATH", str(tmp_path / "state" / "z13-helper" / "timeline.jsonl"))
 
 
 @pytest.fixture(autouse=True)
@@ -91,6 +93,7 @@ def profiles_env(tmp_path, monkeypatch):
         store=cfg / "profiles.json",
         max_fans=cfg / "max-fans.json",
         legacy=tmp_path / "config" / "z13-profiles" / "current-profile",
+        timeline=tmp_path / "state" / "z13-helper" / "timeline.jsonl",
     )
     monkeypatch.setattr(profiles, "STORE_PATH", str(paths.store))
     monkeypatch.setattr(profiles, "MAX_FANS_PATH", str(paths.max_fans))

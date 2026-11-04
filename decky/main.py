@@ -32,6 +32,7 @@ if os.path.isdir(_PY_MODULES) and _PY_MODULES not in sys.path:
 import crash_report
 import host
 import power_range
+import timeline
 from fan_watchdog import FanTrace, FanWatchdog
 from sensor_reader import SensorReader
 
@@ -65,6 +66,8 @@ ENFORCE_INTERVAL_S = 2
 # Written as root, handed to deck so the app and deck can read and rotate it.
 FAN_TRACE_DIR = "/home/deck/.local/state/z13-helper"
 FAN_TRACE = os.path.join(FAN_TRACE_DIR, "fan-trace-gamemode.log")
+TIMELINE_PATH = os.path.join(FAN_TRACE_DIR, "timeline.jsonl")
+OS_RELEASE_PATH = "/etc/os-release"
 DECK_IDS = (1000, 1000)
 # The user's logging choice (mirror of src/install_record.py logging_enabled()):
 # install.sh asks, the desktop app's Help -> Error log changes it. "logging": false
@@ -857,6 +860,10 @@ def max_fans_off_argv(state, store):
 
 def set_max_fans_blocking(enabled):
     """Max Fans ON/OFF (blocking; run it in a thread). Returns status + message."""
+    before_mf = dict(_load_max_fans())
+    before_on = bool(before_mf.get("enabled", False))
+    store = _read_store()
+    prof_name = (active_profile(store) or {}).get("name") or None
     if enabled:
         # Snapshot the current custom curve (unless already maxed) so OFF restores it exactly.
         cur = _current_curve_pwm()
@@ -864,10 +871,31 @@ def set_max_fans_blocking(enabled):
             _update_max_fans(saved_curve=cur)
         rc, out = _run([Z13CTL, "fancurve", "--set", MAX_FANS_SPEC], timeout=Z13CTL_WRITE_TIMEOUT_S)
     else:
-        rc, out = _run(max_fans_off_argv(_load_max_fans(), _read_store()), timeout=Z13CTL_WRITE_TIMEOUT_S)
+        rc, out = _run(max_fans_off_argv(before_mf, store), timeout=Z13CTL_WRITE_TIMEOUT_S)
     ok = rc == 0
     if ok:
         _update_max_fans(enabled=enabled)
+    after_mf = dict(_load_max_fans())
+    try:
+        timeline.record_goal_change(
+            goal="max" if enabled else "custom",
+            previous_goal="max" if before_on else "custom",
+            before={
+                "goal": "max" if before_on else "custom",
+                "max_fans": before_on,
+                "saved_curve": before_mf.get("saved_curve"),
+            },
+            after={
+                "goal": "max" if after_mf.get("enabled") else "custom",
+                "max_fans": bool(after_mf.get("enabled")),
+                "saved_curve": after_mf.get("saved_curve"),
+            },
+            profile=prof_name,
+            ok=ok,
+            path=TIMELINE_PATH,
+        )
+    except OSError:
+        pass
     return {"ok": ok, "message": ("Max Fans ON" if enabled else "Max Fans OFF")
             if ok else out or f"z13ctl fancurve failed (rc={rc})"}
 
@@ -994,6 +1022,53 @@ class DesktopAppCheck:
         decky.logger.warning("Desktop app wasn't running in Desktop Mode; restarted %s: %s",
                              DESKTOP_APP_UNIT, "ok" if ok else "FAILED")
         return "restarted" if ok else "restart-failed"
+
+
+def _check_steamos_build_id():
+    """Record a single `steamos_update` entry when `/etc/os-release` BUILD_ID moved."""
+    try:
+        with open(INSTALL_JSON) as f:
+            rec = json.load(f)
+        if not isinstance(rec, dict):
+            return None
+    except (OSError, ValueError):
+        return None
+    prev = rec.get("build_id")
+    if not (isinstance(prev, str) and prev.strip() and prev.strip() != "?"):
+        m = re.search(r"\(([^()?]+)\)\s*$", str(rec.get("steamos") or "").strip())
+        prev = m.group(1).strip() if m else None
+    if not prev:
+        return None
+    try:
+        with open(OS_RELEASE_PATH) as f:
+            os_text = f.read()
+    except OSError:
+        return None
+    cur = None
+    ver = None
+    for line in os_text.splitlines():
+        if line.startswith("BUILD_ID="):
+            val = line[9:].strip()
+            if len(val) >= 2 and val[0] == val[-1] and val[0] in ('"', "'"):
+                val = val[1:-1]
+            cur = val or None
+        elif line.startswith("VERSION_ID="):
+            val = line[11:].strip()
+            if len(val) >= 2 and val[0] == val[-1] and val[0] in ('"', "'"):
+                val = val[1:-1]
+            ver = val or None
+    if not cur or cur == prev:
+        return None
+    try:
+        return timeline.record_steamos_update(
+            before_build_id=prev,
+            after_build_id=cur,
+            before={"steamos": rec.get("steamos"), "kernel": rec.get("kernel")},
+            after={"steamos": f"{ver or '?'} ({cur})", "kernel": os.uname().release},
+            path=TIMELINE_PATH,
+        )
+    except OSError:
+        return None
 
 
 def logging_enabled():
@@ -1151,6 +1226,13 @@ class Plugin:
     async def get_telemetry(self) -> dict:
         return telemetry()   # a handful of sysfs reads; cheap enough inline
 
+    # ---- Machine timeline (Phase 16f, #134) ----
+    async def get_timeline(self, limit: int = 50) -> list:
+        cap = max(0, int(limit))
+        return await asyncio.to_thread(
+            lambda: timeline.read_entries(TIMELINE_PATH, limit=cap, newest_first=True)
+        )
+
     # ---- Lifecycle ----
     async def _main(self):
         self.loop = asyncio.get_event_loop()
@@ -1158,6 +1240,7 @@ class Plugin:
             config_path=INSTALL_JSON, logger=decky.logger, loop=self.loop,
             fatal_name="fatal-decky.log",
         )
+        await asyncio.to_thread(_check_steamos_build_id)
         self._enforce_task = self.loop.create_task(self._enforce_max_fans())
         self._desktop_task = self.loop.create_task(self._watch_desktop_app())
         if self._crash_reporter:
