@@ -528,7 +528,7 @@ Not issues (checked, nothing to do): the RDNA1/2 dedicated-GPU resume fix (Strix
 - **Signal language** (#129, #130): the lightbar confirms a profile change, pulses while thermal throttling, glows when charging stops at the limit, and turns amber when a SteamOS update needs attention (Phase 12c). Priorities, a strict rate limit (the lightbar wedges under bursts, Phase 7), restore of the owner's lighting, and an off switch.
 - **Side-button gestures** (#131): hold or double-press cycles profiles (goals, after Phase 15) with a lightbar confirmation, in both modes. InputPlumber stays masked (principle 2).
 - **One touch-first interface** (#132, #133): an ADR picks between hosting the Decky React components in the desktop window and shared tokens with a large-tile Qt layout; then the desktop window is rebuilt to match. This is where the R04 design pass's shared design system lands.
-- **Machine timeline** (#134, #135): every hardware or host change is one append-only entry (principle 7's journal line comes from the same call), with Phase 12c's rollback records; a view compares states and rolls back reversible entries. A SteamOS update shows as one entry listing what it changed.
+- **Machine timeline** (#134, #135): `src/timeline.py` (#134) records every hardware or host change as one append-only entry under `~/.local/state/z13-helper/timeline.jsonl` (principle 7's journal line comes from the same call), with Phase 12c's rollback records; a view (#135) compares states and rolls back reversible entries. A SteamOS update (`BUILD_ID` change) shows as one entry listing what it changed.
 
 | Step | Issue | Blocked by |
 |---|---|---|
@@ -537,7 +537,7 @@ Not issues (checked, nothing to do): the RDNA1/2 dedicated-GPU resume fix (Strix
 | 16c side-button gestures | #131 | #130 |
 | 16d ADR: shared touch UI | #132 | — |
 | 16e touch-first layout | #133 | #132 |
-| 16f timeline store | #134 | #109 |
+| ✅ 16f timeline store (`src/timeline.py`) | #134 | #109 |
 | 16g timeline view | #135 | #134 |
 
 **Done when:** on the Z13, signals run an hour with no lightbar wedge; the gesture cycles profiles in both modes with no double-fire; the desktop window and the QAM share one look in tablet use; a SteamOS update appears in the timeline and a reversible entry rolls back.

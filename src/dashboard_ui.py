@@ -33,6 +33,7 @@ import host
 import install_record
 import max_fans_state
 import profiles
+import timeline
 import update_watch
 from fan_watchdog import FanTrace, FanWatchdog, FanWatchdogRunner
 from screen_brightness import ScreenBrightness, MIN_PERCENT
@@ -564,8 +565,32 @@ class DashboardUI(QMainWindow):
 
     def _toggle_max_fans(self, checked):
         c = self.controller
+        active_name = self.control.active_name()
+
+        def _record(before_mf, target_on):
+            before_on = bool(before_mf.get("enabled"))
+            try:
+                after_mf = max_fans_state.load()
+                timeline.record_goal_change(
+                    goal="max" if target_on else "custom",
+                    previous_goal="max" if before_on else "custom",
+                    before={
+                        "goal": "max" if before_on else "custom",
+                        "max_fans": before_on,
+                        "saved_curve": before_mf.get("saved_curve"),
+                    },
+                    after={
+                        "goal": "max" if target_on else "custom",
+                        "max_fans": bool(after_mf.get("enabled")),
+                        "saved_curve": after_mf.get("saved_curve"),
+                    },
+                    profile=active_name,
+                )
+            except OSError:
+                pass
 
         def on():
+            before_mf = max_fans_state.load()
             try:
                 info = c.get_fancurve()
                 pts = info.get("points") or []
@@ -575,9 +600,11 @@ class DashboardUI(QMainWindow):
                 pass
             c.set_fans_max()
             max_fans_state.save(enabled=True)
+            _record(before_mf, True)
             return "Max Fans ON — both fans at 100%"
 
         def off():
+            before_mf = max_fans_state.load()
             kind, saved = max_fans_state.restore_plan()
             curve = self.control.active().get("fan_curve")
             if kind == "curve":
@@ -587,9 +614,13 @@ class DashboardUI(QMainWindow):
             else:
                 c.reset_fancurve()
             max_fans_state.save(enabled=False)
+            _record(before_mf, False)
             return "Max Fans OFF — profile curve restored"
 
         self.control._submit("Max Fans", on if checked else off)
+
+    def read_timeline(self, limit=50):
+        return timeline.read_entries(limit=limit, newest_first=True)
 
     # ------------------------------------------------------------------
     # Lighting

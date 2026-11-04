@@ -55,6 +55,10 @@ _HOST_LIB = os.path.expanduser("~/.local/lib/z13-helper")
 if os.path.isdir(_HOST_LIB) and _HOST_LIB not in sys.path:
     sys.path.append(_HOST_LIB)
 import host  # noqa: E402
+try:
+    import timeline  # noqa: E402
+except ImportError:
+    timeline = None
 
 Z13CTL_WRITE_TIMEOUT_S = host.Z13CTL_WRITE_TIMEOUT_S
 # Enter/exit hooks are arbitrary host commands, not z13ctl writes: keep their
@@ -1004,6 +1008,30 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
     Returns a list of (step, ok, message). `previous` is the profile we are
     leaving (its exit hook runs first).
     """
+    before_max_fans = bool(_max_fans_state().get("enabled"))
+    results = _apply_steps(
+        profile,
+        previous=previous,
+        z13ctl=z13ctl,
+        skip_hooks=skip_hooks,
+        login_battery_default=login_battery_default,
+    )
+    if timeline is not None:
+        try:
+            timeline.record_profile_apply(
+                profile=profile,
+                previous=previous,
+                results=results,
+                before_max_fans=before_max_fans,
+                after_max_fans=bool(_max_fans_state().get("enabled")),
+            )
+        except OSError:
+            pass
+    return results
+
+
+def _apply_steps(profile, *, previous=None, z13ctl=Z13CTL,
+                 skip_hooks=False, login_battery_default=None):
     results = []
 
     timed_out = False
