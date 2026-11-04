@@ -531,6 +531,8 @@ Not issues (checked, nothing to do): the RDNA1/2 dedicated-GPU resume fix (Strix
 
 Pick: none recorded yet. Hold FPS is neither confirmed nor a no-go until the owner runs a game with MangoHud logging on and records the lag and the overhead; 15f keeps hiding Hold FPS until `fps_source.read()` returns a number on the device.
 
+**15e Comfort sensor note (#127, 2026-11-04, desk work only; no run recorded, no constants chosen):** the candidates are Tctl (`k10temp`), `acpitz`, the NVMe composite, the battery (`BAT0/temp`) and the GPU edge, all read by `SensorReader.get_comfort_candidates()` (hwmon and power_supply only, never an Armoury file). `tooling/z13_comfort_probe.py sample --phase idle|game|load --external-c <°C>` appends a row pairing them with an IR-thermometer reading on the back panel; `fit FILE` ranks each candidate by RMSE of `external = offset + slope * reading`. Still to do on the Z13: one run each of idle, game and sustained load, then write the chosen sensor, offset, slope and any lag as constants for `goal_control.py` here. A lag model is not fitted yet; add it only if the residuals of the linear fit show a lag.
+
 ## 10b. Phase 16 — Hardware as the interface 💤 after 1.0 (added 2026-11-01, the owner's pick)
 **Why:** the Z13 is mostly a tablet, and the app is a dense mouse-sized form. Phase 16 makes the machine's own lights and button carry the everyday interactions, and gives the windows one touch-first look shared by the desktop and Game Mode.
 
