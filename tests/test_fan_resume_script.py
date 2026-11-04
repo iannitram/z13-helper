@@ -15,7 +15,10 @@ from pathlib import Path
 
 import pytest
 
-SCRIPT = Path(__file__).resolve().parent.parent / "packaging/host/systemd/system/z13-fan-resume.sh"
+SCRIPT = (
+    Path(__file__).resolve().parent.parent
+    / "packaging/host/systemd/system/z13-fan-resume.sh"
+)
 
 pytestmark = pytest.mark.skipif(shutil.which("sh") is None, reason="needs /bin/sh")
 
@@ -77,7 +80,9 @@ def env(tmp_path, real_subprocess):
             "Z13CTL_LOG": str(ctl_log),
             "PROFILE_LOG": str(tmp_path / "profile.txt"),
         }
-        return real_subprocess(["sh", str(SCRIPT)], env=e, capture_output=True, text=True, timeout=20)
+        return real_subprocess(
+            ["sh", str(SCRIPT)], env=e, capture_output=True, text=True, timeout=20
+        )
 
     run.home, run.stubs = home, stubs
     run.write_ctl, run.write_profile = write_ctl, write_profile
@@ -100,6 +105,21 @@ def test_profile_restore_runs_as_deck_not_root(env):
     assert "re-applied active profile" in env.logger_log.read_text()
 
 
+def test_failed_restore_does_not_write_a_curve(env):
+    # restore ran (rc=1, e.g. a wedged lightbar) but one step failed: the profile
+    # curve it applied must stand. Only a non-running restore uses the fallback.
+    env.write_profile(rc=1)
+    env.write_ctl(rc=0)
+    p = env()
+    assert p.returncode == 0, p.stderr
+    log = env.ctl_log.read_text()
+    assert "fancurve --set" not in log
+    assert "fancurve --reset" not in log
+    assert "fancurve --get" in log
+    assert "ran DIRECTLY" not in log
+    assert "profile restore ran with a failed step" in env.logger_log.read_text()
+
+
 def test_fallback_curve_set_runs_as_deck_not_root(env):
     # No z13-profile at all: forces the fallback path (the one issue #5 found unsafe).
     env.write_ctl(rc=0)
@@ -119,7 +139,7 @@ def test_fallback_reset_runs_as_deck_not_root(env):
     p = env()
     assert p.returncode == 0, p.stderr
     log = env.ctl_log.read_text()
-    assert log.count("ran as deck via runuser") == 2          # --set attempt, then --reset
+    assert log.count("ran as deck via runuser") == 2  # --set attempt, then --reset
     assert "ran DIRECTLY" not in log
     assert "fancurve --reset" in log
     assert "WARN curve re-apply FAILED" in env.logger_log.read_text()
