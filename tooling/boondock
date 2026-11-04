@@ -21,9 +21,9 @@ set -uo pipefail
 # ---------- tunables ----------
 # Paths are overridable from the environment so tests can run the script against stubs.
 Z=${BOONDOCK_Z13CTL:-/home/deck/.local/bin/z13ctl}
+ZP=${BOONDOCK_Z13_PROFILE:-/home/deck/.local/bin/z13-profile}
 STATE=${BOONDOCK_STATE:-/home/deck/.local/state/boondock.state}
 BL=${BOONDOCK_BACKLIGHT:-/sys/class/backlight/amdgpu_bl0}
-PPT_DIR=${BOONDOCK_PPT_DIR:-/sys/devices/platform/asus-nb-wmi}
 BOONDOCK_BRIGHT_PCT=35                 # screen brightness in boondock mode
 DEFAULT_RESTORE_PCT=80                 # brightness if we restore without a snapshot
 TDP_PL1=20; TDP_PL2=30; TDP_PL3=40     # PPT (sustained/short/fast) in W — 20W keeps background work usable
@@ -35,6 +35,23 @@ mkdir -p "$(dirname "$STATE")"
 bright_max() { cat "$BL/max_brightness"; }
 set_bright_pct() { local pct=$1 max; max=$(bright_max); local v=$(( max * pct / 100 )); echo "$v" | sudo tee "$BL/brightness" >/dev/null; }
 say() { printf '  %s\n' "$*"; }
+
+# The active app profile and its stored TDP: never read live ppt_* values
+# (ROADMAP principle 5). Empty when z13-profile is not installed.
+profile_active() { [ -x "$ZP" ] && "$ZP" active 2>/dev/null; }
+profile_tdp() {
+  local name=$1 field=$2
+  [ -n "$name" ] && [ -x "$ZP" ] || return 1
+  "$ZP" show "$name" 2>/dev/null | python3 -c '
+import json, sys
+try:
+    tdp = json.load(sys.stdin).get("tdp") or {}
+except Exception:
+    sys.exit(1)
+value = tdp.get(sys.argv[1])
+print("" if value is None else value)
+' "$field" 2>/dev/null
+}
 
 # The state file holds two independent groups of keys: session keys (brightness, svc)
 # and hardware keys (profile, pl1..pl3). Each operation rewrites only its own.
@@ -98,11 +115,18 @@ do_session_off() {
 do_hw_on() {
   echo "🏕️  boondock hardware ON"
   state_drop "$HW_KEYS"
+  local active p1 p2 p3
+  active=$(profile_active)
   {
-    echo "profile=$(cat "$PROFILE_SYSFS" 2>/dev/null)"
-    echo "pl1=$(cat "$PPT_DIR/ppt_pl1_spl" 2>/dev/null)"
-    echo "pl2=$(cat "$PPT_DIR/ppt_pl2_sppt" 2>/dev/null)"
-    echo "pl3=$(cat "$PPT_DIR/ppt_fppt" 2>/dev/null)"
+    if [ -n "$active" ]; then
+      echo "profile=$active"
+      p1=$(profile_tdp "$active" pl1); p2=$(profile_tdp "$active" pl2); p3=$(profile_tdp "$active" pl3)
+      [ -n "$p1" ] && echo "pl1=$p1"
+      [ -n "$p2" ] && echo "pl2=$p2"
+      [ -n "$p3" ] && echo "pl3=$p3"
+    else
+      echo "profile=$(cat "$PROFILE_SYSFS" 2>/dev/null)"
+    fi
   } >> "$STATE"
   "$Z" profile --set quiet >/dev/null 2>&1; say "profile → quiet (low-power)"
   # z13ctl only (no sudo, no sysfs writes): it has the udev/perms grants as deck.
@@ -112,10 +136,26 @@ do_hw_on() {
 
 do_hw_off() {
   echo "🔌 boondock hardware OFF — restoring"
-  local p p1 p2 p3; p=$(state_get profile); p1=$(state_get pl1); p2=$(state_get pl2); p3=$(state_get pl3)
+  local p p1 p2 p3 restored_by_profile=0
+  p=$(state_get profile); p1=$(state_get pl1); p2=$(state_get pl2); p3=$(state_get pl3)
   if [ -n "$p$p1" ]; then
-    [ -n "$p" ]  && { "$Z" profile --set "$p" >/dev/null 2>&1; say "profile → $p"; }
-    [ -n "$p1" ] && { "$Z" tdp --set "$p1" --pl2 "${p2:-$p1}" --pl3 "${p3:-$p1}" >/dev/null 2>&1; say "TDP → ${p1}/${p2}/${p3}W"; }
+    case "$p" in
+      quiet|balanced|performance)
+        [ -n "$p" ] && { "$Z" profile --set "$p" >/dev/null 2>&1; say "profile → $p"; }
+        ;;
+      *)
+        if [ -n "$p" ] && [ -x "$ZP" ] && "$ZP" apply "$p" >/dev/null 2>&1; then
+          say "profile → $p (restored)"
+          restored_by_profile=1
+        elif [ -n "$p" ]; then
+          say "profile restore failed: $p"
+        fi
+        ;;
+    esac
+    if [ -n "$p1" ] && [ "$restored_by_profile" -eq 0 ]; then
+      "$Z" tdp --set "$p1" --pl2 "${p2:-$p1}" --pl3 "${p3:-$p1}" >/dev/null 2>&1 \
+        && say "TDP → ${p1}/${p2:-$p1}/${p3:-$p1}W"
+    fi
     state_drop "$HW_KEYS"
   else
     say "no snapshot — restoring to defaults"
@@ -131,7 +171,7 @@ do_off() { do_hw_off; do_session_off; echo "  → beast mode restored."; }
 do_status() {
   local max cur pct; max=$(bright_max); cur=$(cat "$BL/brightness"); pct=$(( cur * 100 / max ))
   echo "boondock status:"
-  say "brightness: ${pct}%   profile: $(cat "$PROFILE_SYSFS" 2>/dev/null)   TDP(PL1): $(cat $PPT_DIR/ppt_pl1_spl 2>/dev/null)W"
+  say "brightness: ${pct}%   profile: $(cat "$PROFILE_SYSFS" 2>/dev/null)"
   for s in "${BG_SERVICES[@]}"; do say "service $s: $(systemctl --user is-active "$s" 2>/dev/null)"; done
   [ -f "$STATE" ] && say "MODE: boondock ON (snapshot present)" || say "MODE: normal (no snapshot)"
 }
