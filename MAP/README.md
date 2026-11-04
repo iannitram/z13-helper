@@ -102,7 +102,7 @@ Modules planned by Phases 15 and 16 (`docs/ROADMAP.md` §10a, §10b). Each moves
 | `src/fps_source.py` | planned | Read-only frame-rate reading in Game Mode (source chosen by the probe). | #126 |
 | `src/hw_signals.py` | planned | Event → lightbar pattern mapping with priority, rate limit and restore; played through `hardware_controller.py`. | #129, #130 |
 | `src/evdev_listener.py` (gestures) | planned | Hold or double-press on the side button cycles profiles/goals. | #131 |
-| shared touch UI | planned | Desktop window and QAM from one set of parts; shape decided in `docs/adr/0002-shared-touch-ui.md`. | #132, #133 |
+| shared touch UI | planned | Desktop window and QAM from one set of parts; shape to be decided in an ADR (#132, not yet written). | #132, #133 |
 | `src/timeline.py` | planned | Append-only `~/.local/state/z13-helper/timeline.jsonl` of hardware and host changes with Phase 12c rollback records; written by `profiles.py`, `goal_runner.py`, `install.sh`. | #134 |
 | timeline view | planned | Compare and roll back, beside `updates_dialog.py` and in the QAM. | #135 |
 
@@ -133,7 +133,7 @@ flowchart LR
 | `tooling/z13_cdp.py` | Dependency-free CDP bridge to Steam's Game Mode UI (opens the side menus without input emulation) and the Decky frontend check. Key: `eval_js`, `open_qam`, `open_main_menu`, `decky_frontend_check`. Used by `z13-button-watcher` and `install.sh`. |
 | `tooling/z13-button-watcher` | Game Mode side-button service (single tap: Quick Access Menu, double tap: Steam menu); in Desktop Mode it starts the app when it is not running. Uses `z13_cdp.py`; unit in `packaging/host/systemd/user/`. |
 | `tooling/z13_qam.py`, `tooling/spike1_qam_test.py` | `z13_qam.py` is the back-compat alias of `z13_cdp.py`; `spike1_qam_test.py` is the by-hand Game Mode check that imports it. |
-| `tooling/rss_watch.py` | Bounded RSS sampler for one process identified by PID and start time (used on the Decky backend). |
+| `tooling/rss_watch.py` | Bounded RSS sampler for one process identified by PID and start time (no caller yet; only `tests/test_rss_watch.py` references it). |
 | `tooling/screenshots.py` | Renders the README screenshots offscreen from the real app code inside the Flatpak. |
 | `tooling/build_crash_config.py` | Bakes the private bug-drop build variables into an ignored packaging input (the real crash build configuration); never prints credentials. |
 | `tooling/z13ctl-install/` | Known-good z13ctl release kept as a rollback (`latest-release.json`, the tarball and its sha256 note); no code on this branch reads it, `installers.py` downloads and verifies the release itself. |
