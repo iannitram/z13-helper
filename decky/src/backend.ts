@@ -100,3 +100,16 @@ export async function safely<T extends ApplyResult>(p: Promise<T>): Promise<T | 
     return { ok: false, saved: false, message: `Backend error: ${String(e)}` };
   }
 }
+
+// ---- Machine timeline (Phase 16g) ----
+export interface TimelineEntry {
+  id: string;
+  ts: string;
+  kind: string;
+  summary: string;
+  ok: boolean;
+  changed: string[];
+  rollback: Record<string, unknown> | null;
+  no_rollback_reason: string | null;
+}
+export const getTimeline = callable<[limit: number], TimelineEntry[]>("get_timeline");

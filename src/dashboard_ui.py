@@ -43,6 +43,7 @@ from apply_worker import ApplyWorker
 from profile_control import ProfileControl
 from fans_window import FansWindow
 from updates_dialog import UpdatesDialog, UpdateCheckThread
+from timeline_dialog import TimelineDialog
 from theme import (STYLESHEET, ModeTile, Panel, pill, tip, ECO, STANDARD, TURBO, CUSTOM,
                    ACCENT_FOR_BASE, BORDER)
 from evdev_listener import find_side_button_device, EvdevListener, GestureDetector
@@ -135,6 +136,7 @@ class DashboardUI(QMainWindow):
         self.control.profile_applied.connect(self._on_profile_applied)
         self._fans_window = None
         self._updates_dialog = None
+        self._timeline_dialog = None
         self._update_thread = None
         self._new_updates = []
         self.screen = ScreenBrightness(QDBusConnection.sessionBus())
@@ -213,6 +215,9 @@ class DashboardUI(QMainWindow):
         upd = QAction("Updates…", self)
         upd.triggered.connect(self._open_updates)
         file_menu.addAction(upd)
+        tl = QAction("Timeline…", self)
+        tl.triggered.connect(self._open_timeline)
+        file_menu.addAction(tl)
         file_menu.addSeparator()
         hide = QAction("Hide to Tray", self)
         hide.setShortcut("Ctrl+H")
@@ -498,9 +503,12 @@ class DashboardUI(QMainWindow):
         foot.setSpacing(6)
         self.btn_updates = QPushButton("Updates")
         self.btn_updates.clicked.connect(self._open_updates)
+        self.btn_timeline = QPushButton("Timeline")
+        self.btn_timeline.clicked.connect(self._open_timeline)
         self.btn_quit = QPushButton("Quit")
         self.btn_quit.clicked.connect(self._user_quit)
         foot.addWidget(self.btn_updates)
+        foot.addWidget(self.btn_timeline)
         foot.addWidget(self.btn_quit)
         col.addLayout(foot)
         col.addStretch(1)
@@ -875,6 +883,13 @@ class DashboardUI(QMainWindow):
             return
         self._last_crash_notice = time.monotonic()
         self._tray.showMessage("Z13-Helper", text, QSystemTrayIcon.MessageIcon.Warning, 6000)
+
+    def _open_timeline(self):
+        if self._timeline_dialog is None:
+            self._timeline_dialog = TimelineDialog(self.control, self)
+        self._timeline_dialog.populate()
+        self._timeline_dialog.show()
+        self._timeline_dialog.raise_()
 
     def _open_updates(self):
         if self._updates_dialog is None:

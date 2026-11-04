@@ -39,6 +39,7 @@ Decky re-reads shared state when its methods need it rather than holding a long-
 | `decky/src/components/BatteryLimit.tsx` | Battery charge limit control. |
 | `decky/src/components/KeyboardBrightness.tsx` | Keyboard brightness control. |
 | `decky/src/components/Telemetry.tsx` | APU/GPU temperatures and fan RPM display. |
+| `decky/src/components/Timeline.tsx` | Newest five timeline entries (`get_timeline`); an entry that can't be undone says why. Compare and roll back are desktop-only. |
 | Installed plugin `py_modules/fan_watchdog.py` | Root-owned installed copy of `src/fan_watchdog.py`; dropped-curve and fan-stall recovery logic. |
 | Installed plugin `py_modules/sensor_reader.py` | Root-owned installed copy of `src/sensor_reader.py`; read-only hwmon collection. |
 | Installed plugin `py_modules/power_range.py` | Root-owned installed copy of `src/power_range.py`; per-rail metadata bounds matching z13ctl backend selection. |

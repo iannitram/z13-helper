@@ -997,7 +997,7 @@ def lighting_argv(device, setting, brightness, z13ctl=Z13CTL):
 
 
 def apply(profile, *, previous=None, z13ctl=Z13CTL,
-          skip_hooks=False, login_battery_default=None):
+          skip_hooks=False, login_battery_default=None, record=True):
     """Put the machine into the state `profile` describes.
 
     Order matters: the platform-profile write makes asus-wmi drop any custom
@@ -1006,7 +1006,8 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
     rest. Each step is independent so one failure doesn't block the others.
 
     Returns a list of (step, ok, message). `previous` is the profile we are
-    leaving (its exit hook runs first).
+    leaving (its exit hook runs first). `record=False` skips the timeline entry (a timeline
+    rollback writes its own).
     """
     before_max_fans = bool(_max_fans_state().get("enabled"))
     results = _apply_steps(
@@ -1016,7 +1017,7 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
         skip_hooks=skip_hooks,
         login_battery_default=login_battery_default,
     )
-    if timeline is not None:
+    if timeline is not None and record:
         try:
             timeline.record_profile_apply(
                 profile=profile,
