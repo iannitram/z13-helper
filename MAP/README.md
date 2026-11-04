@@ -86,7 +86,7 @@ Modules planned by Phases 15 and 16 (`docs/ROADMAP.md` §10a, §10b). Each moves
 | `src/profiles.py` (`goal` field) | planned | Optional per-profile goal; `max_fans` migrates to goal `max`. | #124 |
 | `src/goal_runner.py` | planned | The one curve/TDP writer while a goal is active; reads `sensor_reader.py` and `fps_source.py`, writes through `apply_worker.py` (desktop) or `decky/main.py` (Game Mode), coordinated by the #23 state owner; takes over `fan_watchdog.py`'s curve-drop recovery. | #125 |
 | `src/fps_source.py` | planned | Read-only frame-rate reading in Game Mode (source chosen by the probe). | #126 |
-| `src/hw_signals.py` | planned | Event → lightbar pattern mapping with priority, rate limit and restore; played through `hardware_controller.py`. | #129, #130 |
+| `src/hw_signals.py` | present (mapping, #129); runner planned (#130) | Pure event → lightbar pattern mapping: signals (profile change, throttling, charge limit, update attention) with priority, one-shot expiry, a 2 s write rate limit, restore of the owner's lighting and an off switch. No I/O or clock; the runner (#130) plays it through `hardware_controller.py`. | #129, #130 |
 | `src/evdev_listener.py` (gestures) | planned | Hold or double-press on the side button cycles profiles/goals. | #131 |
 | shared touch UI | planned | Desktop window and QAM from one set of parts; shape decided in `docs/adr/0002-shared-touch-ui.md`. | #132, #133 |
 | `src/timeline.py` | planned | Append-only `~/.local/state/z13-helper/timeline.jsonl` of hardware and host changes with Phase 12c rollback records; written by `profiles.py`, `goal_runner.py`, `install.sh`. | #134 |
