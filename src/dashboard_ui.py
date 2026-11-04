@@ -837,9 +837,11 @@ class DashboardUI(QMainWindow):
                 self.refresh_combo.setCurrentIndex(self.refresh_combo.count() - 1)
         self.refresh_combo.setEnabled(bool(choices))
         self.refresh_back.setEnabled(self._refresh_ctl.previous is not None)
-        self.refresh_panel.right.setText("" if choices else "no modes reported")
+        note = getattr(self, "_refresh_note", "")
+        self.refresh_panel.right.setText(note or ("" if choices else "no modes reported"))
 
     def _run_refresh(self, fn):
+        self._refresh_note = ""
         self.refresh_combo.setEnabled(False)
         self.refresh_back.setEnabled(False)
 
@@ -857,7 +859,10 @@ class DashboardUI(QMainWindow):
         self._run_refresh(self._refresh_ctl.back)
 
     def _refresh_finished(self, ok, msg):
-        self.refresh_panel.right.setText(msg)
+        # Kept in a note so the reload below does not clear it; a failure or
+        # rollback is marked, a success shows the message as is.
+        self._refresh_note = msg if ok else f"⚠ {msg}"
+        self.refresh_panel.right.setText(self._refresh_note)
         self._load_refresh_choices()
 
     def _open_updates(self):
