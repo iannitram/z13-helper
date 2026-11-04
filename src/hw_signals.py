@@ -15,6 +15,7 @@ PROFILE_CHANGED = "profile_changed"
 THROTTLING = "throttling"
 CHARGE_LIMIT = "charge_limit"
 UPDATE_ATTENTION = "update_attention"
+GOAL_NOT_MET = "goal_not_met"
 
 # Strict rate limit: the lightbar wedges under write bursts (Phase 7). Minimum seconds
 # between two lightbar writes of any kind, and the longest a one-shot pattern may show.
@@ -45,6 +46,7 @@ SIGNALS: Mapping[str, Signal] = {
     s.event: s for s in (
         Signal(PROFILE_CHANGED, 10, Pattern("static", "green"), ONE_SHOT_S),
         Signal(CHARGE_LIMIT, 20, Pattern("static", "cyan", "low"), None),
+        Signal(GOAL_NOT_MET, 25, Pattern("breathe", "yellow"), None),
         Signal(UPDATE_ATTENTION, 30, Pattern("static", "orange"), None),
         Signal(THROTTLING, 40, Pattern("breathe", "red"), None),
     )

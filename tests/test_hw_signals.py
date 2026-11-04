@@ -60,3 +60,15 @@ def test_off_switch_never_plays_and_restores_once():
     shown = hs.SIGNALS[hs.THROTTLING].pattern
     assert hs.next_action(active, shown, now=9.0, last_write=0.0, enabled=False,
                           restore=own) == ("restore", own)
+
+
+def test_goal_not_met_has_its_own_sticky_pattern_between_limit_and_update():
+    sig = hs.signal_for(hs.GOAL_NOT_MET)
+    assert sig is not None and sig.duration_s is None
+    assert hs.signal_for(hs.CHARGE_LIMIT).priority < sig.priority < hs.signal_for(hs.UPDATE_ATTENTION).priority
+    assert hs.active_signal({hs.GOAL_NOT_MET: 0.0}, 9999) is sig
+    assert hs.active_signal({hs.GOAL_NOT_MET: 0.0, hs.CHARGE_LIMIT: 0.0}, 5) is sig
+    assert hs.active_signal({hs.GOAL_NOT_MET: 0.0, hs.THROTTLING: 0.0}, 5).event == hs.THROTTLING
+    assert hs.next_action({hs.GOAL_NOT_MET: 0.0}, None, now=0.0, last_write=None) == ("play", sig.pattern)
+    patterns = [s.pattern for s in hs.SIGNALS.values()]
+    assert len(set(patterns)) == len(patterns)
