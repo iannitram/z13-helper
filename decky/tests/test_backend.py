@@ -696,12 +696,14 @@ class TelemetryTest(unittest.TestCase):
         sensor_reader.HWMON_ROOT, m._sensors = self._orig
 
     def test_by_name(self):
-        self.assertEqual(m.telemetry(), {"apu": 52.5, "gpu": 48.0, "fan1": 2100, "fan2": 2250})
+        self.assertEqual(m.telemetry(), {"apu": 52.5, "apu_src": "ACPI", "gpu": 48.0, "gpu_src": "amdgpu edge",
+                                         "fan1": 2100, "fan2": 2250})
 
     def test_missing_nodes_are_none(self):
         sensor_reader.HWMON_ROOT = tempfile.mkdtemp(prefix="z13-empty-")
         m._sensors = sensor_reader.SensorReader()
-        self.assertEqual(m.telemetry(), {"apu": None, "gpu": None, "fan1": None, "fan2": None})
+        self.assertEqual(m.telemetry(), {"apu": None, "apu_src": None, "gpu": None, "gpu_src": None,
+                                         "fan1": None, "fan2": None})
 
 
 class StalledSensors:

@@ -132,3 +132,66 @@ def test_expected_fan_pwm_max_fans_curve(hwmon):
     assert s.expected_fan_pwm(19) == 0
     assert s.expected_fan_pwm(20) == 255
     assert s.expected_fan_pwm(36 - 3) == 255
+
+
+# --- labeled CPU / GPU temperatures (#25) ---
+
+def test_cpu_temp_falls_back_to_labeled_acpi(machine):
+    assert SensorReader().get_cpu_temp() == (45.5, "ACPI")
+
+
+def test_cpu_temp_prefers_k10temp_tdie_over_tctl(machine):
+    make_hwmon(machine, 4, "k10temp", {"temp1_input": 71000, "temp1_label": "Tctl",
+                                       "temp2_input": 62000, "temp2_label": "Tdie"})
+    assert SensorReader().get_cpu_temp() == (62.0, "k10temp Tdie")
+
+
+def test_cpu_temp_uses_tctl_when_no_tdie(machine):
+    make_hwmon(machine, 4, "k10temp", {"temp1_input": 71000, "temp1_label": "Tctl"})
+    assert SensorReader().get_cpu_temp() == (71.0, "k10temp Tctl")
+
+
+def test_cpu_temp_ignores_unlabeled_k10temp(machine):
+    make_hwmon(machine, 4, "k10temp", {"temp1_input": 99000})
+    assert SensorReader().get_cpu_temp() == (45.5, "ACPI")
+
+
+def test_cpu_temp_unavailable_is_none_not_zero(hwmon):
+    make_hwmon(hwmon, 1, "acpitz", {})                 # node present, value unreadable
+    assert SensorReader().get_cpu_temp() is None
+    assert SensorReader().get_apu_temp() is None
+
+
+def test_gpu_temp_labeled_names_the_sensor(machine):
+    assert SensorReader().get_gpu_temp_labeled() == (51.0, "amdgpu edge")
+    make_hwmon(machine, 12, "amdgpu", {"temp1_input": 52000, "temp1_label": "junction"})
+    assert SensorReader().get_gpu_temp_labeled() == (52.0, "amdgpu junction")
+
+
+def test_gpu_unreadable_is_none(hwmon):
+    make_hwmon(hwmon, 2, "amdgpu", {})
+    assert SensorReader().get_gpu_temp_labeled() is None
+    assert SensorReader().get_gpu_temp() is None
+
+
+def test_gpu_chosen_by_boot_vga_not_index(hwmon):
+    # eGPU enumerates first (hwmon1), the APU's GPU (boot_vga=1) is hwmon5.
+    egpu = make_hwmon(hwmon, 1, "amdgpu", {"temp1_input": 80000})
+    (egpu / "device").mkdir()
+    (egpu / "device" / "boot_vga").write_text("0\n")
+    apu = make_hwmon(hwmon, 5, "amdgpu", {"temp1_input": 44000})
+    (apu / "device").mkdir()
+    (apu / "device" / "boot_vga").write_text("1\n")
+    s = SensorReader()
+    assert s.get_gpu_temp() == 44.0
+
+
+def test_gpu_without_boot_vga_picks_lowest_pci_address(hwmon, tmp_path):
+    pci = tmp_path / "pci"
+    for addr in ("0000:c3:00.0", "0000:03:00.0"):
+        (pci / addr).mkdir(parents=True)
+    a = make_hwmon(hwmon, 1, "amdgpu", {"temp1_input": 80000})
+    b = make_hwmon(hwmon, 2, "amdgpu", {"temp1_input": 44000})
+    (a / "device").symlink_to(pci / "0000:c3:00.0")
+    (b / "device").symlink_to(pci / "0000:03:00.0")
+    assert SensorReader().get_gpu_temp() == 44.0

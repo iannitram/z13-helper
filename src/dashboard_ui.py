@@ -815,18 +815,21 @@ class DashboardUI(QMainWindow):
 
     def _tick(self):
         try:
-            apu = self.sensors.get_apu_temp()
-            gpu = self.sensors.get_gpu_temp()
+            cpu = self.sensors.get_cpu_temp()
+            gpu = self.sensors.get_gpu_temp_labeled()
             fan1, fan2 = self.sensors.get_fan_speeds()
             parts = []
-            if apu is not None:
-                parts.append(f"CPU {apu:.0f}°C")
-            if gpu is not None:
-                parts.append(f"GPU {gpu:.0f}°C")
+            for name, got in (("CPU", cpu), ("GPU", gpu)):
+                if got is None:
+                    parts.append(f"{name} unavailable")
+                else:
+                    parts.append(f"{name} {got[0]:.0f}°C ({got[1]})")
             if fan1 is not None and fan2 is not None:
                 parts.append(f"Fans {fan1}/{fan2}RPM")   # fan1 = CPU side, fan2 = GPU side
             elif fan1 is not None:
                 parts.append(f"Fan {fan1}RPM")
+            else:
+                parts.append("Fans unavailable")
             text = "  ".join(parts)
             self.perf.right.setText(text)
             if self._tray is not None:
