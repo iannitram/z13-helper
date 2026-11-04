@@ -24,7 +24,7 @@ flowchart LR
 The backend runs as the `deck` user under Decky Loader. `decky/main.py` imports shared helpers from its `py_modules/` directory; `install.sh` and `tooling/install_check.py` source those files from `src/` and install the copies root-owned. Root ownership protects the code files; it does not mean the backend runs as root. `src/host.py` chooses an execution mode from the process environment. When Decky is already running as `deck`, `as_deck=True` supplies Deck's runtime and session-bus environment without `runuser`; `runuser -u deck` is used only if a root-mode process requests it. Calls to z13ctl go through `host.run()` and use the existing user daemon/socket.
 
 The desktop app, installed `z13-profile` CLI and Decky share the same state authority.
-Production field edits and Max Fans call `state_authority` from root-owned copies;
+Production field edits, Max Fans and the direct platform-profile switch call `state_authority` from root-owned copies;
 full profile selection invokes the host engine, which uses that same authority.
 All thermal writes carry named targets after a JSON API probe. The authority holds
 a process-shared lock across complete applies and fan recoveries, in addition to
@@ -43,7 +43,7 @@ compatibility test coverage; production setters use the shared authority.
 
 | Path | Responsibility |
 |---|---|
-| `decky/main.py` | Decky backend and callable API. Profile reads/switches, Max Fans, direct performance profile, power, battery limit, brightness, telemetry, desktop-app check and Game Mode watchdog lifecycle. Each z13ctl write uses `host.Z13CTL_WRITE_TIMEOUT_S` (20 s); a profile apply gets its own 180 s budget (`PROFILE_APPLY_TIMEOUT_S`). Write callables (`set_app_profile`, `set_profile`, `set_max_fans`) return `{ok, message}`, so a timeout reaches the panel as text. |
+| `decky/main.py` | Decky backend and callable API. Profile reads/switches, Max Fans, direct performance profile (`set_profile` via the shared authority), power, battery limit, brightness, telemetry, desktop-app check and Game Mode watchdog lifecycle. Each z13ctl write uses `host.Z13CTL_WRITE_TIMEOUT_S` (20 s); a profile apply gets its own 180 s budget (`PROFILE_APPLY_TIMEOUT_S`). Write callables (`set_app_profile`, `set_profile`, `set_max_fans`) return `{ok, message}`, so a timeout reaches the panel as text. |
 | `decky/src/index.tsx` | QAM panel composition, profile switch flow and `profile_state` event refresh with listener cleanup. |
 | Installed plugin `py_modules/state_authority.py`, `z13ctl_client.py`, `z13ctl_profiles.py`, `state_stream.py`, `state_events.py` | Root-owned shared authority, socket protocol, pure mapping/dispatch and host event stream. |
 | Installed plugin `py_modules/profiles.py`, `hardware_controller.py`, `max_fans_state.py`, `epp.py` | Root-owned dependencies of shared field edits, Max Fans and fan recovery. |

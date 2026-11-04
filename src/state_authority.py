@@ -229,6 +229,14 @@ def set_lighting(name, device, setting, brightness):
 
 
 @serialized
+def set_platform_profile(profile, *, z13ctl=None, timeout=None):
+    """Switch the firmware platform profile under the shared hardware lock."""
+    z13ctl = z13ctl or os.path.expanduser('~/.local/bin/z13ctl')
+    timeout = host.Z13CTL_WRITE_TIMEOUT_S if timeout is None else timeout
+    return run([z13ctl, 'profile', '--set', profile], timeout=timeout)
+
+
+@serialized
 def recover_performance():
     """Reapply the current named performance state, without hooks or lighting.
 

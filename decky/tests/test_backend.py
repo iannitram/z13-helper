@@ -4,6 +4,7 @@ Run from the repo root:  python3 -m unittest discover -s decky/tests -v
 """
 
 import asyncio
+import contextlib
 import importlib.util
 import io
 import json
@@ -264,6 +265,23 @@ class StoreTest(unittest.TestCase):
         result = asyncio.run(m.Plugin().set_app_profile("Boondock"))
         self.assertEqual(result["message"],
                          "z13ctl write timed out after 20 s (kernel asus-wmi hang?) (step: fans)")
+
+    def test_set_profile_takes_the_shared_authority_lock(self):
+        run = fake_host(self)
+        held = []
+        real = state_authority.transaction
+
+        @contextlib.contextmanager
+        def watching():
+            with real():
+                held.append(True)
+                yield
+
+        with mock.patch.object(state_authority, "transaction", watching):
+            result = asyncio.run(m.Plugin().set_profile("balanced"))
+        self.assertTrue(result["ok"])
+        self.assertTrue(held)
+        self.assertIn([m.Z13CTL, "profile", "--set", "balanced"], run.argvs)
 
     def test_profile_timeout_without_step_keeps_bare_message(self):
         output = "z13ctl write timed out after 20 s (kernel asus-wmi hang?)\n"

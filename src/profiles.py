@@ -966,17 +966,19 @@ def clear_z13ctl_default_custom_tdp(*, z13ctl=Z13CTL):
         return False, ("tdp", False,
                        help_text or f"could not check z13ctl capabilities (rc={rc})")
 
+    # Only the socket's JSON profile-list proves the daemon honours the target
+    # field; the CLI firmware listing proves neither capability.
+    try:
+        client = authority.named_client()
+    except (OSError, RuntimeError) as exc:
+        return False, ("tdp", False, f"could not verify z13ctl daemon profile support ({exc})")
+    if client is None:
+        return False, ("tdp", False, "could not verify z13ctl daemon profile support")
     rc, listing, _ = host.run([z13ctl, "profile", "--list"], timeout=15)
     if rc != 0:
         return False, ("tdp", False,
-                       listing or f"could not verify z13ctl daemon profile support (rc={rc})")
+                       listing or f"could not read z13ctl profile list (rc={rc})")
     lines = listing.splitlines()
-    has_firmware_header = any(re.match(r"^\s*Firmware profiles:", line, re.IGNORECASE)
-                              for line in lines)
-    has_custom_header = any(re.match(r"^\s*Custom profiles:\s*$", line, re.IGNORECASE)
-                            for line in lines)
-    if not (has_firmware_header and has_custom_header):
-        return False, ("tdp", False, "could not verify z13ctl profile-list output")
     custom = None
     for line in lines:
         # `profile --list` uses a padded 20-character name column; requiring

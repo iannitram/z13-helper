@@ -1,4 +1,5 @@
 """One command owner across frontend edits, full applies, and recovery."""
+from contextlib import contextmanager
 import copy
 import json
 import threading
@@ -265,3 +266,20 @@ def test_per_device_brightness_takes_precedence_over_the_global_default(daemon, 
     profiles.sync_active_from_backend(daemon.state)
     assert profiles.get_profile('Balanced')['brightness'] == 'low'
     assert not fake_host.calls
+
+
+def test_platform_profile_switch_holds_the_shared_hardware_lock(fake_host, monkeypatch):
+    held = []
+    real = authority.transaction
+
+    @contextmanager
+    def watching():
+        with real():
+            held.append(True)
+            yield
+
+    monkeypatch.setattr(authority, 'transaction', watching)
+    result = authority.set_platform_profile('balanced', z13ctl='z13ctl')
+    assert result.rc == 0
+    assert held
+    assert fake_host.argvs == [['z13ctl', 'profile', '--set', 'balanced']]

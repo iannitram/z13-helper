@@ -1142,8 +1142,9 @@ class Plugin:
 
     async def set_profile(self, profile: str) -> dict:
         async with _lock():
-            rc, out = await asyncio.to_thread(
-                _run, [Z13CTL, "profile", "--set", profile], Z13CTL_WRITE_TIMEOUT_S)
+            rc, out, _ = await asyncio.to_thread(
+                authority.set_platform_profile, profile, z13ctl=Z13CTL,
+                timeout=Z13CTL_WRITE_TIMEOUT_S)
         return {"ok": rc == 0, "message": out or (f"{profile} applied" if rc == 0 else
                 f"z13ctl profile failed (rc={rc})")}
 
