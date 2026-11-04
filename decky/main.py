@@ -118,6 +118,34 @@ LIGHTBAR_DAEMON_RESTART_WAIT_S = 2
 LIGHTBAR_DAEMON_STAMP = "/run/user/1000/z13-lightbar-daemon-restart.stamp"
 
 
+def post_update_argv(repo, ack=False):
+    """Host command for the After SteamOS update tab (copy of src/post_update_view.tab_argv:
+    this backend runs as root and can't import src/ modules that are not in py_modules/)."""
+    if not isinstance(repo, str) or not os.path.isabs(repo) or "\n" in repo:
+        raise ValueError("repo path must be absolute")
+    return ["env", f"PYTHONPATH={repo}/tooling:{repo}/src", "python3", "-m", "post_update",
+            "--tab-json"] + (["--ack"] if ack else [])
+
+
+def parse_post_update(out):
+    """The tab status dict from the command output, or None when it is not that JSON."""
+    start = out.find("{")
+    try:
+        data = json.loads(out[start:]) if start >= 0 else None
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) and isinstance(data.get("rows"), list) else None
+
+
+def _repo_path():
+    try:
+        with open(os.path.join(host.DECK_HOME, ".config", "z13-helper", "install.json")) as f:
+            repo = json.load(f).get("repo_path")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return repo if isinstance(repo, str) and os.path.isabs(repo) and "\n" not in repo else None
+
+
 def _run(args, timeout=15, *, as_deck=False):
     """host.run, logged. Returns (rc, out)."""
     rc, out, timed_out = host.run(args, timeout=timeout, as_deck=as_deck)
@@ -1087,6 +1115,20 @@ class Plugin:
                 await asyncio.to_thread(check.check)
             except Exception as e:  # noqa: BLE001
                 decky.logger.error("Desktop app check error: %s", e)
+
+    # ---- After SteamOS update (tooling/post_update, run as deck; checks only) ----
+    async def post_update_status(self, ack: bool = False) -> dict:
+        """{"ok", "message", "status"}; status is the --tab-json dict (None when unavailable)."""
+        repo = _repo_path()
+        if not repo:
+            return {"ok": False, "message": "Run ./install.sh once so the plugin knows the repo.",
+                    "status": None}
+        rc, out = await asyncio.to_thread(
+            lambda: _run(post_update_argv(repo, bool(ack)), 60, as_deck=True))
+        status = parse_post_update(out) if rc == 0 else None
+        return {"ok": status is not None,
+                "message": "" if status is not None else "Could not read the post-update status.",
+                "status": status}
 
     # ---- App profiles (profiles.json, shared with the desktop app) ----
     async def get_profiles(self) -> dict:

@@ -1016,5 +1016,45 @@ class DesktopAppCheckTest(unittest.TestCase):
         self.assertTrue(REAL["DESKTOP_APP_USER_QUIT"].endswith("z13-helper.user-quit"))
 
 
+class PostUpdateTest(unittest.TestCase):
+    def test_argv_is_a_list_with_the_repo_on_pythonpath(self):
+        self.assertEqual(m.post_update_argv("/r", True),
+                         ["env", "PYTHONPATH=/r/tooling:/r/src", "python3", "-m", "post_update",
+                          "--tab-json", "--ack"])
+        with self.assertRaises(ValueError):
+            m.post_update_argv("rel")
+
+    def test_parse_skips_noise_and_rejects_junk(self):
+        self.assertEqual(m.parse_post_update('log\n{"rows": []}'), {"rows": []})
+        self.assertIsNone(m.parse_post_update("nope"))
+        self.assertIsNone(m.parse_post_update('{"rows": 1}'))
+
+    def _call(self, repo, result):
+        calls = []
+
+        def run(argv, timeout=30, *, as_deck=False, input=None):
+            calls.append((argv, as_deck))
+            return result
+
+        with mock.patch.object(m, "_repo_path", return_value=repo), \
+                mock.patch.object(host, "run", run):
+            return asyncio.run(m.Plugin().post_update_status(True)), calls
+
+    def test_status_runs_as_deck_and_returns_the_dict(self):
+        out, calls = self._call("/r", host.Result(0, '{"rows": [], "updated": true}', False))
+        self.assertTrue(out["ok"])
+        self.assertTrue(out["status"]["updated"])
+        self.assertEqual(calls[0][0][-2:], ["--tab-json", "--ack"])
+        self.assertTrue(calls[0][1])
+
+    def test_status_without_repo_or_with_bad_output_is_not_ok(self):
+        out, calls = self._call(None, host.Result(0, "{}", False))
+        self.assertFalse(out["ok"])
+        self.assertEqual(calls, [])
+        out, _ = self._call("/r", host.Result(1, "boom", False))
+        self.assertFalse(out["ok"])
+        self.assertIsNone(out["status"])
+
+
 if __name__ == "__main__":
     unittest.main()

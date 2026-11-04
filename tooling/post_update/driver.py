@@ -5,6 +5,7 @@ lists the tasks, runs the picked ones through `runner.run_plan`, or prints the p
 ones. Every command is an argv list, privileged ones through `sudo -n`. Checks never write.
 """
 
+import json
 import logging
 import os
 import shutil
@@ -17,6 +18,7 @@ from .builtin_4_6 import Sys, builtin_recipes_4_6
 from .cli import parse_args
 from .recipe import order_tasks, plan_text, with_keyring
 from .runner import Env, run_plan
+from .tab import status as tab_status
 
 _log = logging.getLogger(__name__)
 
@@ -144,7 +146,9 @@ def main(argv: Sequence[str], recipes: Sequence | None = None, env: Env | None =
          input_fn=input, dry_run: bool = False) -> int:
     """0 = all picked tasks done (or nothing to do), 1 = a task failed, 2 = bad arguments.
 
-    `--list-pending` prints the ids that need work and changes nothing.
+    `--list-pending` prints the ids that need work and changes nothing. `--tab-json` prints the
+    After SteamOS update tab as JSON (saving the last-seen BUILD_ID); with `--ack` it also clears
+    the re-verify flag.
     """
     argv = list(argv)
     list_pending = "--list-pending" in argv
@@ -154,7 +158,11 @@ def main(argv: Sequence[str], recipes: Sequence | None = None, env: Env | None =
         print(f"post-update: {e}", file=sys.stderr)
         return 2
     home = os.path.expanduser("~")
-    recipes = list(recipes) if recipes is not None else all_recipes(home, escalate=not list_pending)
+    tab_json = "--tab-json" in argv
+    recipes = list(recipes) if recipes is not None else all_recipes(home, escalate=not (list_pending or tab_json))
+    if tab_json:
+        print(json.dumps(tab_status(home, make_hostio(False), recipes, [], ack="--ack" in argv)))
+        return 0
     if list_pending:
         needs = pending(recipes)
         print("Post-update tasks pending: " + (", ".join(r.id for r in needs) if needs else "none"))

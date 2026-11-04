@@ -8,11 +8,12 @@ from PyQt6.QtCore import Qt, QUrl, QThread, pyqtSignal
 from PyQt6.QtGui import QDesktopServices, QColor
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem, QPushButton, QLabel,
-    QAbstractItemView, QHeaderView, QMessageBox, QPlainTextEdit,
+    QAbstractItemView, QHeaderView, QMessageBox, QPlainTextEdit, QTabWidget, QWidget,
 )
 
 import host
 import install_record
+import post_update_view
 import update_watch
 from theme import TURBO, TEXT_DIM
 
@@ -141,6 +142,88 @@ class UpdateCheckThread(QThread):
         self.finished_rows.emit(rows)
 
 
+class PostUpdateThread(QThread):
+    """Runs `python3 -m post_update --tab-json` on the host (checks only; --ack clears the flag)."""
+    done = pyqtSignal(object)
+
+    def __init__(self, repo, ack=False, parent=None):
+        super().__init__(parent)
+        self.repo = repo
+        self.ack = ack
+
+    def run(self):
+        try:
+            res = host.run(post_update_view.tab_argv(self.repo, self.ack), timeout=60)
+            self.done.emit(post_update_view.parse_status(res.out))
+        except Exception:  # noqa: BLE001
+            self.done.emit(None)
+
+
+class PostUpdateTab(QWidget):
+    """The After SteamOS update tab: banner, the attribute check, one row per task."""
+    COLS = ["Task", "State", "What it fixes"]
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        v = QVBoxLayout(self)
+        self.banner = QLabel("")
+        self.banner.setWordWrap(True)
+        v.addWidget(self.banner)
+        self.armoury = QLabel("")
+        self.armoury.setObjectName("dim")
+        v.addWidget(self.armoury)
+        self.table = QTableWidget(0, len(self.COLS))
+        self.table.setHorizontalHeaderLabels(self.COLS)
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        v.addWidget(self.table, 1)
+        h = QHBoxLayout()
+        self.btn_refresh = QPushButton("Re-check")
+        self.btn_refresh.clicked.connect(lambda: self.refresh())
+        self.btn_ack = QPushButton("I re-verified")
+        self.btn_ack.clicked.connect(lambda: self.refresh(ack=True))
+        h.addWidget(self.btn_refresh)
+        h.addWidget(self.btn_ack)
+        h.addStretch(1)
+        h.addWidget(QLabel("Run the tasks with ./install.sh --post-update (SSH or a terminal)."))
+        v.addLayout(h)
+        self._thread = None
+        self.show_status(None, None)
+        self.refresh()
+
+    def refresh(self, ack=False):
+        repo = install_record.repo_path(install_record.load())
+        if not repo:
+            self.show_status(None, "Run ./install.sh once from the repo so the app knows where it is.")
+            return
+        if self._thread and self._thread.isRunning():
+            return
+        self.btn_refresh.setEnabled(False)
+        self._thread = PostUpdateThread(repo, ack, self)
+        self._thread.done.connect(self._done)
+        self._thread.start()
+
+    def _done(self, status):
+        self.btn_refresh.setEnabled(True)
+        self.show_status(status, None if status else "Could not read the post-update status.")
+
+    def show_status(self, status, problem):
+        status = status or post_update_view.EMPTY
+        self.banner.setText(problem or status["banner"] or "No SteamOS update seen since the last look.")
+        self.banner.setStyleSheet(f"color: {TURBO}; font-weight: bold;" if status["banner"] else "")
+        self.armoury.setText(post_update_view.armoury_line(status["armoury"]))
+        self.btn_ack.setEnabled(bool(status["updated"]))
+        rows = status["rows"]
+        self.table.setRowCount(len(rows))
+        for r, row in enumerate(rows):
+            for c, val in enumerate(post_update_view.row_cells(row)):
+                it = QTableWidgetItem(val)
+                if row["state"] in ("needs", "error"):
+                    it.setForeground(QColor(TURBO))
+                self.table.setItem(r, c, it)
+
+
 class UpdatesDialog(QDialog):
     COLS = ["Component", "Installed", "Latest", "Date", "What / why it matters"]
 
@@ -148,7 +231,14 @@ class UpdatesDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Updates — upstream watch")
         self.resize(780, 560)
-        v = QVBoxLayout(self)
+        outer = QVBoxLayout(self)
+        tabs = QTabWidget()
+        outer.addWidget(tabs)
+        watch = QWidget()
+        tabs.addTab(watch, "Upstream watch")
+        self.post_update_tab = PostUpdateTab(self)
+        tabs.addTab(self.post_update_tab, "After SteamOS update")
+        v = QVBoxLayout(watch)
         self.info = QLabel("")
         self.info.setObjectName("dim")
         v.addWidget(self.info)

@@ -100,3 +100,22 @@ export async function safely<T extends ApplyResult>(p: Promise<T>): Promise<T | 
     return { ok: false, saved: false, message: `Backend error: ${String(e)}` };
   }
 }
+
+// ---- After SteamOS update (tooling/post_update --tab-json, checks only) ----
+export interface PostUpdateRow {
+  id: string;
+  title: string;
+  fixes: string;
+  state: string; // needs | fine | info | na | reboot | error
+  detail: string;
+}
+export interface PostUpdateStatus {
+  updated: boolean;
+  banner: string | null;
+  armoury: { state: string; missing: string[] } | null;
+  rows: PostUpdateRow[];
+}
+export const getPostUpdateStatus = callable<
+  [ack: boolean],
+  { ok: boolean; message: string; status: PostUpdateStatus | null }
+>("post_update_status");
