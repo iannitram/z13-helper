@@ -74,6 +74,38 @@ def test_goal_not_met_has_its_own_sticky_pattern_between_limit_and_update():
     assert len(set(patterns)) == len(patterns)
 
 
+def test_charge_limit_source_fires_only_when_the_firmware_stops_at_the_limit():
+    assert hs.charge_limit_reached(80, "Not charging", 80)
+    assert hs.charge_limit_reached(100, "Full", 100)
+    assert not hs.charge_limit_reached(79, "Charging", 80)
+    assert not hs.charge_limit_reached(80, "Discharging", 80)
+    assert not hs.charge_limit_reached(None, "Full", 80)
+
+
+def test_charge_limit_raise_and_clear_reach_the_runner():
+    rig = Rig()
+    rig.runner.raise_event(hs.CHARGE_LIMIT)
+    assert rig.advance(0) == "play"
+    rig.runner.clear_event(hs.CHARGE_LIMIT)
+    assert rig.advance(hs.MIN_WRITE_INTERVAL_S) == "restore"
+
+
+def test_update_attention_source_counts_only_installable_updates():
+    assert hs.updates_need_attention([{"new": True, "installer": "steamos"}])
+    assert hs.updates_need_attention([{"new": True, "installer": "z13ctl"}])
+    assert not hs.updates_need_attention([{"new": True}])          # watch-only row
+    assert not hs.updates_need_attention([{"new": False, "installer": "z13ctl"}])
+    assert not hs.updates_need_attention([])
+
+
+def test_update_attention_raise_and_clear_reach_the_runner():
+    rig = Rig()
+    rig.runner.raise_event(hs.UPDATE_ATTENTION)
+    assert rig.advance(0) == "play"
+    rig.runner.clear_event(hs.UPDATE_ATTENTION)
+    assert rig.advance(hs.MIN_WRITE_INTERVAL_S) == "restore"
+
+
 # --- SignalRunner (issue #130) ---------------------------------------------------------
 
 class Rig:

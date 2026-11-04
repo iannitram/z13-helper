@@ -60,6 +60,29 @@ def signal_for(event: str) -> Optional[Signal]:
     return SIGNALS.get(event)
 
 
+def charge_limit_reached(capacity, status, limit) -> bool:
+    """True while the firmware has stopped charging at the configured limit.
+
+    `capacity` and `limit` are whole percents; `status` is BAT0's status string.
+    Discharging below the limit is not the signal.
+    """
+    if capacity is None or limit is None:
+        return False
+    try:
+        return int(capacity) >= int(limit) and status in ("Full", "Not charging")
+    except (TypeError, ValueError):
+        return False
+
+
+def updates_need_attention(rows) -> bool:
+    """True while an installable upstream update is waiting.
+
+    `rows` is update_watch's row list; watch-only rows (no installer) are
+    roadmap input, not something the lightbar should announce.
+    """
+    return any(r.get("new") and r.get("installer") for r in (rows or []))
+
+
 def active_signal(active: Mapping[str, Optional[float]], now: float) -> Optional[Signal]:
     """Highest-priority signal showing now.
 

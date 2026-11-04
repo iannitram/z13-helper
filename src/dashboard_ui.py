@@ -755,6 +755,10 @@ class DashboardUI(QMainWindow):
         # asusctl, community repos) are roadmap input and live in the dialog.
         new = [r for r in rows if r["new"] and r.get("installer")]
         self._new_updates = new
+        if hw_signals.updates_need_attention(rows):
+            self._signals.raise_event(hw_signals.UPDATE_ATTENTION)
+        else:
+            self._signals.clear_event(hw_signals.UPDATE_ATTENTION)
         n = len(new)
         if n:
             self.version_label.setText(f"Version: {APP_VERSION} — {n} upstream update{'s' if n > 1 else ''}")
@@ -876,8 +880,12 @@ class DashboardUI(QMainWindow):
                 self.power_label.setText(f"On battery · {pw:.1f} W" if pw else "On battery")
             elif st:
                 self.power_label.setText("On AC" + (f" · {st.lower()}" if st not in ("Charging",) else " · charging"))
+            if hw_signals.charge_limit_reached(cap, st, self.config.get("battery_limit")):
+                self._signals.raise_event(hw_signals.CHARGE_LIMIT)
+            else:
+                self._signals.clear_event(hw_signals.CHARGE_LIMIT)
         except Exception:
-            pass
+            self._signals.clear_event(hw_signals.CHARGE_LIMIT)
         # Decides and enqueues only; the recovery runs on the worker.
         self._show_fan_message(self._fan_runner.tick())
         if self.isVisible():
