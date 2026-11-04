@@ -1365,12 +1365,14 @@ def apply(
         nonlocal timed_out
         rc, out, hit_timeout = authority.run(argv, timeout=timeout)
         ok = rc == 0
-        timed_out = hit_timeout
+        timed_out = (
+            hit_timeout and os.path.basename(argv[0]) == os.path.basename(z13ctl)
+        )
         message = (
             ok_msg
             if ok and ok_msg
             else f"z13ctl write timed out after {Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)"
-            if hit_timeout and os.path.basename(argv[0]) == os.path.basename(z13ctl)
+            if timed_out
             else (out or f"rc={rc}")
         )
         results.append((name, ok, message))

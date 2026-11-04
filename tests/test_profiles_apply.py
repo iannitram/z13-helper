@@ -1240,6 +1240,41 @@ def test_skip_hooks_skips_both(profiles_env, fake_host):
     assert "exit hook" not in names(results) and "enter hook" not in names(results)
 
 
+def test_hook_timeout_does_not_suspend_max_fans(profiles_env, fake_host):
+    max_fans_state.save(enabled=True)
+    fake_host.fail("slow_exit", rc=124, out="timed out after 120 s", timed_out=True)
+    prev = bare_profile("Prev", hooks={"exit": "slow_exit"})
+    results_exit = profiles.apply(bare_profile("Next"), previous=prev, z13ctl=Z)
+    assert ("exit hook", False, "timed out after 120 s") in results_exit
+    state_exit = json.loads(profiles_env.max_fans.read_text())
+    assert state_exit["enabled"] is True
+    assert state_exit.get("suspended") is None
+
+    fake_host.fail("slow_enter", rc=124, out="timed out after 120 s", timed_out=True)
+    p = bare_profile(base="performance", hooks={"enter": "slow_enter"})
+    results = profiles.apply(p, z13ctl=Z)
+
+    assert ("enter hook", False, "timed out after 120 s") in results
+    state = json.loads(profiles_env.max_fans.read_text())
+    assert state["enabled"] is True
+    assert state.get("suspended") is None
+    assert max_fans_state.is_enabled()
+
+    # A z13ctl write that times out still sets the suspended marker and leaves Max Fans off
+    fake_host.fail("profile --set", rc=124, out="timed out after 20 s", timed_out=True)
+    results_z = profiles.apply(bare_profile(base="performance"), z13ctl=Z)
+    assert results_z == [
+        (
+            "profile",
+            False,
+            f"z13ctl write timed out after {profiles.Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)",
+        )
+    ]
+    state_z = json.loads(profiles_env.max_fans.read_text())
+    assert state_z["enabled"] is False
+    assert state_z["suspended"] == "z13ctl write timed out"
+
+
 # ----------------------------------------------------------------------
 # Max Fans
 # ----------------------------------------------------------------------
