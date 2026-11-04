@@ -1025,7 +1025,7 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
                 before_max_fans=before_max_fans,
                 after_max_fans=bool(_max_fans_state().get("enabled")),
             )
-        except OSError:
+        except Exception:  # noqa: BLE001 - timeline recording is best-effort
             pass
     return results
 

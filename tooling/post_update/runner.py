@@ -25,7 +25,11 @@ def make_timeline_recorder(*, backup_dir: str | None = None,
                            path: str | None = None,
                            journal_fn: Callable[[str, str], None] | None = None):
     """Build an `Env.record` callback that writes one `post_update` timeline entry
-    with its Phase 12c file-backup rollback record and Principle 7 journal line."""
+    with its Phase 12c file-backup rollback record and Principle 7 journal line.
+
+    No production code builds an `Env` yet (that is #109/#110's host wiring), so
+    nothing passes this to `Env(record=...)` outside tests. The Env builder must
+    use `make_timeline_recorder()` when it lands."""
     import timeline
 
     def _record(ordered: Sequence, results: list, backups: dict, before_checks: dict):

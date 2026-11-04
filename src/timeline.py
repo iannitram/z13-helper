@@ -393,7 +393,13 @@ def profile_snapshot(profile, *, max_fans_active=None):
 
 def record_profile_apply(*, profile, previous=None, results=(),
                          before_max_fans=None, after_max_fans=None, path=None):
-    """Record a `profiles.apply()` transition (hardware change; no host journal line)."""
+    """Record a `profiles.apply()` transition.
+
+    Passes `journal=False` on purpose: Principle 7's journal line covers only
+    host changes (`/etc`, z13ctl binary, unit files). A profile apply changes
+    hardware state through z13ctl and is already logged by its own steps, so it
+    gets a timeline entry but no extra journal line.
+    """
     prev_snap = profile_snapshot(previous, max_fans_active=before_max_fans)
     cur_snap = profile_snapshot(profile, max_fans_active=after_max_fans)
     prev_name = prev_snap.get("name") if prev_snap else None

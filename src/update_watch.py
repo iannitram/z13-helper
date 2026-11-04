@@ -68,7 +68,7 @@ def _steamos_version():
                 before={"steamos": (rec or {}).get("steamos"), "kernel": (rec or {}).get("kernel")},
                 after={"steamos": f"{ver or '?'} ({cur_build})", "kernel": platform.release()},
             )
-        except OSError:
+        except Exception:  # noqa: BLE001 - timeline recording is best-effort
             pass
     return ver
 

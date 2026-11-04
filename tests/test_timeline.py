@@ -487,3 +487,22 @@ def test_manifest_and_stdin_installer_ship_timeline_module(tmp_path, real_subpro
     exec(compile(ast.Module(body=[fn], type_ignores=[]), "updates_dialog.py", "exec"), ns)
     src = ns["_installer_source"]()
     assert "sys.modules['timeline']" in src
+
+
+def test_update_check_survives_malformed_install_json_and_timeline_errors(tmp_path, monkeypatch, fake_host):
+    monkeypatch.setattr(timeline, "TIMELINE_PATH", str(tmp_path / "timeline.jsonl"))
+    Path(install_record.INSTALL_JSON).write_text("{not json")
+    monkeypatch.setattr(
+        update_watch, "host_read",
+        lambda p: 'VERSION_ID="3.9.5"\nBUILD_ID="20261023.100"\n' if p == "/etc/os-release" else None,
+    )
+    assert update_watch._steamos_version() == "3.9.5"
+
+    Path(install_record.INSTALL_JSON).write_text(json.dumps({"steamos": "3.8", "kernel": "6", "build_id": "1"}))
+
+    def boom(*a, **k):
+        raise ValueError("generic failure")
+
+    monkeypatch.setattr(post_update_state, "recorded_build_id", lambda rec: "20260922.1")
+    monkeypatch.setattr(post_update_state, "record_if_build_id_changed", boom)
+    assert update_watch._steamos_version() == "3.9.5"
