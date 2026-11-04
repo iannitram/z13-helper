@@ -175,6 +175,18 @@ def test_profile_set_uses_edit_for_a_hardware_field(owner, profiles_env, capsys)
     assert calls[0][1][0]["tdp"]["pl1"] == 40
 
 
+def test_profile_set_applies_every_non_hardware_field(owner, profiles_env, capsys):
+    calls, record = owner
+    record("edit")
+    data = run_json(
+        capsys, ["profile", "set", "Turbo", "--base", "quiet", "--max-fans", "on"]
+    )
+    assert data["updated"] == ["base", "max_fans"]
+    assert [call[1][1] for call in calls] == ["base", "max_fans"]
+    assert all(call[1][0]["base"] == "quiet" for call in calls)
+    assert all(call[1][0]["max_fans"] is True for call in calls)
+
+
 def test_profile_set_requires_a_field(profiles_env, capsys):
     assert cli.main(["profile", "set", "Turbo", "--json"]) == 1
     data = json.loads(capsys.readouterr().out)

@@ -502,8 +502,8 @@ def cmd_profile_set(args):
         if field in hardware_fields:
             authority.edit(profile, field)
     full = [field for field in updated if field not in hardware_fields]
-    if full:
-        authority.edit(profile, full[0])
+    for field in full:
+        authority.edit(profile, field)
     payload = {
         "ok": True,
         "name": profile["name"],
