@@ -35,6 +35,16 @@ def test_touch_minimums_at_least_44():
     assert "QCheckBox {{ spacing: {_S[\"md\"]}px; min-height: {TOUCH_MIN}px; }}" in SRC["theme.py"]
 
 
+def test_scrollbars_are_touch_sized():
+    for rule in (
+        "QScrollBar:vertical {{ background: {FORM}; width: {TOUCH_MIN}px; }}",
+        "QScrollBar::handle:vertical {{ background: {BUTTON_MAIN}; border-radius: 8px; min-height: {TOUCH_MIN}px; }}",
+        "QScrollBar:horizontal {{ background: {FORM}; height: {TOUCH_MIN}px; }}",
+        "QScrollBar::handle:horizontal {{ background: {BUTTON_MAIN}; border-radius: 8px; min-width: {TOUCH_MIN}px; }}",
+    ):
+        assert rule in SRC["theme.py"], rule
+
+
 def test_theme_has_no_palette_literals_and_reads_tokens():
     theme = SRC["theme.py"]
     assert "design_tokens" in theme

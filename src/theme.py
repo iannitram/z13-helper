@@ -85,8 +85,10 @@ QMenuBar::item:selected, QMenu::item:selected {{ background: {BUTTON_MAIN}; }}
 QMenu {{ background: {BUTTON_SECOND}; border: 1px solid {BORDER}; }}
 QTableWidget {{ background: {CHART_BG}; gridline-color: {CHART_GRID}; border: 1px solid {BORDER}; }}
 QHeaderView::section {{ background: {BUTTON_MAIN}; border: none; padding: 4px; }}
-QScrollBar:vertical {{ background: {FORM}; width: 24px; }}
+QScrollBar:vertical {{ background: {FORM}; width: {TOUCH_MIN}px; }}
 QScrollBar::handle:vertical {{ background: {BUTTON_MAIN}; border-radius: 8px; min-height: {TOUCH_MIN}px; }}
+QScrollBar:horizontal {{ background: {FORM}; height: {TOUCH_MIN}px; }}
+QScrollBar::handle:horizontal {{ background: {BUTTON_MAIN}; border-radius: 8px; min-width: {TOUCH_MIN}px; }}
 QToolTip {{ background: {BUTTON_MAIN}; color: {TEXT}; border: 1px solid {BORDER}; }}
 """
 

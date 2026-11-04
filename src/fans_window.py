@@ -100,7 +100,7 @@ class FansWindow(QWidget):
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(10)
 
-        # ---- left column (265 px) ----
+        # ---- left column (340 px) ----
         left = QWidget()
         left.setFixedWidth(340)
         lv = QVBoxLayout(left)
