@@ -49,23 +49,30 @@ function Content() {
   useEffect(() => {
     let disposed = false;
     let sequence = 0;
+    let lastActive: string | null = null; // active profile this effect last applied
     const refresh = async () => {
-      cancelPendingCommits();
       const current = ++sequence;
       try {
         const [r, fans, nextPower] = await Promise.all([getProfiles(), getMaxFans(), getPowerState()]);
         if (disposed || current !== sequence) return;
+        let active: string;
         if (r && r.names && r.names.length) {
           setOptions(r.names.map((n) => ({ data: n, label: n })));
-          setProfileState(r.active);
+          active = r.active;
           setAppProfiles(true);
         } else {
-          const fallback = await getProfile();
+          active = await getProfile();
           if (disposed || current !== sequence) return;
-          setProfileState(fallback);
         }
+        setProfileState(active);
         setMaxFansState(fans);
-        setPower(nextPower);
+        // Echoes of our own writes and power-source events arrive with the same active profile:
+        // they must not discard uncommitted slider edits or reset the sliders.
+        if (active !== lastActive) {
+          lastActive = active;
+          cancelPendingCommits();
+          setPower(nextPower);
+        }
       } catch {
         if (!disposed) setPower(null);
       }
