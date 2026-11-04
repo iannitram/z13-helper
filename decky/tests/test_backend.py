@@ -32,6 +32,7 @@ import fan_watchdog
 import host
 import power_range
 import profiles
+import state_authority
 import sensor_reader
 
 _SETTINGS = tempfile.mkdtemp(prefix="z13-helper-settings-")
@@ -99,6 +100,15 @@ FAIL_OUT = "write /dev/hidraw5: connection timed out"
 def fake_host(test, fail_if=(), out=FAIL_OUT):
     """A FakeHost installed as host.run for the rest of `test`; calls whose argv
     contains a fail_if substring answer (1, out)."""
+    for attr, value in (("STORE_PATH", os.path.join(_HOME, "engine-profiles.json")),
+                        ("MAX_FANS_PATH", os.path.join(_HOME, "engine-max-fans.json")),
+                        ("LEGACY_CURRENT_PATH", os.path.join(_HOME, "engine-legacy"))):
+        p = mock.patch.object(profiles, attr, value)
+        p.start()
+        test.addCleanup(p.stop)
+    p = mock.patch.object(state_authority, 'named_client', return_value=None)
+    p.start()
+    test.addCleanup(p.stop)
     fh = FakeHost()
     for sub in fail_if:
         fh.fail(sub, out=out)

@@ -31,6 +31,9 @@ if os.path.isdir(_PY_MODULES) and _PY_MODULES not in sys.path:
     sys.path.insert(0, _PY_MODULES)
 import crash_report
 import host
+import state_authority as authority
+from state_stream import StateStream
+import state_events
 import power_range
 from fan_watchdog import FanTrace, FanWatchdog
 from sensor_reader import SensorReader
@@ -120,7 +123,7 @@ LIGHTBAR_DAEMON_STAMP = "/run/user/1000/z13-lightbar-daemon-restart.stamp"
 
 def _run(args, timeout=15, *, as_deck=False):
     """host.run, logged. Returns (rc, out)."""
-    rc, out, timed_out = host.run(args, timeout=timeout, as_deck=as_deck)
+    rc, out, timed_out = authority.run(args, timeout=timeout, as_deck=as_deck)
     if timed_out and os.path.basename(args[0]) == os.path.basename(Z13CTL):
         out = f"z13ctl write timed out after {Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)"
     # Output can be profile config (hooks may hold tokens or private paths): it goes to
@@ -1057,6 +1060,20 @@ def _lock():
     return _write_lock
 
 
+def _edit_field(field, value, expected):
+    try:
+        result = authority.set_field(field, value, expected)
+        if isinstance(result, list) and result and isinstance(result[0], tuple):
+            failed = [message for _, ok, message in result if not ok]
+            return {"ok": not failed, "saved": True,
+                    "message": "; ".join(failed) if failed else "Applied", "failed": failed}
+        if isinstance(result, list) and result:
+            return {"ok": False, "saved": True, "message": "Failed: " + ", ".join(result), "failed": result}
+        return {"ok": True, "saved": True, "message": "Applied", "failed": []}
+    except (OSError, RuntimeError, ValueError) as exc:
+        return {"ok": False, "saved": False, "message": str(exc), "failed": []}
+
+
 class Plugin:
     # ---- Max Fans (mirrors the desktop app: 100% <-> custom aggressive curve) ----
     async def get_max_fans(self) -> bool:
@@ -1064,7 +1081,11 @@ class Plugin:
 
     async def set_max_fans(self, enabled: bool) -> dict:
         async with _lock():
-            return await asyncio.to_thread(set_max_fans_blocking, bool(enabled))
+            try:
+                message = await asyncio.to_thread(authority.set_max_fans, bool(enabled))
+                return {"ok": True, "message": message}
+            except (OSError, RuntimeError, ValueError) as exc:
+                return {"ok": False, "message": str(exc)}
 
     async def _enforce_max_fans(self):
         """Run the shared fan watchdog (src/fan_watchdog.py) in Game Mode.
@@ -1129,21 +1150,36 @@ class Plugin:
     # ---- Power limits / battery / lighting / telemetry (Phase 11) ----
     # Blocking work runs in a thread so the fan watchdog keeps ticking meanwhile.
     async def get_power_state(self) -> dict:
-        return await asyncio.to_thread(power_state)
+        result = await asyncio.to_thread(power_state)
+        state = getattr(self, '_backend_state', {})
+        level = state_events.lighting_level(state)
+        if isinstance(level, int) and 0 <= level <= 3:
+            result['brightness'] = BRIGHTNESS_LEVELS[level]
+        if isinstance(state.get('battery_limit'), int):
+            result['battery_limit'] = state['battery_limit']
+        return result
 
     # `profile` = the profile the user was editing; omitted (older frontend) = the active one.
     async def set_tdp(self, enabled: bool, pl1: int, pl2: int, pl3: int,
                       profile: str = "") -> dict:
         async with _lock():
-            return await asyncio.to_thread(apply_tdp, bool(enabled), pl1, pl2, pl3, profile or None)
+            tdp = clamp_tdp(pl1, pl2, pl3, tdp_ranges()) if enabled else None
+            result = await asyncio.to_thread(_edit_field, 'tdp', tdp, profile)
+            result['tdp'] = tdp
+            return result
 
     async def set_battery_limit(self, value: int, profile: str = "") -> dict:
         async with _lock():
-            return await asyncio.to_thread(apply_battery_limit, value, profile or None)
+            value = clamp_battery(value)
+            result = await asyncio.to_thread(_edit_field, 'battery_limit', value, profile)
+            result['value'] = value
+            return result
 
     async def set_brightness(self, level: str) -> dict:
         async with _lock():
-            res = await asyncio.to_thread(set_brightness_per_device, level)
+            if level not in BRIGHTNESS_LEVELS:
+                return {"ok": False, "message": "bad brightness level", "failed": []}
+            res = await asyncio.to_thread(_edit_field, 'brightness', level, None)
         if res["ok"]:
             _save_plugin_state(brightness=level)
         return res
@@ -1158,6 +1194,14 @@ class Plugin:
             config_path=INSTALL_JSON, logger=decky.logger, loop=self.loop,
             fatal_name="fatal-decky.log",
         )
+        def on_state(state, event):
+            if state_events.event_action(event, False) == "refresh":
+                self._backend_state = state or {}
+                future = asyncio.run_coroutine_threadsafe(
+                    decky.emit("profile_state", {"event": event, "state": state}), self.loop)
+                # Consume errors when unloading races the final notification.
+                future.add_done_callback(lambda f: f.exception() if not f.cancelled() else None)
+        self._state_stream = StateStream(on_state, command=Z13_PROFILE + ["watch"]).start()
         self._enforce_task = self.loop.create_task(self._enforce_max_fans())
         self._desktop_task = self.loop.create_task(self._watch_desktop_app())
         if self._crash_reporter:
@@ -1168,6 +1212,8 @@ class Plugin:
                           _load_max_fans().get("enabled"))
 
     async def _unload(self):
+        if getattr(self, "_state_stream", None):
+            await asyncio.to_thread(self._state_stream.close)
         if getattr(self, "_crash_reporter", None):
             self._crash_reporter.close()
         for task in (getattr(self, "_enforce_task", None), getattr(self, "_desktop_task", None)):

@@ -20,10 +20,10 @@ def test_empty_or_blank_output_is_unsupported():
     assert profile_target_supported("   \n\n") is False
 
 
-def test_firmware_listing_with_names_is_supported():
+def test_firmware_listing_does_not_prove_target_support():
     assert (
         profile_target_supported("Firmware profiles: quiet, balanced, performance\n")
-        is True
+        is False
     )
 
 
@@ -31,7 +31,7 @@ def test_one_profile_row_is_supported():
     listing = (
         "Firmware profiles:\nCustom profiles:\n   custom              fan curve, 20W\n"
     )
-    assert profile_target_supported(listing) is True
+    assert profile_target_supported(listing) is False
 
 
 @pytest.mark.parametrize(
@@ -58,3 +58,13 @@ def test_apply_plan_refuses_when_the_target_is_unsupported():
 @pytest.mark.parametrize("supported", [True, False])
 def test_apply_plan_keeps_the_legacy_path_for_unmapped_names(name, supported):
     assert apply_plan(name, supported) == "legacy"
+
+
+@pytest.mark.parametrize("value", ['[]', '[{"name":"custom"}]'])
+def test_socket_profile_list_proves_named_api(value):
+    assert profile_target_supported(value)
+
+
+@pytest.mark.parametrize("value", ['{}', 'null', '[{}]', '[{"name":23}]', '[{"name":""}]'])
+def test_malformed_socket_profile_list_is_refused(value):
+    assert not profile_target_supported(value)

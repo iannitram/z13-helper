@@ -5,7 +5,7 @@ import {
   DropdownItem,
   staticClasses,
 } from "@decky/ui";
-import { definePlugin, toaster } from "@decky/api";
+import { addEventListener, removeEventListener, definePlugin, toaster } from "@decky/api";
 import { useCallback, useEffect, useState } from "react";
 import { FaFan } from "react-icons/fa";
 import {
@@ -47,18 +47,36 @@ function Content() {
   }, []);
 
   useEffect(() => {
-    getMaxFans().then(setMaxFansState);
-    getProfiles().then((r) => {
-      if (r && r.names && r.names.length) {
-        setOptions(r.names.map((n) => ({ data: n, label: n })));
-        setProfileState(r.active);
-        setAppProfiles(true);
-      } else {
-        getProfile().then(setProfileState);
+    let disposed = false;
+    let sequence = 0;
+    const refresh = async () => {
+      cancelPendingCommits();
+      const current = ++sequence;
+      try {
+        const [r, fans, nextPower] = await Promise.all([getProfiles(), getMaxFans(), getPowerState()]);
+        if (disposed || current !== sequence) return;
+        if (r && r.names && r.names.length) {
+          setOptions(r.names.map((n) => ({ data: n, label: n })));
+          setProfileState(r.active);
+          setAppProfiles(true);
+        } else {
+          const fallback = await getProfile();
+          if (disposed || current !== sequence) return;
+          setProfileState(fallback);
+        }
+        setMaxFansState(fans);
+        setPower(nextPower);
+      } catch {
+        if (!disposed) setPower(null);
       }
-    });
-    loadPower();
-  }, [loadPower]);
+    };
+    const listener = addEventListener("profile_state", refresh);
+    void refresh();
+    return () => {
+      disposed = true;
+      removeEventListener("profile_state", listener);
+    };
+  }, []);
 
   return (
     <>
