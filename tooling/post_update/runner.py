@@ -57,7 +57,8 @@ def _apply_one(recipe, env: Env, state: dict, backups: dict) -> None:
         env.readonly_disable()
     for path in recipe.replaces:
         bak = env.backup(path)
-        backups[path] = bak if isinstance(bak, str) and bak else path
+        if isinstance(bak, str) and bak:
+            backups[path] = bak
     recipe.apply()
 
 

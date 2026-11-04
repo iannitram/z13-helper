@@ -1015,7 +1015,8 @@ class DesktopAppCheckTest(unittest.TestCase):
     def test_paths_match_the_app(self):
         self.assertTrue(REAL["DESKTOP_APP_SOCKET"].endswith("/app/io.github.iannitram.Z13Helper/z13-helper.sock"))
         self.assertTrue(REAL["DESKTOP_APP_USER_QUIT"].endswith("z13-helper.user-quit"))
-        self.assertEqual(REAL["TIMELINE_PATH"], "/home/deck/.local/state/z13-helper/timeline.jsonl")
+        self.assertEqual(REAL["TIMELINE_PATH"],
+                         os.path.join(REAL["FAN_TRACE_DIR"], "timeline.jsonl"))
 
 
 class TimelineTests(unittest.TestCase):

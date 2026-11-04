@@ -338,8 +338,23 @@ def _read_single_file(file_path):
 
 def read_entries(path=None, *, limit=None, newest_first=False,
                  include_rotated=True, backups=BACKUP_COUNT):
-    """Read timeline entries across rotated segments and active `timeline.jsonl`."""
+    """Read timeline entries across rotated segments and active `timeline.jsonl`.
+
+    Reads hold `timeline_lock` (when the folder exists) so a rotation cannot
+    run between segment reads.
+    """
     target = path or TIMELINE_PATH
+    if os.path.isdir(os.path.dirname(os.path.abspath(target))):
+        try:
+            with timeline_lock(target):
+                return _read_entries_unlocked(
+                    target, limit, newest_first, include_rotated, backups)
+        except TimelineLockError:
+            pass
+    return _read_entries_unlocked(target, limit, newest_first, include_rotated, backups)
+
+
+def _read_entries_unlocked(target, limit, newest_first, include_rotated, backups):
     if limit is not None and int(limit) <= 0:
         return []
     bak_n = max(0, int(backups)) if include_rotated else 0
@@ -452,6 +467,9 @@ def record_goal_change(*, goal, previous_goal=None, before=None, after=None,
         before_d.setdefault("profile", profile)
         after_d.setdefault("profile", profile)
 
+    # Derive from the actual before/after state, not the requested goal.
+    previous_goal = before_d.get("goal")
+    goal = after_d.get("goal")
     changed = []
     if previous_goal != goal:
         changed.append("goal")
@@ -466,6 +484,8 @@ def record_goal_change(*, goal, previous_goal=None, before=None, after=None,
         rb = None
         reason = "Goal unchanged" if previous_goal == goal and goal else "No previous goal recorded"
         default_summary = f"Goal {goal}"
+    if not ok:
+        default_summary += " (failed)"
 
     return append(
         {
@@ -646,7 +666,7 @@ def record_steamos_update(*, before_build_id, after_build_id, before=None, after
     target = path or TIMELINE_PATH
     with timeline_lock(target):
         if deduplicate:
-            for existing in read_entries(target, limit=25, newest_first=True):
+            for existing in read_entries(target, newest_first=True):
                 if existing.get("kind") == "steamos_update":
                     if (existing.get("after") or {}).get("build_id") == cur_id:
                         return existing

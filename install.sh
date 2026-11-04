@@ -740,6 +740,7 @@ etc_files() {
         ((DRY)) || backup "$dest" sudo
         # -D: creates the parent (e.g. /etc/polkit-1/rules.d) if it's missing.
         act sudo install -D -m "$mode" -o root -g root "$REPO/$rel" "$dest" || { fail "install $dest"; continue; }
+        ((DRY)) || logger -t z13-install "installed $dest from z13-helper $rel (backup: $BACKUP)"
         CHANGED+=("$dest")
         [[ $dest == *.service ]] && units_changed=1
     done
@@ -756,6 +757,7 @@ etc_files() {
             if sudo install -d -m 755 "$(dirname "$keep")" \
                 && { echo; echo "# Z13-Helper (added by install.sh $STAMP)"; printf '%s\n' "${keep_missing[@]}"; } \
                     | sudo tee -a "$keep" >/dev/null; then
+                logger -t z13-install "added ${keep_missing[*]} to $keep"
                 CHANGED+=("$keep (+${#keep_missing[@]})")
             else
                 fail "append to $keep"

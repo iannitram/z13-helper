@@ -537,7 +537,7 @@ Not issues (checked, nothing to do): the RDNA1/2 dedicated-GPU resume fix (Strix
 | 16c side-button gestures | #131 | #130 |
 | 16d ADR: shared touch UI | #132 | — |
 | 16e touch-first layout | #133 | #132 |
-| ✅ 16f timeline store (`src/timeline.py`) | #134 | #109 |
+| 16f timeline store (`src/timeline.py`; store + install/Decky/steamos writers done, post-update host wiring pending) | #134 | #109 |
 | 16g timeline view | #135 | #134 |
 
 **Done when:** on the Z13, signals run an hour with no lightbar wedge; the gesture cycles profiles in both modes with no double-fire; the desktop window and the QAM share one look in tablet use; a SteamOS update appears in the timeline and a reversible entry rolls back.

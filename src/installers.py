@@ -599,7 +599,7 @@ def main(argv):
     if (timeline is not None and not DRY_RUN
             and not os.environ.get("Z13_INSTALL_PARENT") and REPORT.changed):
         try:
-            keep_backups = REPORT.backed_up_files if rc == 0 else None
+            keep_backups = REPORT.backed_up_files
             timeline.record_install(
                 mode=argv[0],
                 target=argv[1],
