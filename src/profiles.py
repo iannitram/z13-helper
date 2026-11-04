@@ -41,6 +41,7 @@ import stat
 import errno
 import fcntl
 import json
+import logging
 import os
 import re
 import shutil
@@ -48,6 +49,8 @@ import sys
 import tempfile
 import threading
 import time
+
+logger = logging.getLogger(__name__)
 
 # Installed as ~/.local/bin/z13-profile, the host seam sits in ~/.local/lib/z13-helper/
 # (install.sh puts it there). In the Flatpak and the tests it's next to this file.
@@ -262,6 +265,7 @@ def default_profiles():
 # serialises threads and processes alike (flock is per open file). Copies of this
 # helper live in max_fans_state.py and decky/main.py; keep them in step.
 _lock_state = threading.local()
+_lock_fallback_warned = False
 LOCK_TIMEOUT = 10.0  # seconds to wait for another writer before giving up
 
 
@@ -336,11 +340,17 @@ def file_lock(path, *, strict=False):
         if fd is not None:
             os.close(fd)
         raise
-    except OSError:
+    except OSError as e:
         if fd is not None:
             os.close(fd)
         if strict:
             raise
+        global _lock_fallback_warned
+        if not _lock_fallback_warned:
+            _lock_fallback_warned = True
+            logger.warning(
+                "Cannot lock %s (%s); continuing without a lock", lock_path, e
+            )
         fd = None  # can't lock (read-only dir?): behave as before, unlocked
     held[path] = 1
     try:

@@ -20,9 +20,12 @@ import stat
 import errno
 import fcntl
 import json
+import logging
 import os
 import threading
 import time
+
+logger = logging.getLogger(__name__)
 
 STATE_PATH = os.path.expanduser("~/.config/z13-helper/max-fans.json")
 
@@ -32,6 +35,7 @@ STATE_PATH = os.path.expanduser("~/.config/z13-helper/max-fans.json")
 # serialises threads and processes alike (flock is per open file). Copy of profiles.file_lock
 # (z13-profile is a single installed file, so it can't import this).
 _lock_state = threading.local()
+_lock_fallback_warned = False
 LOCK_TIMEOUT = 10.0  # seconds to wait for another writer before giving up
 
 
@@ -106,9 +110,15 @@ def file_lock(path):
         if fd is not None:
             os.close(fd)
         raise
-    except OSError:
+    except OSError as e:
         if fd is not None:
             os.close(fd)
+        global _lock_fallback_warned
+        if not _lock_fallback_warned:
+            _lock_fallback_warned = True
+            logger.warning(
+                "Cannot lock %s (%s); continuing without a lock", lock_path, e
+            )
         fd = None  # can't lock (read-only dir?): behave as before, unlocked
     held[path] = 1
     try:
