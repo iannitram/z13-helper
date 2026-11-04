@@ -33,6 +33,9 @@ import host  # noqa: E402
 
 SCHEMA_VERSION = 1
 STATE_DIR = os.path.expanduser("~/.local/state/z13-helper")
+# The user's logging choice lives here ("logging": false = no files at all, AGENTS.md).
+# Decky points this at its own copy of the constant.
+INSTALL_JSON = os.path.expanduser("~/.config/z13-helper/install.json")
 TIMELINE_PATH = os.path.join(STATE_DIR, "timeline.jsonl")
 MAX_BYTES = 1 << 20  # 1 MiB per segment
 BACKUP_COUNT = 3
@@ -244,44 +247,17 @@ def _normalize_entry(entry):
     return rec
 
 
-def append(entry, *, path=None, max_bytes=MAX_BYTES, backups=BACKUP_COUNT,
-           journal=None, journal_tag="z13-timeline", journal_fn=None, owner=None):
-    """Append one JSONL entry (rotating if over `max_bytes`) and emit Principle 7's
-    journal line from the same call when `journal` is True (default for `HOST_KINDS`)."""
-    target = path or TIMELINE_PATH
-    rec = _normalize_entry(entry)
-    line = (json.dumps(rec, separators=(",", ":"), ensure_ascii=False) + "\n").encode("utf-8")
-    max_b = max(0, int(max_bytes))
-    bak_n = max(0, int(backups))
+def logging_enabled():
+    """True unless install.json says "logging": false (missing/unreadable = on)."""
+    try:
+        with open(INSTALL_JSON) as f:
+            rec = json.load(f)
+    except (OSError, ValueError):
+        return True
+    return not (isinstance(rec, dict) and rec.get("logging") is False)
 
-    with timeline_lock(target, owner=owner):
-        parent = os.path.dirname(os.path.abspath(target))
-        resolved_owner = _resolve_owner(parent, owner)
-        st = _check_not_symlink(target)
-        existing_size = st.st_size if st is not None else 0
-        if existing_size > 0 and max_b > 0 and existing_size + len(line) > max_b:
-            _rotate_locked(target, bak_n)
-            existing_size = 0
 
-        fd, open_st = _open_regular_nofollow(
-            target, os.O_RDWR | os.O_CREAT | os.O_APPEND, mode=0o644, owner=resolved_owner
-        )
-        try:
-            payload = line
-            if open_st.st_size > 0:
-                # If a prior writer crashed mid-line without '\n', isolate the new
-                # record on a fresh line without truncating or rewriting old bytes.
-                tail = os.pread(fd, 1, open_st.st_size - 1)
-                if tail != b"\n":
-                    payload = b"\n" + line
-            view = memoryview(payload)
-            while view:
-                written = os.write(fd, view)
-                view = view[written:]
-            os.fsync(fd)
-        finally:
-            os.close(fd)
-
+def _emit_journal(rec, journal, journal_tag, journal_fn):
     emit = (rec["kind"] in HOST_KINDS) if journal is None else bool(journal)
     if emit:
         msg = format_journal_message(rec)
@@ -289,6 +265,52 @@ def append(entry, *, path=None, max_bytes=MAX_BYTES, backups=BACKUP_COUNT,
             journal_fn(journal_tag, msg)
         else:
             host.run(["logger", "-t", journal_tag, msg], timeout=5)
+
+
+def _append_locked(line, target, max_b, bak_n, owner):
+    parent = os.path.dirname(os.path.abspath(target))
+    resolved_owner = _resolve_owner(parent, owner)
+    st = _check_not_symlink(target)
+    existing_size = st.st_size if st is not None else 0
+    if existing_size > 0 and max_b > 0 and existing_size + len(line) > max_b:
+        _rotate_locked(target, bak_n)
+
+    fd, open_st = _open_regular_nofollow(
+        target, os.O_RDWR | os.O_CREAT | os.O_APPEND, mode=0o644, owner=resolved_owner
+    )
+    try:
+        payload = line
+        if open_st.st_size > 0:
+            # If a prior writer crashed mid-line without '\n', isolate the new
+            # record on a fresh line without truncating or rewriting old bytes.
+            tail = os.pread(fd, 1, open_st.st_size - 1)
+            if tail != b"\n":
+                payload = b"\n" + line
+        view = memoryview(payload)
+        while view:
+            written = os.write(fd, view)
+            view = view[written:]
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def append(entry, *, path=None, max_bytes=MAX_BYTES, backups=BACKUP_COUNT,
+           journal=None, journal_tag="z13-timeline", journal_fn=None, owner=None,
+           _journal_now=True):
+    """Append one JSONL entry (rotating if over `max_bytes`) and emit Principle 7's
+    journal line from the same call when `journal` is True (default for `HOST_KINDS`).
+
+    With "logging": false in install.json nothing is written to disk (the journal
+    line, which is not a file, is still emitted)."""
+    target = path or TIMELINE_PATH
+    rec = _normalize_entry(entry)
+    if logging_enabled():
+        line = (json.dumps(rec, separators=(",", ":"), ensure_ascii=False) + "\n").encode("utf-8")
+        with timeline_lock(target, owner=owner):
+            _append_locked(line, target, max(0, int(max_bytes)), max(0, int(backups)), owner)
+    if _journal_now:
+        _emit_journal(rec, journal, journal_tag, journal_fn)
     return rec
 
 
@@ -340,17 +362,10 @@ def read_entries(path=None, *, limit=None, newest_first=False,
                  include_rotated=True, backups=BACKUP_COUNT):
     """Read timeline entries across rotated segments and active `timeline.jsonl`.
 
-    Reads hold `timeline_lock` (when the folder exists) so a rotation cannot
-    run between segment reads.
+    Read-only: takes no lock and creates no file or folder. A rotation racing a
+    read can at worst repeat or miss a segment for that one read.
     """
     target = path or TIMELINE_PATH
-    if os.path.isdir(os.path.dirname(os.path.abspath(target))):
-        try:
-            with timeline_lock(target):
-                return _read_entries_unlocked(
-                    target, limit, newest_first, include_rotated, backups)
-        except TimelineLockError:
-            pass
     return _read_entries_unlocked(target, limit, newest_first, include_rotated, backups)
 
 
@@ -438,6 +453,9 @@ def record_profile_apply(*, profile, previous=None, results=(),
         rollback = None
         reason = ("Re-applied the already active profile"
                   if prev_name == cur_name and cur_name else "No previous profile recorded")
+
+    if not ok:
+        summary += " (failed)"
 
     return append(
         {
@@ -688,7 +706,7 @@ def record_steamos_update(*, before_build_id, after_build_id, before=None, after
                 if key != "build_id" and before_d.get(key) != after_d.get(key):
                     changed_list.append(f"{key}: {before_d.get(key)} -> {after_d.get(key)}")
 
-        return append(
+        rec = append(
             {
                 "kind": "steamos_update",
                 "summary": summary or f"SteamOS updated ({prev_id} -> {cur_id})",
@@ -706,7 +724,13 @@ def record_steamos_update(*, before_build_id, after_build_id, before=None, after
             journal=True,
             journal_tag=journal_tag,
             journal_fn=journal_fn,
+            _journal_now=False,
         )
+
+    # The journal line goes out after the lock is released: a slow `logger`
+    # must not make other writers time out.
+    _emit_journal(rec, True, journal_tag, journal_fn)
+    return rec
 
 
 # ----------------------------------------------------------------------

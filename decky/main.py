@@ -73,6 +73,7 @@ DECK_IDS = (1000, 1000)
 # install.sh asks, the desktop app's Help -> Error log changes it. "logging": false
 # = no fan trace file; missing = on. Read once, when the watchdog starts.
 INSTALL_JSON = os.path.expanduser("~/.config/z13-helper/install.json")
+timeline.INSTALL_JSON = INSTALL_JSON   # the timeline honours the same logging choice
 
 # Desktop app check: in Desktop Mode the resident desktop app should be running (it
 # owns the side button there). Its single-instance socket (src/single_instance.py)

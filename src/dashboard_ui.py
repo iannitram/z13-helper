@@ -567,7 +567,7 @@ class DashboardUI(QMainWindow):
         c = self.controller
         active_name = self.control.active_name()
 
-        def _record(before_mf, target_on):
+        def _record(before_mf, target_on, ok=True):
             before_on = bool(before_mf.get("enabled"))
             try:
                 after_mf = max_fans_state.load()
@@ -585,6 +585,7 @@ class DashboardUI(QMainWindow):
                         "saved_curve": after_mf.get("saved_curve"),
                     },
                     profile=active_name,
+                    ok=ok,
                 )
             except OSError:
                 pass
@@ -598,7 +599,11 @@ class DashboardUI(QMainWindow):
                     max_fans_state.save(saved_curve=[[int(t), int(pwm)] for t, pwm, _ in pts])
             except Exception:
                 pass
-            c.set_fans_max()
+            try:
+                c.set_fans_max()
+            except Exception:
+                _record(before_mf, True, ok=False)
+                raise
             max_fans_state.save(enabled=True)
             _record(before_mf, True)
             return "Max Fans ON — both fans at 100%"
@@ -607,12 +612,16 @@ class DashboardUI(QMainWindow):
             before_mf = max_fans_state.load()
             kind, saved = max_fans_state.restore_plan()
             curve = self.control.active().get("fan_curve")
-            if kind == "curve":
-                c.set_fancurve_pwm(saved)
-            elif kind == "unknown" and curve:
-                c.set_fancurve(curve)
-            else:
-                c.reset_fancurve()
+            try:
+                if kind == "curve":
+                    c.set_fancurve_pwm(saved)
+                elif kind == "unknown" and curve:
+                    c.set_fancurve(curve)
+                else:
+                    c.reset_fancurve()
+            except Exception:
+                _record(before_mf, False, ok=False)
+                raise
             max_fans_state.save(enabled=False)
             _record(before_mf, False)
             return "Max Fans OFF — profile curve restored"

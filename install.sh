@@ -855,16 +855,17 @@ try:
             before=before_snap,
             after=after_snap,
         )
-    timeline.record_install(
-        mode=mode,
-        target="host",
-        before=before_snap,
-        after=after_snap,
-        changed=changed_list,
-        failed=failed_list,
-        backup_dir=backup_dir,
-        ok=(verify_rc == 0 and not failed_list),
-    )
+    if changed_list or failed_list:   # a run that changed nothing is not timeline news
+        timeline.record_install(
+            mode=mode,
+            target="host",
+            before=before_snap,
+            after=after_snap,
+            changed=changed_list,
+            failed=failed_list,
+            backup_dir=backup_dir,
+            ok=(verify_rc == 0 and not failed_list),
+        )
 except Exception as exc:
     sys.stderr.write(f"warn: could not append timeline entry: {exc}\n")
 EOF
