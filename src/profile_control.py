@@ -23,6 +23,15 @@ logger = logging.getLogger("z13.profiles")
 _WRITE_TIMEOUT_PREFIX = "z13ctl write timed out after "
 
 
+def _steps_succeeded(result):
+    """True when a worker result reports no failed step."""
+    if isinstance(result, Exception):
+        return False
+    if isinstance(result, list) and result and isinstance(result[0], tuple):
+        return all(ok for _step, ok, _msg in result)
+    return not isinstance(result, list)
+
+
 class ProfileControl(QObject):
     changed = pyqtSignal()        # store (active name or contents) changed
     message = pyqtSignal(str)     # human-readable result for the status bar
@@ -249,5 +258,6 @@ class ProfileControl(QObject):
             text = result if isinstance(result, str) else ""
             self.message.emit(text if text.startswith(_WRITE_TIMEOUT_PREFIX) else f"{label} ✓")
         self.changed.emit()
-        if applied and not isinstance(result, Exception):
+        succeeded = _steps_succeeded(result)
+        if applied and succeeded:
             self.profile_applied.emit(applied)
