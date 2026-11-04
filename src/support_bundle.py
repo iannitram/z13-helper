@@ -20,7 +20,7 @@ _VERSION_FIELDS = {
     "steamos_build", "kernel", "bios_ec", "firmware", "mesa_vulkan",
     "backend_version",
 }
-_VERSION = re.compile(r"[0-9][0-9A-Za-z.+_/-]{0,127}\Z")
+_VERSION = re.compile(r"[0-9A-Za-z][0-9A-Za-z.+_/-]{0,127}\Z")
 _SENSITIVE_KEYS = (
     ("profile hooks", re.compile(r"\b(hooks?|commands?|scripts?)\b", re.I)),
     ("credential values", re.compile(
@@ -93,3 +93,15 @@ def build_bundle(
 def preview(bundle) -> str:
     """Show the complete shareable payload, including its exclusion report."""
     return json.dumps(bundle, indent=2, ensure_ascii=True)
+
+
+def share(bundle, shown_text, send) -> None:
+    """Hand the bundle to `send(text)` only after the user was shown exactly this text.
+
+    `shown_text` is what the preview displayed; if it is not the current `preview(bundle)`
+    (the bundle changed after the preview, or no preview happened) nothing is sent.
+    """
+    text = preview(bundle)
+    if shown_text != text:
+        raise ValueError("preview the redacted bundle first; the shown text is not what would be sent")
+    send(text)

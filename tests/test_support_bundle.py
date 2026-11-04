@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from support_bundle import EXCLUDED_CLASSES, build_bundle, preview
+from support_bundle import EXCLUDED_CLASSES, build_bundle, preview, share
 
 
 def test_clean_bundle_does_not_claim_exclusions():
@@ -95,3 +95,32 @@ def test_machine_id_is_not_reported_as_a_network_identifier():
     bundle = build_bundle({"machine_id": "private-id"}, [])
     assert bundle["excluded"]["serial numbers"] is True
     assert bundle["excluded"]["network identifiers"] is False
+
+
+def test_share_requires_the_exact_preview_first():
+    bundle = build_bundle({"kernel": "6.12.0", "password": "do-not-share"}, [])
+    sent = []
+    with pytest.raises(ValueError, match="preview"):
+        share(bundle, "", sent.append)
+    with pytest.raises(ValueError, match="preview"):
+        share(bundle, preview(bundle) + " ", sent.append)
+    assert sent == []
+    share(bundle, preview(bundle), sent.append)
+    assert sent == [preview(bundle)] and "do-not-share" not in sent[0]
+
+
+def test_hook_credential_serial_and_network_lines_are_absent_by_default():
+    lines = [
+        "profile hook: ExecStartPre=/home/u/hooks/after.sh",
+        "z13ctl: Authorization: Bearer abc123secret",
+        "dmi: Serial Number: SN-9988776655",
+        "wlan0: ssid HomeNet-5G mac aa:bb:cc:dd:ee:ff ip 192.168.1.20",
+    ]
+    inventory = {"kernel": "7.2.7-valve", "bios_ec": "GZ302EA.313/0.1", "firmware": "20261020-1"}
+    bundle = build_bundle(inventory, lines)
+    text = preview(bundle)
+    for secret in ("after.sh", "abc123secret", "SN-9988776655", "HomeNet-5G",
+                   "aa:bb:cc:dd:ee:ff", "192.168.1.20"):
+        assert secret not in text
+    assert bundle["inventory"] == inventory
+    assert bundle["excluded"]["unreviewed journal lines"] is True

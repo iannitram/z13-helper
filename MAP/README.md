@@ -59,6 +59,11 @@ The desktop Flatpak and Decky are two frontends to the same profile and Max Fans
 | `src/versions.py` | Shared version floor (`DECKY_MIN`, 3.3.0) and `older_than`; used by `installers.py` and `update_watch.py`. |
 | `src/update_watch.py`, `src/updates_dialog.py`, `src/installers.py` | Upstream checks, updates/repair UI and installation actions. `updates_dialog.py` also has the After SteamOS update tab. |
 | `src/post_update_view.py`, `src/post_update_state.py` | Qt-free helpers for that tab: the host command (`tab_argv`), JSON parsing and table cells; BUILD_ID reading and row states. `decky/main.py` `post_update_status` and `decky/src/components/PostUpdate.tsx` show the same status in the QAM. |
+| `src/system_inventory.py` | Read-only inventory (SteamOS build, kernel, BIOS/EC, firmware, Mesa/Vulkan, z13ctl version, units, permissions, kernel args). Every read goes through the injectable `read(target)` seam (a str is a file, a tuple an argv); `host_read` is the real one. Never writes. |
+| `src/post_update_checks.py` | `run_checks(inventory)`: `CheckResult` rows (version reads, amdgpu kernel args, each unit enabled, ppt/udev permissions). An unreadable value fails the row. Reads nothing itself. |
+| `src/repair_plan.py` | `plan_for(failures, io)`: a `RepairStep` (apply, verify, rollback) for `kernel_args` and user units; apply backs a file up before replacing it and fills the rollback record (changed, backup, undo, status). Other failures are listed as `unplanned`. `RepairPlan.run()` verifies and rolls back. |
+| `src/support_bundle.py` | Redacted support bundle: keeps only reviewed version fields, drops hooks, credentials, serials, network ids and all journal lines, and reports `excluded` only for what it removed. `preview` shows the exact payload; `share` refuses unless that text was shown. |
+| `src/suspend_diagnostic.py` | Read-only suspend/resume diagnostic: sleep mode (sysfs), suspend/resume balance and error lines (kernel log) through the `read` seam. Reports only; no repair step. |
 | `src/screen_brightness.py`, `src/evdev_listener.py` | Built-in display brightness and the Desktop Mode side-button reader. |
 
 ### Profile apply and Max Fans ordering
