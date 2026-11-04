@@ -3,6 +3,7 @@ import { toaster } from "@decky/api";
 import { useEffect, useRef, useState } from "react";
 import { clampTdp, isWriteTimeout, PowerState, safely, setTdp, TdpResult } from "../backend";
 import { useCommitOnRelease } from "../hooks";
+import { clearDirty, isDirty, markDirty } from "../powerMerge";
 
 type Rails = { pl1: number; pl2: number; pl3: number };
 
@@ -38,6 +39,7 @@ export function PowerLimits({ state }: { state: PowerState | null }) {
     setMsg("Applying…");
     const res = await safely<TdpResult>(setTdp(on, r.pl1, r.pl2, r.pl3, target));
     setMsg(res.message);
+    if (res.ok) clearDirty("pl1", "pl2", "pl3");
     if (isWriteTimeout(res.message)) toaster.toast({ title: "Z13-Helper", body: res.message });
     if ("tdp" in res && res.tdp) setRails({ pl1: res.tdp.pl1, pl2: res.tdp.pl2, pl3: res.tdp.pl3 });
     return res;
@@ -50,7 +52,7 @@ export function PowerLimits({ state }: { state: PowerState | null }) {
   // New power state (panel opened, or the profile changed): show it, drop anything pending.
   useEffect(() => {
     if (!state) return;
-    cancel();
+    if (!isDirty("pl1", "pl2", "pl3")) cancel(); // an uncommitted edit survives same-profile events
     setEnabled(state.tdp_enabled);
     setRails({ pl1: state.pl1, pl2: state.pl2, pl3: state.pl3 });
     setMsg("");
@@ -98,6 +100,9 @@ export function PowerLimits({ state }: { state: PowerState | null }) {
               onChange={(v: number) => {
                 const next = clampTdp({ ...railsRef.current, [key]: v }, min, max, state?.pl_ranges);
                 setRails(next);
+                markDirty("pl1", next.pl1);
+                markDirty("pl2", next.pl2);
+                markDirty("pl3", next.pl3);
                 schedule(next);
               }}
             />

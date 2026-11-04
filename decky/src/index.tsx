@@ -21,6 +21,7 @@ import {
 } from "./backend";
 import { cancelPendingCommits } from "./hooks";
 import { switchProfile } from "./profileSwitch";
+import { clearAllDirty, dirtySet, mergePowerState, pendingEdits } from "./powerMerge";
 import { TelemetryRow } from "./components/Telemetry";
 import { PowerLimits } from "./components/PowerLimits";
 import { BatteryLimit } from "./components/BatteryLimit";
@@ -66,13 +67,19 @@ function Content() {
         }
         setProfileState(active);
         setMaxFansState(fans);
-        // Echoes of our own writes and power-source events arrive with the same active profile:
-        // they must not discard uncommitted slider edits or reset the sliders.
-        if (active !== lastActive) {
-          lastActive = active;
+        // A profile switch drops every pending edit. Any other event refreshes all fields except
+        // those the user has edited and not yet committed.
+        const changed = active !== lastActive;
+        lastActive = active;
+        if (changed) {
           cancelPendingCommits();
-          setPower(nextPower);
+          clearAllDirty();
         }
+        const dirty = dirtySet();
+        const pending = pendingEdits();
+        setPower((previous) =>
+          mergePowerState<PowerState>({ previous, pending, dirty, incoming: nextPower, changed }).render,
+        );
       } catch {
         if (!disposed) setPower(null);
       }
@@ -112,6 +119,7 @@ function Content() {
             onChange={async (o) => {
               const name = o.data as string;
               cancelPendingCommits(); // a slider edit must not land on the profile we switch to
+              clearAllDirty();
               const previous = profile;
               setProfileState(name);
               const r = await switchProfile(
