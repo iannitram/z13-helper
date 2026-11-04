@@ -6,7 +6,6 @@ apply(), and the read/write helpers the Fans + Power combo calls.
 """
 
 import os
-import subprocess
 
 import pytest
 
@@ -183,11 +182,11 @@ def test_set_epp_raises_with_the_host_message(fake_host, two_cpus):
 
 
 @pytest.mark.skipif(os.name == "nt", reason="needs a POSIX sh")
-def test_epp_script_fails_when_no_node_exists_and_writes_when_one_does(tmp_path):
+def test_epp_script_fails_when_no_node_exists_and_writes_when_one_does(tmp_path, real_subprocess):
     script = profiles.epp_argv("power", 1)[2]
     missing = str(tmp_path / "none")
-    assert subprocess.run(["sh", "-c", script, "sh", "power", missing]).returncode != 0
+    assert real_subprocess(["sh", "-c", script, "sh", "power", missing]).returncode != 0
     node = tmp_path / "node"
     node.write_text("x")
-    assert subprocess.run(["sh", "-c", script, "sh", "power", missing, str(node)]).returncode == 0
+    assert real_subprocess(["sh", "-c", script, "sh", "power", missing, str(node)]).returncode == 0
     assert node.read_text() == "power"
