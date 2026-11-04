@@ -58,6 +58,7 @@ The desktop Flatpak and Decky are two frontends to the same profile and Max Fans
 | `src/crash_report.py`, `src/crash_scrub.py`, `src/crash_queue.py` | Shared automatic crash reporting: startup hooks, scrubbed ZIPs, bounded offline queue and daily upload limit. Build configuration and the default-on Error log toggle are described in [`docs/crash-reporting.md`](../docs/crash-reporting.md); live delivery verification remains pending (#82). |
 | `src/versions.py` | Shared version floor (`DECKY_MIN`, 3.3.0) and `older_than`; used by `installers.py` and `update_watch.py`. |
 | `src/update_watch.py`, `src/updates_dialog.py`, `src/installers.py` | Upstream checks, updates/repair UI and installation actions. |
+| `src/display_modes.py` | Desktop refresh-rate choice via `kscreen-doctor`: parses the panel's advertised modes, offers one rate per distinct whole Hz at the current resolution, reads every change back and rolls back to the previous mode if it was not accepted; `RefreshControl.back()` returns to the mode before the last change. Desktop Mode only; Game Mode is gamescope's (`docs/game-mode-display.md`). |
 | `src/screen_brightness.py`, `src/evdev_listener.py` | Built-in display brightness and the Desktop Mode side-button reader. |
 
 ### Profile apply and Max Fans ordering
