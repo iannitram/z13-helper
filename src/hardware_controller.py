@@ -144,7 +144,8 @@ class HardwareController:
         return v if v in ("quiet", "balanced", "performance") else "balanced"
 
     def set_battery_limit(self, limit_percent: int):
-        """Sets the battery charge limit (40–100)."""
+        """Sets the battery charge limit (40–100), clamped to that range."""
+        limit_percent = max(40, min(100, int(limit_percent)))
         return self._run_command(["batterylimit", "--set", str(limit_percent)])
 
     def set_brightness(self, level: str, devices=None) -> list:
@@ -271,11 +272,15 @@ class HardwareController:
         """Apply all three TDP rails (watts).
 
         A partial call is rejected: z13ctl's --set anchor pins every rail it is
-        not told about, so leaving one out would silently change it. Pass
-        force=True to allow PL1 above 75W.
+        not told about, so leaving one out would silently change it. The rails
+        are ordered PL1 <= PL2 <= PL3 by raising the higher ones, as the Decky
+        clamp does; pass force=True to allow PL1 above 75W.
         """
         if any(v is None for v in (pl1, pl2, pl3)):
             raise ValueError("set_tdp requires pl1, pl2 and pl3")
+        pl1, pl2, pl3 = int(pl1), int(pl2), int(pl3)
+        pl2 = max(pl2, pl1)
+        pl3 = max(pl3, pl2)
         args = ["tdp", "--set", str(pl1), "--pl2", str(pl2), "--pl3", str(pl3)]
         if force:
             args.append("--force")
@@ -319,11 +324,12 @@ class HardwareController:
         """Apply a custom 8-point fan curve.
 
         `points` is a list of (temp_c, pct) tuples. Temps must be monotonically
-        increasing; percentages must be non-decreasing. z13ctl validates this.
+        increasing; percentages are clamped to 0–100 and must be non-decreasing.
+        z13ctl validates the ordering.
         """
         if len(points) != 8:
             raise ValueError("Fan curve must have exactly 8 points")
-        spec = ",".join(f"{int(t)}:{int(p)}%" for t, p in points)
+        spec = ",".join(f"{int(t)}:{max(0, min(100, int(p)))}%" for t, p in points)
         return self._run_command(["fancurve", "--set", spec])
 
     # Temp anchors for the flat max-fans curve. Any 8 monotonically increasing
@@ -342,10 +348,11 @@ class HardwareController:
 
         Like set_fancurve() but takes raw PWM instead of percent, so a curve
         snapshotted via get_fancurve() restores bit-for-bit (no pct rounding).
+        PWM values are clamped to 0–255.
         """
         if len(points) != 8:
             raise ValueError("Fan curve must have exactly 8 points")
-        spec = ",".join(f"{int(t)}:{int(pwm)}" for t, pwm in points)
+        spec = ",".join(f"{int(t)}:{max(0, min(255, int(pwm)))}" for t, pwm in points)
         return self._run_command(["fancurve", "--set", spec])
 
     def reset_fancurve(self):
