@@ -1,0 +1,83 @@
+"""Charger-aware autoswitch intent (issue #24): pure decision, hold and argv."""
+
+import autoswitch
+
+
+NAMES = ["Silent", "Balanced", "Turbo"]
+
+
+def test_normalize_keeps_known_targets_and_drops_unknown_names():
+    cfg = autoswitch.normalize(
+        {"ac": "Turbo", "battery": "Missing", "hold": True}, NAMES
+    )
+    assert cfg["ac"] == "Turbo"
+    assert cfg["battery"] is None
+    assert cfg["hold"] is True
+    assert cfg["enabled"] is False  # hold pauses switching
+
+
+def test_normalize_enables_only_when_a_real_target_is_set():
+    assert autoswitch.normalize({}, NAMES)["enabled"] is False
+    assert autoswitch.normalize({"ac": "Turbo"}, NAMES)["enabled"] is True
+    assert autoswitch.normalize({"battery": "Silent"}, NAMES)["enabled"] is True
+
+
+def test_decision_picks_the_source_profile():
+    cfg = autoswitch.normalize({"ac": "Turbo", "battery": "Silent"}, NAMES)
+    assert autoswitch.decision(cfg, True) == "Turbo"
+    assert autoswitch.decision(cfg, False) == "Silent"
+
+
+def test_hold_refuses_to_switch_but_keeps_both_choices():
+    cfg = autoswitch.normalize(
+        {"ac": "Turbo", "battery": "Silent", "hold": True}, NAMES
+    )
+    assert autoswitch.decision(cfg, True) is None
+    assert autoswitch.decision(cfg, False) is None
+
+
+def test_decision_none_for_missing_source_or_disabled_config():
+    assert autoswitch.decision({}, True) is None
+    cfg = autoswitch.normalize({"ac": "Turbo"}, NAMES)
+    assert autoswitch.decision(cfg, False) is None
+    assert autoswitch.decision({"enabled": False, "ac": "Turbo"}, True) is None
+
+
+def test_hardware_overrides_are_the_named_profile_fields():
+    assert autoswitch.has_hardware_overrides({"tdp": {"pl1": 20}})
+    assert autoswitch.has_hardware_overrides({"fan_curve": [[20, 20]]})
+    assert autoswitch.has_hardware_overrides({"undervolt": -20})
+    assert not autoswitch.has_hardware_overrides({"epp": "power", "brightness": "low"})
+    assert not autoswitch.has_hardware_overrides(None)
+
+
+def test_backend_argv_keeps_targets_while_held_and_enables_when_released():
+    cfg = autoswitch.normalize({"ac": "Turbo", "battery": "Silent"}, NAMES)
+    targets = {"Turbo": "z13h-turbo-1", "Silent": "quiet"}
+    assert autoswitch.backend_argv(cfg, targets) == [
+        "autoswitch",
+        "--ac",
+        "z13h-turbo-1",
+        "--battery",
+        "quiet",
+        "--on",
+    ]
+    held = autoswitch.normalize(
+        {"ac": "Turbo", "battery": "Silent", "hold": True}, NAMES
+    )
+    assert autoswitch.backend_argv(held, targets)[-1] == "--off"
+
+
+def test_backend_argv_clears_when_no_targets_remain():
+    cfg = autoswitch.normalize({"ac": "", "battery": ""}, NAMES)
+    assert autoswitch.backend_argv(cfg, {}) == ["autoswitch", "--clear"]
+
+
+def test_describe_names_both_sides_and_hold():
+    cfg = autoswitch.normalize({"ac": "Turbo", "battery": "Silent"}, NAMES)
+    assert autoswitch.describe(cfg) == "Autoswitch: Turbo on AC, Silent on battery"
+    cfg = autoswitch.normalize(
+        {"ac": "Turbo", "battery": "Silent", "hold": True}, NAMES
+    )
+    assert autoswitch.describe(cfg).endswith("(held)")
+    assert autoswitch.describe({}) == "Autoswitch off"
