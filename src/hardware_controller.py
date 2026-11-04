@@ -10,8 +10,8 @@ import profiles
 logger = logging.getLogger(__name__)
 
 # Regexes for parsing z13ctl --get outputs
-_RE_TDP_LINE   = re.compile(r"PL([123])\s+\([^)]+\):\s+(\d+)")
-_RE_FAN_LINE   = re.compile(r"(\d+)°C:\s+(\d+)/255\s*\(\s*(\d+)%\)")
+_RE_TDP_LINE = re.compile(r"PL([123])\s+\([^)]+\):\s+(\d+)")
+_RE_FAN_LINE = re.compile(r"(\d+)°C:\s+(\d+)/255\s*\(\s*(\d+)%\)")
 _RE_FAN_HEADER = re.compile(r"Fans:\s+(\d+)\s*RPM,\s*mode:\s*(\w+)")
 
 
@@ -22,7 +22,9 @@ Z13CTL_WRITE_TIMEOUT_S = host.Z13CTL_WRITE_TIMEOUT_S
 _LIGHTING_DEVICES = ("keyboard", "lightbar")
 
 # amd-pstate EPP: the choices cpu0 accepts (the rest of the CPUs share them).
-_EPP_AVAILABLE = "/sys/devices/system/cpu/cpu0/cpufreq/energy_performance_available_preferences"
+_EPP_AVAILABLE = (
+    "/sys/devices/system/cpu/cpu0/cpufreq/energy_performance_available_preferences"
+)
 
 
 def read_epp_values(paths):
@@ -50,10 +52,14 @@ class HardwareController:
             if host.in_flatpak():
                 z13ctl_path = _DEFAULT_Z13CTL
             else:
-                z13ctl_path = _DEFAULT_Z13CTL if os.path.exists(_DEFAULT_Z13CTL) else "z13ctl"
+                z13ctl_path = (
+                    _DEFAULT_Z13CTL if os.path.exists(_DEFAULT_Z13CTL) else "z13ctl"
+                )
         self.z13ctl_path = z13ctl_path
 
-    def _run_command(self, args, quiet: bool = False, timeout: float = Z13CTL_WRITE_TIMEOUT_S):
+    def _run_command(
+        self, args, quiet: bool = False, timeout: float = Z13CTL_WRITE_TIMEOUT_S
+    ):
         """z13ctl's output; RuntimeError when it fails (ProfileControl relies on that)."""
         cmd = [self.z13ctl_path] + args
         r = authority.run(cmd, timeout=timeout)
@@ -61,7 +67,8 @@ class HardwareController:
             if not quiet:
                 logger.error(f"Command '{' '.join(cmd)}' timed out after {timeout} s")
             raise RuntimeError(
-                f"z13ctl write timed out after {Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)")
+                f"z13ctl write timed out after {Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)"
+            )
         if r.rc == host.RC_NOT_FOUND:
             logger.error(f"z13ctl not found at: {self.z13ctl_path}")
             raise RuntimeError("z13ctl executable not found.")
@@ -158,7 +165,9 @@ class HardwareController:
 
         Returns the devices that failed. Raises only if every device failed.
         """
-        devices = tuple(d for d in _LIGHTING_DEVICES if d in (devices or _LIGHTING_DEVICES))
+        devices = tuple(
+            d for d in _LIGHTING_DEVICES if d in (devices or _LIGHTING_DEVICES)
+        )
         failed = []
         errors = []
         for device in devices:
@@ -172,8 +181,10 @@ class HardwareController:
                     raise
                 if device == "lightbar":
                     kind = profiles.lightbar_failure_kind(str(e))
-                    recover = {"wedged": profiles.recover_lightbar,
-                               "stale": profiles.recover_lightbar_stale}.get(kind)
+                    recover = {
+                        "wedged": profiles.recover_lightbar,
+                        "stale": profiles.recover_lightbar_stale,
+                    }.get(kind)
                     if recover:
                         ok, msg = recover()
                         if ok:
@@ -257,33 +268,24 @@ class HardwareController:
         return result
 
     def set_tdp(self, pl1=None, pl2=None, pl3=None, force: bool = False):
-        """Apply per-rail TDP overrides. None means leave that rail alone.
+        """Apply all three TDP rails (watts).
 
-        If only pl1 is given, all three are pinned to that value (z13ctl behaviour).
-        Pass force=True to allow PL1 above 75W.
+        A partial call is rejected: z13ctl's --set anchor pins every rail it is
+        not told about, so leaving one out would silently change it. Pass
+        force=True to allow PL1 above 75W.
         """
-        # z13ctl requires --set as the anchor; --plN flags override individual rails.
-        # If only some rails are provided, use the smallest as the --set value and
-        # specify the others explicitly so values stay distinct.
-        provided = [v for v in (pl1, pl2, pl3) if v is not None]
-        if not provided:
-            raise ValueError("set_tdp requires at least one of pl1/pl2/pl3")
-
-        anchor = pl1 if pl1 is not None else min(provided)
-        args = ["tdp", "--set", str(anchor)]
-        if pl1 is not None and pl1 != anchor:
-            args += ["--pl1", str(pl1)]
-        if pl2 is not None:
-            args += ["--pl2", str(pl2)]
-        if pl3 is not None:
-            args += ["--pl3", str(pl3)]
+        if any(v is None for v in (pl1, pl2, pl3)):
+            raise ValueError("set_tdp requires pl1, pl2 and pl3")
+        args = ["tdp", "--set", str(pl1), "--pl2", str(pl2), "--pl3", str(pl3)]
         if force:
             args.append("--force")
         return self._run_command(args)
 
     def apply_tdp(self, tdp):
         """Apply a profiles.json tdp dict ({pl1, pl2, pl3, force})."""
-        return self.set_tdp(tdp["pl1"], tdp["pl2"], tdp["pl3"], force=bool(tdp.get("force")))
+        return self.set_tdp(
+            tdp["pl1"], tdp["pl2"], tdp["pl3"], force=bool(tdp.get("force"))
+        )
 
     def reset_tdp(self):
         """Reset TDP to firmware-managed (returns to balanced profile)."""
@@ -293,9 +295,9 @@ class HardwareController:
 
     def get_fancurve(self) -> dict:
         """Returns dict with keys:
-            mode:   current fan mode ("auto" or "manual")
-            rpm:    current fan RPM
-            points: list of (temp_c, pwm_0_255, pct) tuples — 8 entries
+        mode:   current fan mode ("auto" or "manual")
+        rpm:    current fan RPM
+        points: list of (temp_c, pwm_0_255, pct) tuples — 8 entries
         """
         try:
             out = self._run_command(["fancurve", "--get"])
@@ -305,7 +307,7 @@ class HardwareController:
         for line in out.splitlines():
             m = _RE_FAN_HEADER.search(line)
             if m:
-                rpm  = int(m.group(1))
+                rpm = int(m.group(1))
                 mode = m.group(2)
                 continue
             m = _RE_FAN_LINE.search(line)
@@ -388,8 +390,10 @@ if __name__ == "__main__":
         print(f"Battery limit: {controller.get_battery_limit()}%")
         print(f"TDP:           {controller.get_tdp()}")
         print(f"Fan curve:     {controller.get_fancurve()}")
-        print(f"Undervolt:     {controller.get_undervolt()} "
-              f"(available={controller.is_undervolt_available()})")
+        print(
+            f"Undervolt:     {controller.get_undervolt()} "
+            f"(available={controller.is_undervolt_available()})"
+        )
         print()
         print(controller.get_status())
     except Exception as e:
