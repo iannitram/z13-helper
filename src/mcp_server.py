@@ -403,6 +403,45 @@ def _run_cli(argv):
     return payload, rc
 
 
+def _matches_type(value, expected):
+    if expected == "boolean":
+        return isinstance(value, bool)
+    if expected == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if expected == "number":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if expected == "string":
+        return isinstance(value, str)
+    if expected == "array":
+        return isinstance(value, list)
+    if expected == "object":
+        return isinstance(value, dict)
+    return True
+
+
+def _validate_value(key, value, schema):
+    expected = schema.get("type")
+    if expected and not _matches_type(value, expected):
+        raise ToolError(f"{key} must be of type {expected}")
+    enum = schema.get("enum")
+    if enum is not None and value not in enum:
+        raise ToolError(f"{key} must be one of: " + ", ".join(map(str, enum)))
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if "minimum" in schema and value < schema["minimum"]:
+            raise ToolError(f"{key} must be at least {schema['minimum']}")
+        if "maximum" in schema and value > schema["maximum"]:
+            raise ToolError(f"{key} must be at most {schema['maximum']}")
+    if expected == "array":
+        if "minItems" in schema and len(value) < schema["minItems"]:
+            raise ToolError(f"{key} needs at least {schema['minItems']} item(s)")
+        if "maxItems" in schema and len(value) > schema["maxItems"]:
+            raise ToolError(f"{key} accepts at most {schema['maxItems']} item(s)")
+        items = schema.get("items")
+        if items is not None:
+            for item in value:
+                _validate_value(key, item, items)
+
+
 def _validated(name, arguments):
     tool = _BY_NAME.get(name)
     if tool is None:
@@ -420,6 +459,8 @@ def _validated(name, arguments):
     ]
     if missing:
         raise ToolError("missing argument(s): " + ", ".join(missing))
+    for key, value in arguments.items():
+        _validate_value(key, value, properties[key])
     return arguments
 
 

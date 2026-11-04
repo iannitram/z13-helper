@@ -137,6 +137,25 @@ def test_profile_set_dispatches_a_clamped_field(owner, profiles_env):
     assert calls[0][1][0]["battery_limit"] == 85
 
 
+@pytest.mark.parametrize(
+    "name, arguments",
+    [
+        ("max_fans_set", {"enabled": "false"}),
+        ("boondock_set", {"enabled": 0}),
+        ("battery_set", {"limit": "85"}),
+        ("battery_set", {"limit": 85.0}),
+    ],
+)
+def test_wrong_types_are_rejected_before_the_owner(owner, name, arguments):
+    calls, record = owner
+    record("set_field")
+    record("set_max_fans")
+    result = mcp_server.call_tool(name, arguments)
+    assert result["isError"] is True
+    assert "must be of type" in result["content"][0]["text"]
+    assert calls == []
+
+
 def test_missing_and_unknown_arguments_are_tool_errors(profiles_env):
     missing = mcp_server.call_tool("battery_set", {})
     assert missing["isError"] is True
