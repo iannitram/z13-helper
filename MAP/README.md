@@ -83,7 +83,6 @@ Modules planned by Phases 15 and 16 (`docs/ROADMAP.md` §10a, §10b). Each moves
 
 | Module | Status | Responsibility and connections | Issue |
 |---|---|---|---|
-| `src/goal_control.py` | planned | Pure goal decision: goal + hwmon/fps readings + current setpoints → next TDP and curve, bounded by `power_range.py`. No I/O. | #123 |
 | `src/profiles.py` (`goal` field) | planned | Optional per-profile goal; `max_fans` migrates to goal `max`. | #124 |
 | `src/goal_runner.py` | planned | The one curve/TDP writer while a goal is active; reads `sensor_reader.py` and `fps_source.py`, writes through `apply_worker.py` (desktop) or `decky/main.py` (Game Mode), coordinated by the #23 state owner; takes over `fan_watchdog.py`'s curve-drop recovery. | #125 |
 | `src/fps_source.py` | planned | Read-only frame-rate reading in Game Mode (source chosen by the probe). | #126 |

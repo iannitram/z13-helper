@@ -66,7 +66,9 @@ def test_ordering_after_unequal_clamping():
     lim = g.Limits(ranges={"pl1": (5, 93), "pl2": (5, 50), "pl3": (5, 93)})
     d = run(g.Goal("max"), g.Readings(), sp(49, 49, 49, 50), limits=lim)
     s = d.setpoints
-    assert s.spl_w <= s.sppt_w <= s.fppt_w and s.sppt_w <= 52
+    assert s.spl_w <= s.sppt_w <= s.fppt_w
+    lo, hi = lim.ranges["pl2"]
+    assert lo <= s.sppt_w <= hi
 
 
 # --- defect 2: max curve is full speed everywhere ---

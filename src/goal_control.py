@@ -109,9 +109,10 @@ def _move_power(cur, direction, limits):
         lo, hi = limits.ranges[rail]
         rails.append(int(_clamp(v + direction * MAX_TDP_STEP_W, lo, hi)))
     spl, sppt, fppt = rails
-    sppt = max(sppt, spl)
-    fppt = max(fppt, sppt)
-    sppt = min(sppt, fppt)
+    # Upper bounds win downwards so each value stays inside its own range and
+    # SPL <= sPPT <= fPPT holds.
+    fppt = max(fppt, limits.ranges["pl3"][0])
+    sppt = min(sppt, fppt, limits.ranges["pl2"][1])
     spl = min(spl, sppt)
     return spl, sppt, fppt
 
