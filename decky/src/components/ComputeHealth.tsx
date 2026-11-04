@@ -56,7 +56,6 @@ export function ComputeHealth() {
           <PanelSectionRow>
             <Field label="GPU" focusable={false} padding="compact" childrenLayout="inline">
               {h.gpu_agents.length ? h.gpu_agents.map((a) => a.gfx).join(", ") : "no GPU agent"}
-              {h.gfx1151 ? " (gfx1151)" : ""}
             </Field>
           </PanelSectionRow>
           <PanelSectionRow>
