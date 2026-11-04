@@ -42,10 +42,19 @@ def test_valid_goals_pass(goal):
 @pytest.mark.parametrize("goal", [
     "quiet", {}, {"kind": "turbo"}, {"kind": "quiet"}, {"kind": "quiet", "max_rpm": "4400"},
     {"kind": "quiet", "max_rpm": 50}, {"kind": "quiet", "max_rpm": True},
-    {"kind": "fps", "target_fps": 1000}])
+    {"kind": "fps", "target_fps": 1000}, {"kind": []}, {"kind": {}}])
 def test_bad_goals_are_rejected(goal):
     with pytest.raises(ValueError):
         profiles.validate(custom(goal=goal))
+
+
+@pytest.mark.parametrize("goal", [
+    {"kind": []}, {"kind": {}}, {}])
+def test_unhashable_or_missing_kind_in_file_is_dropped_not_the_profile(profiles_env, goal):
+    seed(profiles_env, [custom("Mine", goal=goal), custom("Other")])
+    store = profiles.load_store()
+    assert "goal" not in by_name(store, "Mine")
+    assert by_name(store, "Other")
 
 
 # ---- old files load unchanged; goal key only when set ----------------

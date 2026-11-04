@@ -164,9 +164,10 @@ GOAL_TARGETS = {
 def validate_goal(goal):
     if goal is None:
         return
-    if not isinstance(goal, dict) or goal.get("kind") not in GOAL_TARGETS:
+    kind = goal.get("kind") if isinstance(goal, dict) else None
+    if not isinstance(kind, str) or kind not in GOAL_TARGETS:
         raise ValueError(f"goal needs a kind: one of {tuple(GOAL_TARGETS)}")
-    target = GOAL_TARGETS[goal["kind"]]
+    target = GOAL_TARGETS[kind]
     if target is None:
         return
     key, low, high = target
@@ -178,8 +179,9 @@ def validate_goal(goal):
 def goal_kind(p):
     """The profile's goal kind, treating a bare max_fans profile as "max"."""
     goal = p.get("goal")
-    if isinstance(goal, dict) and goal.get("kind") in GOAL_TARGETS:
-        return goal["kind"]
+    kind = goal.get("kind") if isinstance(goal, dict) else None
+    if isinstance(kind, str) and kind in GOAL_TARGETS:
+        return kind
     return "max" if p.get("max_fans") else None
 
 
