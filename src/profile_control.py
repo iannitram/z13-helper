@@ -105,11 +105,11 @@ class ProfileControl(QObject):
         self.pending_name = name
         self.message.emit(f"Applying {name}…")
         self.changed.emit()
-        self._submit(f"Profile → {name}", lambda: profiles.apply_by_name(name))
+        self._submit(f"Profile → {name}", lambda: authority.apply_profile(name))
 
     def reapply_active(self):
         name = self.active_name()
-        self._submit(f"Re-applied {name}", lambda: profiles.apply_by_name(name, skip_hooks=True))
+        self._submit(f"Re-applied {name}", lambda: authority.apply_profile(name, skip_hooks=True))
 
     # ---------------- editing ----------------
 

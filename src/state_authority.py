@@ -119,25 +119,34 @@ def run(argv, timeout=30, *, as_deck=False, input=None):
 
 @serialized
 def edit(profile, field, *, devices=None):
-    """Save an edit to its named profile; stale widgets may never write hardware."""
+    """Store an edit; push it live only when the profile is active."""
     import profiles
     client = named_client()
     if client is not None:
         profiles.sync_active_from_backend(client.get_state())
-    if profile['name'] != profiles.active_name():
-        raise ValueError('Not applied: active profile changed; refresh the control')
     current = profiles.get_profile(profile['name'])
     if current is not None:
         # A slider owns one field, never the other values in its stale widget copy.
         current[field] = profile.get(field)
         profile = current
     profiles.upsert_profile(profile)
+    if profile['name'] != profiles.active_name():
+        # Inactive profile: the edit is stored through this owner; live
+        # hardware is untouched until the profile is applied.
+        return mirror_profile(profile)
     previous = getattr(_local, 'profile', None)
     _local.profile = profile
     try:
         return _push_field(profile, field, devices=devices)
     finally:
         _local.profile = previous
+
+
+@serialized
+def apply_profile(name, **kw):
+    """Apply a stored profile as one transaction (GUI switch and re-apply)."""
+    import profiles
+    return profiles.apply_by_name(name, **kw)
 
 
 def _push_field(profile, field, *, devices=None):

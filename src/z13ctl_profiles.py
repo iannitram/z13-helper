@@ -30,9 +30,9 @@ def profile_target_supported(list_output: str) -> bool:
     write on an old daemon could change live hardware when it ignores profile.
 
     Limit of this check: it proves only that the daemon answers ``profile-list``
-    with well-formed rows. That ``request.profile`` is honoured is inferred from
-    the two shipping together upstream; it cannot be verified without hardware
-    (see PR-NOTES device steps).
+    with well-formed rows. It does NOT prove ``request.profile`` is honoured;
+    that is inferred from the two shipping together upstream and is unverified
+    without hardware (see the MAP/README.md row for this module and issue #23).
     """
     import json
     try:

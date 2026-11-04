@@ -88,16 +88,30 @@ def test_mirror_failure_never_selects_partial_target_or_falls_back(daemon, fake_
     assert not any(cmd == 'profile' and f['set'] == 'Turbo' for cmd, f in daemon.calls)
 
 
-def test_stale_frontend_edit_cannot_save_or_apply_to_another_profile(daemon, fake_host):
+def test_stale_frontend_edit_is_stored_but_never_applied_to_another_profile(daemon, fake_host):
     old = profiles.get_profile('Balanced')
     old['tdp'] = {'pl1': 40, 'pl2': 50, 'pl3': 55}
     daemon.state['profile'] = 'performance'
-    with pytest.raises(ValueError, match='active profile changed'):
-        authority.edit(old, 'tdp')
+    authority.edit(old, 'tdp')   # no "active profile changed" error: Balanced is inactive now
     assert profiles.active_name() == 'Turbo'
-    assert profiles.get_profile('Balanced')['tdp'] is None
+    assert profiles.get_profile('Balanced')['tdp']['pl1'] == 40
     assert not fake_host.calls
-    assert all(cmd == 'get-state' for cmd, _ in daemon.calls)
+    assert not any(cmd == 'profile' for cmd, _ in daemon.calls)
+
+
+def test_inactive_profile_edit_persists_and_does_not_raise(daemon, fake_host):
+    """Regression: save(profile, field) on a non-active profile must keep the edit."""
+    p = profiles.get_profile('Turbo')
+    p['tdp'] = {'pl1': 45, 'pl2': 55, 'pl3': 60}
+    authority.edit(p, 'tdp')
+    assert profiles.get_profile('Turbo')['tdp']['pl1'] == 45
+    assert profiles.active_name() == 'Balanced'
+    assert daemon.state['profile'] == 'Balanced'
+    assert not fake_host.calls
+    # Only the edited profile's own named target is written; live selection never moves.
+    assert not any(cmd == 'profile' for cmd, _ in daemon.calls)
+    assert all(f.get('profile') == 'Turbo' for cmd, f in daemon.calls
+               if cmd in ('tdp', 'fancurve', 'undervolt'))
 
 
 def test_live_slider_edit_targets_named_profile_without_default_custom(daemon, fake_host):
@@ -200,7 +214,7 @@ def test_profile_apply_and_queued_slider_share_one_transaction(daemon, fake_host
     errors = []
     def apply():
         try:
-            profiles.apply_by_name('Turbo', skip_hooks=True)
+            authority.apply_profile('Turbo', skip_hooks=True)
         except Exception as exc:
             errors.append(exc)
     def slider():
