@@ -163,11 +163,13 @@ def _parser():
         "lighting", parents=[common], help="rear light and keyboard lighting"
     )
     lighting.add_argument("action", nargs="?", default="get")
-    lighting.add_argument("device", nargs="?")
+    lighting.add_argument("device", nargs="?", choices=profiles.LIGHTING_DEVICES)
     lighting.add_argument("--mode", choices=profiles.LIGHTING_MODES)
     lighting.add_argument("--color", choices=profiles.LIGHTING_COLORS, default="red")
     lighting.add_argument("--brightness", choices=profiles.BRIGHTNESS_LEVELS)
-    lighting.add_argument("--device", dest="device_option", choices=DEVICE_CHOICES)
+    lighting.add_argument(
+        "--device", dest="device_option", choices=profiles.LIGHTING_DEVICES
+    )
 
     boondock = sub.add_parser(
         "boondock", parents=[common], help="Boondock low-power profile"

@@ -75,6 +75,13 @@ def test_parse_error_honours_json(capsys):
     assert captured.err == ""
 
 
+@pytest.mark.parametrize("device", ["both", "all"])
+def test_lighting_rejects_combined_devices_in_argparse(device, capsys):
+    assert cli.main(["lighting", "--device", device, "--json"]) == 2
+    data = json.loads(capsys.readouterr().out)
+    assert data["ok"] is False and "invalid choice" in data["error"]
+
+
 def run_json(capsys, argv):
     assert cli.main(argv + ["--json"]) == 0
     return json.loads(capsys.readouterr().out)
