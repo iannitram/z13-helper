@@ -131,6 +131,46 @@ def test_rule1_reasserts_max_fans_with_profile_rewrite(env):
     assert "Max Fans re-applied after a profile change" in msg
 
 
+@pytest.mark.parametrize("enabled", [True, None])
+def test_inline_dropped_curve_rechecks_after_permission_gate(env, enabled):
+    """The daemon may restore the curve while may_act checks the host."""
+    ns = env.make(max_fans=True, enabled=False)
+
+    def may_act():
+        ns.sensors.enabled = enabled
+        return True
+
+    ns.wd._may_act = may_act
+    msg = run(ns, 1)[0]
+
+    assert "skipped" in msg
+    assert ns.ctl.calls == []
+    # If the curve drops again, compatibility recovery is still available.
+    ns.wd._may_act = lambda: True
+    ns.sensors.enabled = False
+    ns.clock.advance(RETRY_S)
+    assert "Max Fans re-applied" in ns.wd.tick()
+    assert call_names(ns.ctl) == ["rewrite_profile", "set_fans_max"]
+
+
+@pytest.mark.parametrize("enabled", [True, None])
+def test_queued_dropped_curve_skips_when_daemon_restores_curve(env, enabled):
+    """Daemon reconciliation alone supersedes recovery with Max Fans still on."""
+    ns = env.make(max_fans=True, enabled=False)
+    jobs = []
+    runner = FanWatchdogRunner(ns.wd, lambda label, fn: jobs.append(fn))
+    runner.tick()
+    assert len(jobs) == 1 and runner.pending
+    ns.sensors.enabled = enabled
+
+    msg = jobs[0]()
+    runner.on_done(FAN_RECOVERY_LABEL, msg)
+
+    assert "skipped" in msg
+    assert ns.max_on and not runner.pending
+    assert ns.ctl.calls == []
+
+
 @pytest.mark.parametrize("clear_during", ["rewrite_profile", "restore_tdp"])
 def test_max_fans_recovery_cancels_if_flag_turns_off_midflight(env, clear_during):
     ns = env.make(max_fans=True, enabled=False)
