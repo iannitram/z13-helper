@@ -444,7 +444,11 @@ class FansWindow(QWidget):
             return
         p = self._profile()
         p["max_fans"] = bool(on)
-        self.control.save(p)     # takes effect on the next switch to/from this profile
+        if on:
+            p["goal"] = {"kind": "max"}      # the checkbox is the Max goal
+        elif (p.get("goal") or {}).get("kind") == "max":
+            p.pop("goal")
+        self.control.save(p)    # takes effect on the next switch to/from this profile
 
     def _on_uv_released(self):
         if self._loading or not self.auto_uv.isChecked():
