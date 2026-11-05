@@ -5,10 +5,18 @@ import { usePollWhileVisible } from "../hooks";
 
 const POLL_MS = 2000;
 
-const temp = (v: number | null) => (v == null ? "–" : `${Math.round(v)}°C`);
-const rpm = (v: number | null) => (v == null ? "–" : `${v}`);
+const temp = (v: number | null, src?: string | null) =>
+  v == null ? "unavailable" : `${Math.round(v)}°C${src ? ` (${src})` : ""}`;
+const rpm = (v: number | null) => (v == null ? "unavailable" : `${v}`);
 
-/** APU / GPU temperature and both fan RPMs; polled every 2 s only while the QAM is open. */
+const fans = (fan1: number | null, fan2: number | null) => {
+  if (fan1 == null && fan2 == null) return "unavailable";
+  if (fan1 == null) return `Fan 1 unavailable · ${rpm(fan2)} RPM`;
+  if (fan2 == null) return `${rpm(fan1)} RPM · Fan 2 unavailable`;
+  return `${rpm(fan1)} · ${rpm(fan2)} RPM`;
+};
+
+/** CPU / GPU temperature (each with its sensor) and both fan RPMs; polled every 2 s only while the QAM is open. */
 export function TelemetryRow() {
   const [t, setT] = useState<T | null>(null);
   usePollWhileVisible(() => {
@@ -20,13 +28,18 @@ export function TelemetryRow() {
   return (
     <>
       <PanelSectionRow>
-        <Field label="Temps" focusable={false} padding="compact" childrenLayout="inline">
-          APU {temp(t?.apu ?? null)} · GPU {temp(t?.gpu ?? null)}
+        <Field label="CPU" focusable={false} padding="compact" childrenLayout="inline">
+          {temp(t?.apu ?? null, t?.apu_src)}
+        </Field>
+      </PanelSectionRow>
+      <PanelSectionRow>
+        <Field label="GPU" focusable={false} padding="compact" childrenLayout="inline">
+          {temp(t?.gpu ?? null, t?.gpu_src)}
         </Field>
       </PanelSectionRow>
       <PanelSectionRow>
         <Field label="Fans" focusable={false} padding="compact" childrenLayout="inline">
-          {rpm(t?.fan1 ?? null)} · {rpm(t?.fan2 ?? null)} RPM
+          {fans(t?.fan1 ?? null, t?.fan2 ?? null)}
         </Field>
       </PanelSectionRow>
     </>

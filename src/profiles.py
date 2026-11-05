@@ -783,6 +783,11 @@ def validate(p):
         raise ValueError("battery_limit must be 40..100")
 
 
+def fan_curve_floor_pct(temp):
+    """BIOS safety floor from G-Helper: at least (temp-70)*1.2 %, i.e. 36% at 100 °C."""
+    return max(0.0, (temp - 70) * 1.2)
+
+
 def validate_curve(curve):
     """Same rules z13ctl enforces: 8 points, temps increasing, pct non-decreasing."""
     if curve is None:

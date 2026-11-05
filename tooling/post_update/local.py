@@ -39,6 +39,12 @@ def parse_local(text: str) -> dict[str, object]:
         if flag in data and not isinstance(data[flag], bool):
             raise ValueError(f"flag {flag} must be true or false")
 
+    replaces = data.get("replaces", [])
+    if not isinstance(replaces, list) or not all(
+            isinstance(x, str) and x.startswith("/") and len(x.strip("/").split("/")) >= 2
+            for x in replaces):
+        raise ValueError("replaces must be a list of absolute paths (at least two levels deep)")
+
     # Build result with all fields
     result = {
         "id": data["id"],
@@ -51,6 +57,7 @@ def parse_local(text: str) -> dict[str, object]:
         "reboot": data.get("reboot", False),
         "pacman": data.get("pacman", False),
         "default_on": data.get("default_on", False),
+        "replaces": tuple(replaces),   # files the apply overwrites: backed up and recorded
     }
 
     return result

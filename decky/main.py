@@ -106,6 +106,62 @@ Z13CTL_WRITE_TIMEOUT_S = host.Z13CTL_WRITE_TIMEOUT_S
 PROFILE_APPLY_TIMEOUT_S = 180
 
 
+def post_update_argv(repo, ack=False):
+    """Host command for the After SteamOS update tab (copy of src/post_update_view.tab_argv:
+    this backend runs as root and can't import src/ modules that are not in py_modules/)."""
+    if not isinstance(repo, str) or not os.path.isabs(repo) or "\n" in repo:
+        raise ValueError("repo path must be absolute")
+    return ["env", f"PYTHONPATH={repo}/tooling:{repo}/src", "python3", "-m", "post_update",
+            "--tab-json"] + (["--ack"] if ack else [])
+
+
+def parse_post_update(out):
+    """The tab status dict from the command output, or None when it is not that JSON."""
+    start = out.find("{")
+    try:
+        data = json.loads(out[start:]) if start >= 0 else None
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) and isinstance(data.get("rows"), list) else None
+
+
+_STEP_ID = re.compile(r"[A-Za-z0-9@:._/-]+\Z")
+
+
+def post_repair_argv(repo, ids=None):
+    """Host command for the repair plan (copy of src/post_update_view.repair_argv): with no ids it
+    prints the plan as JSON and changes nothing; with ids it runs exactly those confirmed steps."""
+    if not isinstance(repo, str) or not os.path.isabs(repo) or "\n" in repo:
+        raise ValueError("repo path must be absolute")
+    argv = ["env", f"PYTHONPATH={repo}/tooling:{repo}/src", "python3", "-m", "post_update",
+            "repair", "--json"]
+    if ids is not None:
+        if not isinstance(ids, (list, tuple)) or not ids or not all(
+                isinstance(i, str) and _STEP_ID.fullmatch(i) for i in ids):
+            raise ValueError("ids must be non-empty step ids")
+        argv += ["--run", ",".join(ids)]
+    return argv
+
+
+def parse_json_key(out, key):
+    """The JSON object in the output when it has `key`, else None."""
+    start = out.find("{")
+    try:
+        data = json.loads(out[start:]) if start >= 0 else None
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) and key in data else None
+
+
+def _repo_path():
+    try:
+        with open(os.path.join(host.DECK_HOME, ".config", "z13-helper", "install.json")) as f:
+            repo = json.load(f).get("repo_path")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return repo if isinstance(repo, str) and os.path.isabs(repo) and "\n" not in repo else None
+
+
 def _run(args, timeout=15, *, as_deck=False):
     """host.run, logged. Returns (rc, out)."""
     rc, out, timed_out = authority.run(args, timeout=timeout, as_deck=as_deck)
@@ -511,13 +567,20 @@ def _live_battery_limit():
 
 
 def telemetry():
-    """APU / GPU temps (degC) and both fan RPMs; None where unreadable.
+    """CPU / GPU temps (degC) with their sensor names and both fan RPMs.
 
-    hwmon nodes are found by `name` (acpitz / amdgpu / asus), never by index.
-    Reads only hwmon; never the asus-armoury ppt_* files.
+    A value that cannot be read is None (shown as unavailable), never 0.
+    hwmon nodes are found by `name` (k10temp / acpitz / amdgpu / asus), never
+    by index; the GPU is the integrated one, picked by device. Key `apu` keeps
+    its name for the plugin bundle; `apu_src` / `gpu_src` say where each came
+    from. Reads only hwmon; never the asus-armoury ppt_* files.
     """
     f1, f2 = _sensors.get_fan_speeds()
-    return {"apu": _sensors.get_apu_temp(), "gpu": _sensors.get_gpu_temp(), "fan1": f1, "fan2": f2}
+    cpu = _sensors.get_cpu_temp()
+    gpu = _sensors.get_gpu_temp_labeled()
+    return {"apu": cpu[0] if cpu else None, "apu_src": cpu[1] if cpu else None,
+            "gpu": gpu[0] if gpu else None, "gpu_src": gpu[1] if gpu else None,
+            "fan1": f1, "fan2": f2}
 
 
 def _save_plugin_state(**changes):
@@ -763,6 +826,90 @@ def _lock():
     return _write_lock
 
 
+# A sampled fail-stop threshold, not a kernel-enforced allocation limit. Check
+# independently of the event loop/write lock so a slow hardware call cannot
+# postpone it. Assumes (UNVERIFIED here) that Decky Loader runs each plugin
+# backend as its own process, so os._exit ends only this plugin; no Decky
+# source/version has been checked for that or for any respawn. Needs a device check.
+BACKEND_RSS_LIMIT_KIB = 500 * 1024
+BACKEND_RSS_CHECK_S = 5
+
+
+def backend_rss_kib(path="/proc/self/status"):
+    """Current resident memory, not peak RSS or virtual address space."""
+    with open(path, encoding="ascii") as stream:
+        for line in stream:
+            fields = line.split()
+            if fields[:1] == ["VmRSS:"]:
+                if len(fields) != 3 or fields[2] != "kB" or int(fields[1]) < 0:
+                    raise ValueError("invalid VmRSS")
+                return int(fields[1])
+    raise ValueError("missing VmRSS")
+
+
+class BackendMemoryGuard:
+    """One stoppable monitor per backend; no sample history or child processes.
+
+    A trip exits this backend (hard cap) unless Z13_RSS_GUARD_EXIT=0 is set in the
+    plugin_loader environment, which makes it log once instead. Exit rather than
+    restarting plugin_loader (which would disrupt all plugins).
+    Per-plugin process isolation and any respawn are UNVERIFIED assumptions
+    (no Decky version/source cited); reloading this plugin after a trip is a
+    device/operator recovery step.
+    """
+
+    def __init__(self, read_rss=None, terminate=None):
+        self._read_rss = read_rss or backend_rss_kib
+        self._terminate = terminate or self._default_terminate
+        self._tripped = False
+        self._stop = threading.Event()
+        self._read_failed = False
+        self._thread = threading.Thread(target=self._run, name="z13-rss-guard", daemon=True)
+
+    def _default_terminate(self, code):
+        """Exit by default; Z13_RSS_GUARD_EXIT=0 (operator opt-out, see
+        docs/fan-watchdog-memory.md) logs once and keeps the plugin running."""
+        if os.environ.get("Z13_RSS_GUARD_EXIT") != "0":
+            os._exit(code)
+        if not self._tripped:
+            self._tripped = True
+            decky.logger.error("Backend RSS over limit; not exiting (Z13_RSS_GUARD_EXIT=0)")
+
+    def start(self):
+        self._thread.start()
+
+    def close(self):
+        self._stop.set()
+        self._thread.join()
+
+    def check(self):
+        try:
+            rss = self._read_rss()
+        except (OSError, ValueError):
+            if not self._read_failed:
+                decky.logger.warning("Backend RSS unavailable; memory guard will retry")
+            self._read_failed = True
+            return False
+        self._read_failed = False
+        if rss < BACKEND_RSS_LIMIT_KIB:
+            return False
+        # os._exit bypasses cleanup that might hang or allocate more memory.
+        # Report to stderr first; do not depend on a logging handler's lock.
+        try:
+            os.write(2, f"z13-helper backend RSS guard: rss_kib={rss} "
+                     f"limit_kib={BACKEND_RSS_LIMIT_KIB}; exiting plugin process\n".encode())
+        finally:
+            self._terminate(1)
+        return True
+
+    def _run(self):
+        while not self._stop.is_set():
+            if self.check():
+                return
+            if self._stop.wait(BACKEND_RSS_CHECK_S):
+                return
+
+
 def _edit_field(field, value, expected):
     try:
         result = authority.set_field(field, value, expected)
@@ -811,6 +958,54 @@ class Plugin:
                 await asyncio.to_thread(check.check)
             except Exception as e:  # noqa: BLE001
                 decky.logger.error("Desktop app check error: %s", e)
+
+    # ---- After SteamOS update (tooling/post_update, run as deck; the repair needs a confirmed run) ----
+    async def post_update_status(self, ack: bool = False) -> dict:
+        """{"ok", "message", "status"}; status is the --tab-json dict (None when unavailable)."""
+        repo = _repo_path()
+        if not repo:
+            return {"ok": False, "message": "Run ./install.sh once so the plugin knows the repo.",
+                    "status": None}
+        rc, out = await asyncio.to_thread(
+            lambda: _run(post_update_argv(repo, bool(ack)), 60, as_deck=True))
+        status = parse_post_update(out) if rc == 0 else None
+        return {"ok": status is not None,
+                "message": "" if status is not None else "Could not read the post-update status.",
+                "status": status}
+
+    async def post_update_repair_plan(self) -> dict:
+        """{"ok", "message", "plan"}: the repair plan (steps with exact commands, root flags,
+        undo notes). Changes nothing; the Deck UI shows it and asks before the run."""
+        repo = _repo_path()
+        if not repo:
+            return {"ok": False, "message": "Run ./install.sh once so the plugin knows the repo.",
+                    "plan": None}
+        rc, out = await asyncio.to_thread(
+            lambda: _run(post_repair_argv(repo), 120, as_deck=True))
+        plan = parse_json_key(out, "steps") if rc == 0 else None
+        return {"ok": plan is not None,
+                "message": "" if plan is not None else "Could not build the repair plan.",
+                "plan": plan}
+
+    async def post_update_repair_run(self, ids: list) -> dict:
+        """{"ok", "message", "result"}: run exactly the step ids the user confirmed (root steps go
+        through sudo -n as deck; nothing escalates silently). Each step is verified, rolled back on
+        failure and written to the rollback record."""
+        repo = _repo_path()
+        argv = None
+        if repo and isinstance(ids, (list, tuple)):   # never fall back to the plan call
+            try:
+                argv = post_repair_argv(repo, list(ids))
+            except ValueError:
+                argv = None
+        if argv is None:
+            return {"ok": False, "message": "No repo or no valid steps to run.", "result": None}
+        rc, out = await asyncio.to_thread(lambda: _run(argv, 900, as_deck=True))
+        result = parse_json_key(out, "results")
+        # rc 1 = a step did not apply; the JSON still says which and why
+        return {"ok": result is not None and rc in (0, 1),
+                "message": "" if result is not None else "The repair did not report back.",
+                "result": result}
 
     # ---- App profiles (profiles.json, shared with the desktop app) ----
     async def get_profiles(self) -> dict:
@@ -916,6 +1111,8 @@ class Plugin:
     # ---- Lifecycle ----
     async def _main(self):
         self.loop = asyncio.get_event_loop()
+        self._memory_guard = BackendMemoryGuard()
+        self._memory_guard.start()
         self._crash_reporter = crash_report.install(
             config_path=INSTALL_JSON, logger=decky.logger, loop=self.loop,
             fatal_name="fatal-decky.log",
@@ -938,6 +1135,8 @@ class Plugin:
                           _load_max_fans().get("enabled"))
 
     async def _unload(self):
+        if getattr(self, "_memory_guard", None):
+            self._memory_guard.close()
         if getattr(self, "_state_stream", None):
             await asyncio.to_thread(self._state_stream.close)
         if getattr(self, "_crash_reporter", None):
