@@ -26,6 +26,7 @@ Tools mirror the CLI leaves:
 import contextlib
 import io
 import json
+import os
 import sys
 
 import z13_helper_cli as cli
@@ -130,7 +131,7 @@ def _tool_specs():
                 "pl1": {
                     "type": "integer",
                     "minimum": cli.PL_MIN,
-                    "maximum": cli.PL_MAX,
+                    "maximum": cli.PL1_SAFE_MAX,
                 },
                 "pl2": {
                     "type": "integer",
@@ -258,7 +259,8 @@ def _tool_specs():
         _tool(
             "crash_upload",
             "Upload queued crash reports when reporting is enabled.",
-            {"names": {"type": "array", "items": {"type": "string"}}},
+            {"names": {"type": "array", "items": {"type": "string"}, "minItems": 1}},
+            required=("names",),
             annotations=_DANGER,
         ),
     ]
@@ -469,7 +471,12 @@ def _validate_value(key, value, schema):
                 _validate_value(key, item, items)
 
 
-def _check_tdp_numbers(numbers):
+def _check_tdp_numbers(numbers, pl1_first=True):
+    if pl1_first and numbers and numbers[0] > cli.PL1_SAFE_MAX:
+        raise ToolError(
+            f"PL1 above {cli.PL1_SAFE_MAX} W needs an explicit override "
+            "that MCP does not offer"
+        )
     for value in numbers:
         if not cli.PL_MIN <= value <= cli.PL_MAX:
             raise ToolError(f"TDP values must be {cli.PL_MIN}..{cli.PL_MAX} W")
@@ -491,7 +498,7 @@ def _validate_tdp_set(arguments):
         for rail in ("pl1", "pl2", "pl3")
         if arguments.get(rail) is not None
     ]
-    _check_tdp_numbers(rails)
+    _check_tdp_numbers(rails, pl1_first=arguments.get("pl1") is not None)
 
 
 def _validate_profile_set(arguments):
@@ -501,7 +508,7 @@ def _validate_profile_set(arguments):
         if arguments.get(rail) is not None
     ]
     if rails:
-        _check_tdp_numbers(rails)
+        _check_tdp_numbers(rails, pl1_first=arguments.get("pl1") is not None)
     if arguments.get("tdp") is not None:
         try:
             numbers = cli._parse_tdp_values(arguments["tdp"])
@@ -562,6 +569,17 @@ def _validated(name, arguments):
         _validate_value(key, value, properties[key])
     if name == "tdp_set":
         _validate_tdp_set(arguments)
+    if name == "post_update_run" and not (
+        arguments.get("ids") or arguments.get("dry_run")
+    ):
+        raise ToolError("post_update_run needs ids, or dry_run to plan")
+    if name == "crash_upload":
+        names = arguments.get("names")
+        if not names:
+            raise ToolError("crash_upload needs the report names to upload")
+        for item in names:
+            if item != os.path.basename(item) or not item.endswith(".zip"):
+                raise ToolError("crash report names must be plain .zip file names")
     if name == "fans_curve_set":
         _validate_curve(arguments)
     if name == "profile_set":
@@ -576,7 +594,7 @@ def call_tool(name, arguments=None):
         argv = _BUILDERS[name](args)
         payload, rc = _run_cli(argv)
         error = rc != 0 or (isinstance(payload, dict) and payload.get("ok") is False)
-    except (ToolError, KeyError, TypeError, ValueError) as exc:
+    except Exception as exc:  # never let a tool call kill the server
         payload, error = {"ok": False, "error": str(exc)}, True
     return {
         "content": [{"type": "text", "text": json.dumps(payload, sort_keys=True)}],

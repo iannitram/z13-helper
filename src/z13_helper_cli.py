@@ -1135,6 +1135,8 @@ def cmd_crash_upload(args):
 
     queue = _crash_queue()
     names = args.names or queue.pending()
+    if any(n != os.path.basename(n) for n in names):
+        raise CliError("crash report names must be plain file names")
     if not crash_report.reporting_enabled(
         os.path.expanduser("~/.config/z13-helper/install.json")
     ):

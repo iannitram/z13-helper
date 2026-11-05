@@ -717,18 +717,18 @@ host_files() {
 mcp_registration() {
     say "MCP server (local stdio)"
     if ! command -v claude >/dev/null 2>&1; then
-        info "claude not installed; register later with: claude mcp add z13-helper -- z13-helper mcp"
+        info "claude not installed; register later with: claude mcp add --scope user z13-helper -- z13-helper mcp"
         return 0
     fi
     if ((DRY)); then
-        info "(dry run) would run: claude mcp add z13-helper -- z13-helper mcp"
+        info "(dry run) would run: claude mcp add --scope user z13-helper -- z13-helper mcp"
         return 0
     fi
     if claude mcp get z13-helper >/dev/null 2>&1; then
         info "already registered"
         return 0
     fi
-    if act claude mcp add z13-helper -- z13-helper mcp; then
+    if act claude mcp add --scope user z13-helper -- z13-helper mcp; then
         CHANGED+=("Claude MCP server z13-helper")
     else
         fail "claude mcp add z13-helper"
