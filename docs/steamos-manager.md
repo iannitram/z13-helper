@@ -42,10 +42,10 @@ holds only `remotes.d`, and `~/.config/steamos-manager/state.toml` is session st
 
 ## Consequence for #29
 
-- Steam's Performance tab cannot show TDP, charge limit or profile on the Z13 until Valve ships a
-  `GZ302EA` entry (or an override path exists). Nothing in our repo can change that except by
-  shipping a device TOML into the immutable image (re-applied after every update) or by replacing
-  Valve's service.
+- Steam's Performance tab cannot show TDP, charge limit or profile on the Z13 with the installed
+  device configs. Our repo could change that by shipping a device TOML into the immutable image
+  (re-applied after every update) or by replacing Valve's service. Valve could also ship a
+  `GZ302EA` entry.
 - Decky stays the front end for these controls (as in Phase 13 of the roadmap).
 - Open decisions for the owner before any adapter is built:
   1. Replace `steamos-manager` with a shim that serves `TdpLimit1`, `BatteryChargeLimit1` and
