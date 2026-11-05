@@ -567,8 +567,12 @@ def get_profile(name, store=None):
     return None
 
 
-def active_name():
-    return load_store().get("active")
+def active_name(create=True):
+    return load_store(create=create).get("active")
+
+
+def active_name_readonly():
+    return load_store(create=False).get("active")
 
 
 def sync_active_from_backend(state):
@@ -1146,7 +1150,7 @@ def _apply_steps(profile, *, previous=None, z13ctl=Z13CTL,
     if not skip_hooks and previous and previous.get("name") != profile["name"]:
         exit_cmd = (previous.get("hooks") or {}).get("exit") or ""
         if exit_cmd.strip():
-            step("exit hook", ["bash", "-lc", exit_cmd], f"ran: {exit_cmd}",
+            step("exit hook", ["bash", "-lc", exit_cmd], "hook ran",
                  timeout=HOOK_TIMEOUT_S)
 
     # Compute the desired state now, but suspend the shared Max Fans flag for
@@ -1331,7 +1335,7 @@ def _apply_steps(profile, *, previous=None, z13ctl=Z13CTL,
     if not skip_hooks:
         enter_cmd = (profile.get("hooks") or {}).get("enter") or ""
         if enter_cmd.strip():
-            step("enter hook", ["bash", "-lc", enter_cmd], f"ran: {enter_cmd}",
+            step("enter hook", ["bash", "-lc", enter_cmd], "hook ran",
                  timeout=HOOK_TIMEOUT_S)
 
     return results

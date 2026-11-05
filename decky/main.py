@@ -287,7 +287,8 @@ def _state_path():
 def _load_state():
     try:
         with open(_state_path()) as f:
-            return json.load(f)
+            data = json.load(f)
+            return data if isinstance(data, dict) else {}
     except Exception:  # noqa: BLE001
         return {}
 
@@ -797,7 +798,8 @@ def _check_steamos_build_id():
             after={"steamos": f"{ver or '?'} ({cur})", "kernel": os.uname().release},
             path=TIMELINE_PATH,
         )
-    except OSError:
+    except Exception as e:
+        decky.logger.warning("SteamOS build ID timeline record failed: %s", e)
         return None
 
 
@@ -1012,7 +1014,12 @@ def _set_max_fans_recorded(enabled):
 
 
 def _edit_field_recorded(field, value, expected):
-    """_edit_field plus a best-effort timeline setting entry for tdp, battery_limit, brightness."""
+    """_edit_field; setting changes are recorded by state_authority._push_field."""
+    try:
+        entries_before = len(timeline.read_entries(TIMELINE_PATH))
+    except Exception:
+        entries_before = 0
+
     if field == "tdp":
         def _read():
             v = (active_profile(_read_store()) or {}).get("tdp")
@@ -1025,15 +1032,23 @@ def _edit_field_recorded(field, value, expected):
         def _read():
             return _load_state().get("brightness")
     before_v = _before_snapshot(_read)
+
     result = _edit_field(field, value, expected)
-    ok = bool(result.get("ok"))
-    if field == "tdp":
-        summary = (f"TDP {value['pl1']}/{value['pl2']}/{value['pl3']} W" if value else "TDP off")
-    elif field == "battery_limit":
-        summary = f"Charge limit {value}%"
-    else:
-        summary = f"Brightness {value}"
-    _timeline_setting(field, summary, {field: before_v}, {field: value}, ok)
+
+    try:
+        entries_after = len(timeline.read_entries(TIMELINE_PATH))
+    except Exception:
+        entries_after = entries_before
+
+    if entries_after == entries_before:
+        ok = bool(result.get("ok"))
+        if field == "tdp":
+            summary = (f"TDP {value['pl1']}/{value['pl2']}/{value['pl3']} W" if value else "TDP off")
+        elif field == "battery_limit":
+            summary = f"Charge limit {value}%"
+        else:
+            summary = f"Brightness {value}"
+        _timeline_setting(field, summary, {field: before_v}, {field: value}, ok)
     return result
 
 

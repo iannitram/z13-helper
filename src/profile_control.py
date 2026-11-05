@@ -61,8 +61,8 @@ class ProfileControl(QObject):
 
     # ---------------- store access ----------------
 
-    def store(self):
-        return profiles.load_store()
+    def store(self, create=False):
+        return profiles.load_store(create=create)
 
     def names(self):
         return [p["name"] for p in self.store()["profiles"]]

@@ -611,9 +611,12 @@ class DashboardUI(QMainWindow):
     # ------------------------------------------------------------------
 
     def _toggle_max_fans(self, checked):
-        active_name = self.control.active_name()
-
         def go():
+            try:
+                active_name = self.control.active_name()
+            except Exception:
+                active_name = None
+
             # Timeline recording is best-effort and never blocks or reorders the write.
             try:
                 before_mf = max_fans_state.load()
@@ -654,23 +657,7 @@ class DashboardUI(QMainWindow):
 
         target = self.control.active_name()
         def go():
-            before_level = self.config.get("brightness")
-
-            def record(ok):
-                try:
-                    timeline.record_setting_change(
-                        kind="brightness", summary=f"Brightness {label}",
-                        before={"brightness": before_level}, after={"brightness": level}, ok=ok,
-                    )
-                except Exception:
-                    pass
-
-            try:
-                failed = authority.set_field("brightness", level, target, devices=devices)
-            except Exception:
-                record(ok=False)
-                raise
-            record(ok=True)
+            failed = authority.set_field("brightness", level, target, devices=devices)
             self.config.set("brightness", level)
             return f"Brightness {label}" + (f" ({', '.join(failed)} not responding)" if failed else "")
         self.control._submit("Brightness", go)

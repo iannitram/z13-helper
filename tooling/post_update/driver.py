@@ -22,7 +22,7 @@ from .local_recipes import load_local_recipes
 from .packs import pack_recipes
 from . import repair
 from .recipe import order_tasks, plan_text, with_keyring
-from .runner import Env, run_plan
+from .runner import Env, make_timeline_recorder, run_plan
 from .tab import mark_reboot, status as tab_status
 
 _log = logging.getLogger(__name__)
@@ -180,7 +180,8 @@ def make_env(home: str, run: Callable = _run, tool_name: Callable[[str], str] | 
 
     return Env(backup=backup, readonly_disable=lambda: toggle("disable"),
                readonly_enable=lambda: toggle("enable"), restore=restore, record=record,
-               readonly_tool=tool)
+               readonly_tool=tool,
+               timeline=make_timeline_recorder(backup_dir=dest_root))
 
 
 def make_repair_io(home: str, stamp: str | None = None,
