@@ -1,6 +1,7 @@
 """z13-helper CLI: argparse surface and dispatch through the shared state owner."""
 
 import json
+from contextlib import contextmanager
 
 import pytest
 
@@ -205,7 +206,7 @@ def test_profile_set_applies_every_non_hardware_field(owner, profiles_env, capsy
 
 
 def test_profile_set_requires_a_field(profiles_env, capsys):
-    assert cli.main(["profile", "set", "Turbo", "--json"]) == 1
+    assert cli.main(["profile", "set", "Turbo", "--json"]) == 2
     data = json.loads(capsys.readouterr().out)
     assert data["ok"] is False and "at least one field" in data["error"]
 
@@ -403,3 +404,250 @@ def test_profile_set_max_fans_on_active_profile_goes_live(
     monkeypatch.setattr(cli.profiles, "active_name", lambda: "Turbo")
     run_json(capsys, ["profile", "set", "Turbo", "--max-fans", "on"])
     assert ("set_max_fans", (True,), {}) in calls
+
+
+@pytest.mark.parametrize(
+    "command", [["fans", "curve", "set"], ["profile", "set", "Turbo", "--curve"]]
+)
+@pytest.mark.parametrize(
+    "temp,minimum", [(71, 2), (75, 6), (80, 12), (100, 36), (110, 48)]
+)
+def test_curve_safety_floor(owner, profiles_env, capsys, command, temp, minimum):
+    calls, record = owner
+    record("set_field")
+    record("edit")
+    points = [[t, 0] for t in range(20, 27)] + [[temp, minimum - 1]]
+    assert cli.main(command + [json.dumps(points), "--json"]) == 2
+    data = json.loads(capsys.readouterr().out)
+    assert "at least" in data["error"]
+    assert calls == []
+    points[-1][1] = minimum
+    assert run_json(capsys, command + [json.dumps(points)])["ok"] is True
+    assert calls
+
+
+def test_curve_allows_zero_at_or_below_70c(owner, capsys):
+    calls, record = owner
+    record("set_field")
+    curve = [[t, 0] for t in (20, 30, 40, 50, 55, 60, 65, 70)]
+    assert run_json(capsys, ["fans", "curve", "set", json.dumps(curve)])["curve"] == curve
+    assert calls == [("set_field", ("fan_curve", curve), {})]
+
+
+@pytest.mark.parametrize("rail", ["--pl1", "--pl2", "--pl3"])
+def test_profile_set_rejects_mixed_tdp_forms(owner, profiles_env, capsys, rail):
+    calls, record = owner
+    record("edit")
+    assert cli.main(
+        ["profile", "set", "Turbo", "--tdp", "30,40,50", rail, "60", "--json"]
+    ) == 2
+    assert json.loads(capsys.readouterr().out)["ok"] is False
+    assert calls == []
+
+
+@pytest.mark.parametrize("field_args", [["--base", "quiet"], ["--max-fans", "on"]])
+def test_profile_set_reports_failed_apply_steps(
+    owner, profiles_env, monkeypatch, capsys, field_args
+):
+    calls, record = owner
+    record("set_max_fans")
+    monkeypatch.setattr(
+        profiles, "apply", lambda *a, **kw: [
+            ("profile", True, "balanced"), ("fans", False, "curve write failed")
+        ]
+    )
+    assert cli.main(["profile", "set", "Balanced", *field_args, "--json"]) == 1
+    data = json.loads(capsys.readouterr().out)
+    assert data["ok"] is False and "fans: curve write failed" in data["error"]
+    assert calls == []
+
+
+def test_profile_set_checks_and_writes_max_fans_in_one_transaction(
+    profiles_env, monkeypatch, capsys
+):
+    locked = False
+    events = []
+
+    @contextmanager
+    def transaction():
+        nonlocal locked
+        assert not locked
+        locked = True
+        events.append("lock")
+        try:
+            yield
+        finally:
+            locked = False
+            events.append("unlock")
+
+    def edit(profile, field):
+        assert locked
+        events.append(field)
+
+    def active_name():
+        assert locked
+        events.append("active")
+        return "Turbo"
+
+    def set_max_fans(enabled):
+        assert locked and enabled
+        events.append("toggle")
+
+    monkeypatch.setattr(cli.authority, "transaction", transaction)
+    monkeypatch.setattr(cli.authority, "edit", edit)
+    monkeypatch.setattr(cli.profiles, "active_name", active_name)
+    monkeypatch.setattr(cli.authority, "set_max_fans", set_max_fans)
+    run_json(capsys, ["profile", "set", "Turbo", "--max-fans", "on"])
+    assert events == ["lock", "max_fans", "active", "toggle", "unlock"]
+
+
+@pytest.mark.parametrize(
+    "limits",
+    [
+        ["30"], ["--pl1", "30"], ["--pl2", "40"], ["--pl3", "50"],
+        ["30", "--pl2", "40"], ["--force"],
+    ],
+)
+def test_tdp_reset_rejects_limits(owner, capsys, limits):
+    calls, record = owner
+    record("set_field")
+    assert cli.main(["tdp", "reset", *limits, "--json"]) == 2
+    assert json.loads(capsys.readouterr().out)["ok"] is False
+    assert calls == []
+
+
+def test_tdp_reset_without_limits(owner, capsys):
+    calls, record = owner
+    record("set_field")
+    assert run_json(capsys, ["tdp", "reset"])["tdp"] is None
+    assert calls == [("set_field", ("tdp", None), {})]
+
+
+@pytest.mark.parametrize("as_json", [False, True])
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["battery", "set"],
+        ["battery", "bogus", "30"],
+        ["tdp", "set"],
+        ["tdp", "bogus"],
+        ["brightness", "set"],
+        ["brightness", "screen", "abc"],
+        ["brightness", "bogus"],
+        ["lighting", "set"],
+        ["lighting", "set", "keyboard"],
+        ["lighting", "bogus"],
+        ["profile", "set", "Turbo", "--pl2", "40"],
+        ["profile", "set", "Turbo", "--undervolt", "-41"],
+        ["profile", "set", "Turbo"],
+        ["crash", "queue", "report.txt"],
+    ],
+)
+def test_manual_usage_errors_exit_2(owner, profiles_env, capsys, argv, as_json):
+    calls, record = owner
+    record("set_field")
+    record("edit")
+    assert cli.main(argv + (["--json"] if as_json else [])) == 2
+    captured = capsys.readouterr()
+    if as_json:
+        assert json.loads(captured.out)["ok"] is False
+        assert captured.err == ""
+    else:
+        assert captured.err and captured.out == ""
+    assert calls == []
+
+
+@pytest.mark.parametrize("failed_command", ["mkdir", "cp"])
+def test_post_update_backup_failure_prevents_apply(
+    monkeypatch, capsys, failed_command
+):
+    from post_update.recipe import Recipe
+
+    calls = []
+    applied = []
+
+    def host_run(argv, privileged=False, input=None):
+        calls.append((argv[0], privileged))
+        return (1, "backup failed") if argv[0] == failed_command else (0, "")
+
+    recipe = Recipe(
+        id="test", title="Test", fixes="test", check=lambda: "needs",
+        apply=lambda: applied.append(True), replaces=("/etc/test.conf",),
+    )
+    monkeypatch.setattr(cli, "_all_recipes", lambda **kw: ([recipe], []))
+    monkeypatch.setattr(cli, "_host_run", host_run)
+    assert cli.main(["post-update", "run", "test", "--json"]) == 1
+    assert json.loads(capsys.readouterr().out)["results"] == [["test", "failed"]]
+    assert applied == []
+    expected = [("mkdir", True)]
+    if failed_command == "cp":
+        expected.append(("cp", True))
+    assert calls == expected
+
+
+@pytest.fixture
+def crash_upload_env(tmp_path, monkeypatch):
+    import crash_report
+
+    monkeypatch.setattr(cli, "CRASH_DIR", str(tmp_path / "crash"))
+    build_path = tmp_path / "build.json"
+    build_path.write_text(json.dumps({
+        "base": "https://example.invalid",
+        "token": "test",
+        "version": "1",
+        "commit": "test",
+    }))
+    monkeypatch.setattr(crash_report, "BUILD_CONFIG", build_path)
+    monkeypatch.setattr(crash_report, "reporting_enabled", lambda path: True)
+    uploads = []
+    monkeypatch.setattr(crash_report, "upload_report", lambda *args: uploads.append(args))
+    queue = cli._crash_queue()
+    queue.add("report.zip", b"PK")
+    return queue, build_path, uploads
+
+
+@pytest.mark.parametrize("build", [[], ["base"], None, "config", 123, True, {}])
+def test_crash_upload_rejects_invalid_build_config(crash_upload_env, capsys, build):
+    queue, build_path, uploads = crash_upload_env
+    build_path.write_text(json.dumps(build))
+    assert cli.main(["crash", "upload", "--json"]) == 1
+    data = json.loads(capsys.readouterr().out)
+    assert data["ok"] is False and "build-time crash drop" in data["error"]
+    assert uploads == [] and queue.pending() == ["report.zip"]
+    assert not (queue.directory / "sent.json").exists()
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["absolute", "../outside.zip", "sub/../../outside.zip", "missing.zip", "sent.json"],
+)
+def test_crash_upload_rejects_names_outside_queue(crash_upload_env, capsys, name):
+    queue, build_path, uploads = crash_upload_env
+    outside = build_path.parent / "outside.zip"
+    outside.write_bytes(b"keep")
+    if name == "absolute":
+        name = str(outside)
+    assert cli.main(["crash", "upload", "report.zip", name, "--json"]) == 2
+    assert json.loads(capsys.readouterr().out)["ok"] is False
+    assert outside.read_bytes() == b"keep"
+    assert uploads == [] and queue.pending() == ["report.zip"]
+    assert not (queue.directory / "sent.json").exists()
+
+
+def test_crash_upload_rejects_symlinks(crash_upload_env, capsys):
+    queue, build_path, uploads = crash_upload_env
+    outside = build_path.parent / "outside.zip"
+    outside.write_bytes(b"keep")
+    (queue.directory / "linked.zip").symlink_to(outside)
+    assert cli.main(["crash", "upload", "linked.zip", "--json"]) == 2
+    assert json.loads(capsys.readouterr().out)["ok"] is False
+    assert outside.read_bytes() == b"keep" and uploads == []
+
+
+@pytest.mark.parametrize("names", [[], ["report.zip"]])
+def test_crash_upload_removes_only_uploaded_report(crash_upload_env, capsys, names):
+    queue, build_path, uploads = crash_upload_env
+    data = run_json(capsys, ["crash", "upload", *names])
+    assert data["uploaded"] == ["report.zip"] and data["pending"] == []
+    assert uploads == [(json.loads(build_path.read_text()), "report.zip", b"PK")]
+    assert queue.pending() == [] and (queue.directory / "sent.json").exists()

@@ -70,7 +70,7 @@ class CliError(RuntimeError):
 
 
 class _InputError(ValueError):
-    """A bad numeric argument, reported like a usage error with exit 2."""
+    """A bad argument, reported like a usage error with exit 2."""
 
 
 class _UsageError(Exception):
@@ -325,6 +325,10 @@ def _parse_curve(value):
         profiles.validate_curve(points)
     except ValueError as exc:
         raise _InputError(str(exc)) from None
+    for temp, pct in points:
+        floor = profiles.fan_curve_floor_pct(int(temp))
+        if int(pct) < floor:
+            raise _InputError(f"fan curve needs at least {floor:g}% at {temp} °C")
     return points
 
 
@@ -356,7 +360,7 @@ def _lighting_devices(device_args):
         elif item in profiles.LIGHTING_DEVICES:
             devices.append(item)
         else:
-            raise CliError(f"unknown device {item!r}")
+            raise _InputError(f"unknown device {item!r}")
     return tuple(dict.fromkeys(devices))
 
 
@@ -494,15 +498,17 @@ def cmd_profile_set(args):
 
     if args.base is not None:
         change("base", args.base)
-    if args.tdp or any(v is not None for v in (args.pl1, args.pl2, args.pl3)):
-        if args.tdp:
+    if args.tdp is not None or any(v is not None for v in (args.pl1, args.pl2, args.pl3)):
+        if args.tdp is not None:
+            if any(v is not None for v in (args.pl1, args.pl2, args.pl3)):
+                raise _InputError("give tdp with --tdp or --pl1/--pl2/--pl3, not both")
             pl1, pl2, pl3 = _parse_tdp_values(args.tdp)
         else:
             pl1 = args.pl1
             pl2 = args.pl2
             pl3 = args.pl3
             if pl1 is None:
-                raise CliError("tdp needs --pl1 (or --tdp PL1,PL2,PL3)")
+                raise _InputError("tdp needs --pl1 (or --tdp PL1,PL2,PL3)")
         change("tdp", _clamp_tdp(pl1, pl2, pl3, power_range.detect_ranges()))
     if args.curve is not None:
         change("fan_curve", _parse_curve(args.curve))
@@ -512,14 +518,14 @@ def cmd_profile_set(args):
         change("brightness", args.brightness)
     if args.undervolt is not None:
         if not -40 <= args.undervolt <= 0:
-            raise CliError("undervolt must be 0..-40")
+            raise _InputError("undervolt must be 0..-40")
         change("undervolt", args.undervolt)
     if args.epp is not None:
         change("epp", args.epp)
     if args.max_fans is not None:
         change("max_fans", args.max_fans == "on")
     if not updated:
-        raise CliError("profile set needs at least one field")
+        raise _InputError("profile set needs at least one field")
 
     profiles.validate(profile)
     hardware_fields = {
@@ -530,15 +536,21 @@ def cmd_profile_set(args):
         "undervolt",
         "epp",
     }
-    for field in updated:
-        if field in hardware_fields:
-            authority.edit(profile, field)
-    full = [field for field in updated if field not in hardware_fields]
-    for field in full:
-        authority.edit(profile, field)
-    if "max_fans" in updated and profile["name"] == profiles.active_name():
-        # profiles.apply only plans Max Fans on a real profile switch.
-        authority.set_max_fans(profile["max_fans"])
+    # A profile switch must not interleave with the active-only Max Fans toggle.
+    with authority.transaction():
+        for field in updated:
+            if field in hardware_fields:
+                authority.edit(profile, field)
+        full = [field for field in updated if field not in hardware_fields]
+        for field in full:
+            results = authority.edit(profile, field)
+            if isinstance(results, list):
+                failed = [f"{step}: {message}" for step, ok, message in results if not ok]
+                if failed:
+                    raise CliError("; ".join(failed))
+        if "max_fans" in updated and profile["name"] == profiles.active_name():
+            # profiles.apply only plans Max Fans on a real profile switch.
+            authority.set_max_fans(profile["max_fans"])
     payload = {
         "ok": True,
         "name": profile["name"],
@@ -601,11 +613,15 @@ def cmd_tdp(args):
         _emit(args, payload, lines)
         return 0
     if action == "reset":
+        if args.value is not None or any(
+            v is not None for v in (args.pl1, args.pl2, args.pl3)
+        ) or args.force:
+            raise _InputError("tdp reset does not accept limits or --force")
         authority.set_field("tdp", None)
         _emit(args, {"ok": True, "tdp": None}, ["TDP reset to firmware control"])
         return 0
     if action != "set":
-        raise CliError(f"unknown tdp action {action!r}")
+        raise _InputError(f"unknown tdp action {action!r}")
     if args.value is not None:
         values = _parse_tdp_values(args.value, allow_one=True)
         if args.pl1 is not None or (
@@ -617,7 +633,7 @@ def cmd_tdp(args):
         pl3 = values[2] if len(values) > 2 else args.pl3
     else:
         if args.pl1 is None:
-            raise CliError("tdp set needs PL1,PL2,PL3 or --pl1")
+            raise _InputError("tdp set needs PL1,PL2,PL3 or --pl1")
         pl1, pl2, pl3 = args.pl1, args.pl2, args.pl3
     tdp = _clamp_tdp(pl1, pl2, pl3, power_range.detect_ranges())
     if tdp["force"] and not args.force:
@@ -722,9 +738,9 @@ def cmd_battery(args):
         )
         return 0
     if action != "set":
-        raise CliError(f"unknown battery action {action!r}")
+        raise _InputError(f"unknown battery action {action!r}")
     if args.value is None:
-        raise CliError("battery set needs a percentage")
+        raise _InputError("battery set needs a percentage")
     value = _clamp_battery(args.value)
     authority.set_field("battery_limit", value)
     _emit(args, {"ok": True, "limit": value}, [f"Charge limit: {value}%"])
@@ -764,7 +780,7 @@ def cmd_brightness(args):
             return 0
         value = _as_int(args.value)
         if value is None:
-            raise CliError("screen brightness needs a percentage")
+            raise _InputError("screen brightness needs a percentage")
         percent = _set_screen_percent(value)
         _emit(args, {"ok": True, "percent": percent}, [f"Screen: {percent}%"])
         return 0
@@ -776,11 +792,11 @@ def cmd_brightness(args):
             _emit(args, {"ok": True, "percent": percent}, [f"Screen: {percent}%"])
             return 0
         else:
-            raise CliError("brightness set needs a level or a screen percentage")
+            raise _InputError("brightness set needs a level or a screen percentage")
     elif action in profiles.BRIGHTNESS_LEVELS:
         level = action
     else:
-        raise CliError(f"unknown brightness action {action!r}")
+        raise _InputError(f"unknown brightness action {action!r}")
     devices = _lighting_devices(args.device)
     failed = authority.set_field("brightness", level, devices=devices)
     payload = {"ok": True, "level": level, "devices": devices, "failed": failed}
@@ -823,9 +839,9 @@ def cmd_lighting(args):
         )
         return 0
     if action not in ("set", "clear"):
-        raise CliError(f"unknown lighting action {action!r}")
+        raise _InputError(f"unknown lighting action {action!r}")
     if device not in profiles.LIGHTING_DEVICES:
-        raise CliError(
+        raise _InputError(
             "lighting needs a device: " + ", ".join(profiles.LIGHTING_DEVICES)
         )
     brightness = args.brightness or _config_brightness()
@@ -838,7 +854,7 @@ def cmd_lighting(args):
         )
         return 0
     if args.mode is None:
-        raise CliError("lighting set needs --mode")
+        raise _InputError("lighting set needs --mode")
     setting = {"mode": args.mode, "color": args.color}
     message = authority.set_lighting(profile["name"], device, setting, brightness)
     payload = {
@@ -946,7 +962,9 @@ def _host_listdir(path, privileged=False, missing_none=False):
 def _host_copy_tree(src, dest, privileged=False):
     parent = os.path.dirname(dest)
     if parent:
-        _host_run(["mkdir", "-p", parent], privileged)
+        rc, out = _host_run(["mkdir", "-p", parent], privileged)
+        if rc != 0:
+            raise CliError(f"could not create {parent}: {out}")
     rc, out = _host_run(["cp", "-a", src, dest], privileged)
     if rc != 0:
         raise CliError(f"could not copy {src} to {dest}: {out}")
@@ -1067,8 +1085,7 @@ def _post_update_env():
         dest = os.path.join(
             POST_UPDATE_BACKUP_DIR, stamp, os.path.basename(path.rstrip("/"))
         )
-        _host_run(["mkdir", "-p", os.path.dirname(dest)], True)
-        _host_run(["cp", "-a", path, dest], True)
+        _host_copy_tree(path, dest, True)
 
     def readonly(action):
         name = host.holo_or_steamos("readonly")
@@ -1091,7 +1108,7 @@ def cmd_post_update_run(args):
     by_id = {recipe.id: recipe for recipe in recipes}
     unknown = [name for name in args.ids if name not in by_id]
     if unknown:
-        raise CliError("unknown recipe(s): " + ", ".join(unknown))
+        raise _InputError("unknown recipe(s): " + ", ".join(unknown))
     if args.ids:
         selected = [by_id[name] for name in args.ids]
     else:
@@ -1156,7 +1173,7 @@ def cmd_crash_queue(args):
         return 0
     path = os.path.abspath(os.path.expanduser(args.file))
     if not path.endswith(".zip"):
-        raise CliError("crash queue needs a .zip report")
+        raise _InputError("crash queue needs a .zip report")
     try:
         with open(path, "rb") as f:
             data = f.read()
@@ -1180,7 +1197,14 @@ def cmd_crash_upload(args):
     import crash_report
 
     queue = _crash_queue()
-    names = args.names or queue.pending()
+    pending = queue.pending()
+    names = args.names or pending
+    invalid = [
+        name for name in names
+        if name not in pending or os.path.islink(queue.directory / name)
+    ]
+    if invalid:
+        raise _InputError("not queued crash report(s): " + ", ".join(invalid))
     if not crash_report.reporting_enabled(
         os.path.expanduser("~/.config/z13-helper/install.json")
     ):
@@ -1189,7 +1213,7 @@ def cmd_crash_upload(args):
         build = json.loads(crash_report.BUILD_CONFIG.read_text())
     except (OSError, ValueError):
         raise CliError("no build-time crash drop configuration") from None
-    if not all(
+    if not isinstance(build, dict) or not all(
         isinstance(build.get(k), str) and build[k]
         for k in ("base", "token", "version", "commit")
     ):
