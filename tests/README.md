@@ -21,6 +21,8 @@ lets that error through rather than turning it into an rc).
 | `test_fan_trace.py` | Trace output, replay and history bounded by both time and entry count |
 | `test_fan_watchdog.py` | recovery rules, throttle, stale queued recovery cancellation, in-flight Max Fans cancellation, and "profile rewrite before curve" |
 | `test_power_range.py` | per-rail bounds from kernel metadata and fallback ranges |
+| `test_telemetry_history.py` | bounded telemetry ring buffer: age and count caps, gaps, no disk writes |
+| `test_display_modes.py` | kscreen-doctor mode parsing, advertised-only refresh choices, read-back and rollback (host faked) |
 | `test_sensor_reader.py` | hwmon discovery by name and the custom-curve readers, on a fake sysfs tree |
 | `test_max_fans_state.py` | the shared `max-fans.json` (atomic merge, corrupt/missing file) |
 | `test_install_check.py` | the manifest `install.sh` reads, `keep-list`, `flatpak_diff`, restore grading |
@@ -45,3 +47,11 @@ the evdev side-button reader, the Decky plugin, and `install.sh` itself. Unit te
 check watchdog state transitions and trace formatting; they do not prove physical
 fan rotation or every Desktop/Game Mode, resume, and cold-boot transition. Those
 device checks are tracked in `docs/ROADMAP.md` §12.
+
+Issue #23 state integration: `test_state_authority.py` covers named mapping/apply,
+transaction isolation, stale fields, CLI reconciliation, capability failures and
+watchdog targets. `test_z13ctl_client.py` uses a local fake Unix daemon for the
+wire protocol and reconnect snapshots. `test_state_stream.py` checks record
+delivery and idle-process shutdown. `test_profile_event_wiring.py` uses a small
+signal stand-in to exercise the production desktop adapter without PyQt6;
+`test_profile_control_events.py` exercises the shared callback dispatcher.

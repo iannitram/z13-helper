@@ -14,6 +14,32 @@ Z = "z13ctl"
 CURVE = [[30, 10], [40, 20], [50, 40], [60, 60], [70, 80], [80, 100], [90, 100], [100, 100]]
 
 
+@pytest.fixture
+def socket_probe(monkeypatch):
+    """apply() sees a legacy daemon; the cleanup's own probe sees the JSON list;
+    the reset write then goes through the CLI again."""
+    import sys
+    import state_authority
+
+    def probe():
+        caller = sys._getframe(1).f_code.co_name
+        return object() if caller == "clear_z13ctl_default_custom_tdp" else None
+    monkeypatch.setattr(state_authority, "named_client", probe)
+
+
+def test_cleanup_requires_socket_probe_not_cli_headers(profiles_env, fake_host):
+    """CLI firmware headers never prove the daemon honours --profile."""
+    fake_host.fail("tdp --help", rc=0, out="Flags: --profile string")
+    fake_host.fail("profile --list", rc=0,
+                   out="Firmware profiles: quiet, balanced, performance\n"
+                       "Custom profiles:\n   custom              fan curve, 20W\n")
+
+    ok, step = profiles.clear_z13ctl_default_custom_tdp(z13ctl=Z)
+
+    assert not ok and step[:2] == ("tdp", False)
+    assert [Z, "tdp", "--reset", "--profile", "custom"] not in fake_host.argvs
+
+
 def full_profile(name="Custom", **over):
     """A profile that exercises every step."""
     p = {
@@ -203,7 +229,7 @@ def test_null_fields_are_left_alone(profiles_env, fake_host):
 
 
 def test_curve_without_tdp_clears_only_default_custom_tdp_after_base_profile(
-        profiles_env, fake_host):
+        socket_probe, profiles_env, fake_host):
     """A bare z13ctl curve edit activates `custom`, so old custom TDP must be cleared first."""
     fake_host.fail("tdp --help", rc=0, out="Usage: z13ctl tdp [flags]\nFlags: --profile string")
     fake_host.fail("profile --list", rc=0,
@@ -237,7 +263,7 @@ def test_curve_without_tdp_does_not_clear_custom_tdp_if_base_switch_fails(
             "saved custom TDP could not be safely cleared; fan curve was not applied") in results
 
 
-def test_curve_without_tdp_is_skipped_when_custom_tdp_cleanup_fails(profiles_env, fake_host):
+def test_curve_without_tdp_is_skipped_when_custom_tdp_cleanup_fails(socket_probe, profiles_env, fake_host):
     fake_host.fail("tdp --help", rc=0, out="Flags: --profile string")
     fake_host.fail("profile --list", rc=0,
                    out="Firmware profiles: quiet, balanced, performance\n"
@@ -265,7 +291,7 @@ def test_failed_base_switch_restores_initial_max_fans_flag(profiles_env, fake_ho
             "saved custom TDP could not be safely cleared; fan curve was not applied") in results
 
 
-def test_failed_cleanup_disables_max_fans_before_watchdog_tick(profiles_env, fake_host):
+def test_failed_cleanup_disables_max_fans_before_watchdog_tick(socket_probe, profiles_env, fake_host):
     max_fans_state.save(enabled=True)
     fake_host.fail("tdp --help", rc=0, out="Flags: --profile string")
     fake_host.fail("profile --list", rc=0,
@@ -320,7 +346,7 @@ def test_failed_cleanup_disables_max_fans_before_watchdog_tick(profiles_env, fak
 
 
 def test_leaving_turbo_disables_watchdog_before_base_profile_write(
-        profiles_env, fake_host, monkeypatch):
+        socket_probe, profiles_env, fake_host, monkeypatch):
     max_fans_state.save(enabled=True, saved_curve=[[40, 128]])
 
     class Sensors:
@@ -381,7 +407,7 @@ def test_leaving_turbo_disables_watchdog_before_base_profile_write(
 
 
 def test_max_fans_reapply_suspends_flag_through_base_and_cleanup(
-        profiles_env, fake_host, monkeypatch):
+        socket_probe, profiles_env, fake_host, monkeypatch):
     max_fans_state.save(enabled=True)
     hardware = {"curve_enabled": False}
 
@@ -446,7 +472,7 @@ def test_max_fans_reapply_suspends_flag_through_base_and_cleanup(
 
 
 def test_entering_turbo_enables_flag_only_after_successful_curve_write(
-        profiles_env, fake_host, monkeypatch):
+        socket_probe, profiles_env, fake_host, monkeypatch):
     real_run = host.run
 
     def inspect_fan_write(argv, **kwargs):
@@ -467,7 +493,7 @@ def test_entering_turbo_enables_flag_only_after_successful_curve_write(
 
 
 def test_failed_max_fans_curve_write_does_not_publish_enabled_flag(
-        profiles_env, fake_host):
+        socket_probe, profiles_env, fake_host):
     fake_host.fail("tdp --help", rc=0, out="Flags: --profile string")
     fake_host.fail("profile --list", rc=0,
                    out="Firmware profiles: quiet, balanced, performance\nCustom profiles:\n")
@@ -480,7 +506,7 @@ def test_failed_max_fans_curve_write_does_not_publish_enabled_flag(
     assert ("fans", False, "curve write failed") in results
 
 
-def test_curveless_max_fans_profile_clears_stale_custom_tdp(profiles_env, fake_host):
+def test_curveless_max_fans_profile_clears_stale_custom_tdp(socket_probe, profiles_env, fake_host):
     fake_host.fail("tdp --help", rc=0, out="Flags: --profile string")
     fake_host.fail("profile --list", rc=0,
                    out="Firmware profiles: quiet, balanced, performance\n"
@@ -494,7 +520,7 @@ def test_curveless_max_fans_profile_clears_stale_custom_tdp(profiles_env, fake_h
     assert ("tdp", True, "cleared saved z13ctl custom TDP") in results
 
 
-def test_default_custom_without_tdp_is_not_created_or_reset(profiles_env, fake_host):
+def test_default_custom_without_tdp_is_not_created_or_reset(socket_probe, profiles_env, fake_host):
     fake_host.fail("tdp --help", rc=0, out="Flags: --profile string")
     fake_host.fail("profile --list", rc=0,
                    out="Firmware profiles: quiet, balanced, performance\n"
@@ -507,7 +533,7 @@ def test_default_custom_without_tdp_is_not_created_or_reset(profiles_env, fake_h
     assert [Z, "fancurve", "--set", profiles.curve_spec(CURVE)] in fake_host.argvs
 
 
-def test_empty_custom_profile_list_allows_curve_for_fresh_user(profiles_env, fake_host):
+def test_empty_custom_profile_list_allows_curve_for_fresh_user(socket_probe, profiles_env, fake_host):
     fake_host.fail("tdp --help", rc=0, out="Flags: --profile string")
     fake_host.fail("profile --list", rc=0,
                    out="Firmware profiles: quiet, balanced, performance\nCustom profiles:\n")
@@ -545,7 +571,7 @@ def test_curve_without_tdp_skips_for_daemon_without_profile_list(profiles_env, f
             "saved custom TDP could not be safely cleared; fan curve was not applied") in results
 
 
-def test_curve_without_tdp_refuses_reset_if_custom_remains_active(profiles_env, fake_host):
+def test_curve_without_tdp_refuses_reset_if_custom_remains_active(socket_probe, profiles_env, fake_host):
     fake_host.fail("tdp --help", rc=0, out="Flags: --profile string")
     fake_host.fail("profile --list", rc=0,
                    out="Firmware profiles: quiet, balanced, performance\n"

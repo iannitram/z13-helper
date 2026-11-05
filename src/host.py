@@ -227,3 +227,17 @@ def run(argv, timeout=30, *, as_deck=False, input=None):
                     pass
     text = b"".join(out_chunks).decode(errors="replace") + b"".join(err_chunks).decode(errors="replace")
     return Result(rc, text.strip(), False)
+
+
+def open_stream(argv, *, as_deck=False, mode=None, environ=None, stderr=None):
+    """Start a host command whose stdout is a long-lived event stream.
+
+    The caller owns the returned Popen and must terminate/wait it during teardown.
+    This preserves the same Flatpak bridge and Decky host environment as ``run``.
+    """
+    cmd, env = command(argv, as_deck=as_deck, mode=mode, environ=environ)
+    if (mode or MODE) == "flatpak":
+        # The host child must exit with this proxy, including forced shutdown.
+        cmd.insert(2, "--watch-bus")
+    return subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=stderr,
+                            text=True, bufsize=1)

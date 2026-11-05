@@ -32,6 +32,7 @@ frontend hands it its own fan commands, Max Fans reader and "may I act now?"
 check, so nothing here knows which process it is running in.
 """
 
+import state_authority as authority
 import collections
 import errno
 import logging
@@ -415,10 +416,14 @@ class FanWatchdog:
             return self._recover_auto(temp)
         return self._defer_run(lambda: self._recover_auto(temp))
 
+    @authority.serialized
     def _recover_auto(self, temp) -> str:
         """Rewrite the platform profile, then put the active profile's TDP back
         (the rewrite dropped it to the firmware's limits) and reset the curve
         (`tdp --set` re-applies z13ctl's last stored curve). No profile hooks."""
+        named = authority.recover_performance()
+        if named is not None:
+            return named
         head = f"Fans stopped in auto mode at {temp:.0f} °C; profile rewritten"
         try:
             self.fans.rewrite_profile()
@@ -434,12 +439,16 @@ class FanWatchdog:
         except Exception as e:  # noqa: BLE001
             return f"{head}, but TDP re-apply failed: {e}"
 
+    @authority.serialized
     def _recover(self, max_on: bool) -> str:
         """Rewrite the platform profile (same value), then restore what that
         write resets, in profiles.apply's order: the profile's TDP, the curve,
         the undervolt (z13ctl: a firmware profile resets undervolt and hands the
         power limits back to firmware). A failed restore is reported, and does
         not stop the curve."""
+        named = authority.recover_performance()
+        if named is not None:
+            return named
         problems = []
 
         def restore(name):

@@ -74,6 +74,19 @@ def no_external_calls(monkeypatch):
     monkeypatch.setattr(urllib.request.OpenerDirector, "open", _refuse("urllib opener.open"))
 
 
+@pytest.fixture(autouse=True)
+def no_live_state_daemon(tmp_path, monkeypatch):
+    import state_authority
+    import profiles
+    import max_fans_state
+    monkeypatch.setattr(state_authority, "named_client", lambda: None)
+    root = tmp_path / "isolated-state"
+    monkeypatch.setattr(profiles, "STORE_PATH", str(root / "profiles.json"))
+    monkeypatch.setattr(profiles, "MAX_FANS_PATH", str(root / "max-fans.json"))
+    monkeypatch.setattr(profiles, "LEGACY_CURRENT_PATH", str(root / "legacy-current"))
+    monkeypatch.setattr(max_fans_state, "STATE_PATH", str(root / "max-fans.json"))
+
+
 # ----------------------------------------------------------------------
 # profiles.py / max_fans_state.py
 # ----------------------------------------------------------------------
