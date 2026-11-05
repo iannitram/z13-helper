@@ -15,6 +15,7 @@ import sys
 import time
 from collections.abc import Callable, Sequence
 
+from .bluetooth import bluetooth_recipe
 from .builtin import HostIO, builtin_recipes
 from .builtin_4_6 import Sys, builtin_recipes_4_6
 from .cli import parse_args
@@ -231,9 +232,12 @@ def subcommand(argv: Sequence[str], input_fn=input, out=print, io=None, read=Non
 
 
 def collect(home: str, escalate: bool = True) -> tuple:
-    """(recipes, errors): built-ins 1-6, the optional packs, then the local recipes."""
+    """(recipes, errors): built-ins 1-6 (5 = the MT7925 Bluetooth workarounds), the optional
+    packs, then the local recipes."""
     io = make_hostio(escalate)
-    recipes = builtin_recipes(io) + builtin_recipes_4_6(make_sys(home, escalate)) + pack_recipes(io)
+    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    recipes = (builtin_recipes(io) + builtin_recipes_4_6(make_sys(home, escalate))
+               + [bluetooth_recipe(io, repo_root)] + pack_recipes(io))
     local, errors = load_local_recipes(home, lambda argv: _run(argv, escalate=escalate),
                                        is_root=os.geteuid() == 0, taken=[r.id for r in recipes],
                                        run_check=_run_plain)

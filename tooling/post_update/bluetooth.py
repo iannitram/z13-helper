@@ -1,0 +1,75 @@
+"""Built-in post-update recipe 5 (issue #71): MT7925 Bluetooth workarounds.
+
+Copies the four MT7925 workaround files from `packaging/host/` into their `/etc` locations
+and registers them in the SteamOS atomic-update keep-list so they survive A/B system updates.
+Only reads and writes through the injected HostIO; checks never write or run commands.
+"""
+
+import os
+
+from .builtin import KEEP_DIR, HostIO, _refuse_unless_supported, supported_device
+from .recipe import Recipe
+
+KEEP_CONF = "/etc/atomic-update.conf.d/z13-bucket1.conf"
+
+BT_FILES = (
+    ("packaging/host/udev/50-mt7925-bt-no-autosuspend.rules", "/etc/udev/rules.d/50-mt7925-bt-no-autosuspend.rules"),
+    ("packaging/host/systemd/system/bt-mt7925-cycle.service", "/etc/systemd/system/bt-mt7925-cycle.service"),
+    ("packaging/host/systemd/system/mt7925-bt-resume.service", "/etc/systemd/system/mt7925-bt-resume.service"),
+    ("packaging/host/systemd/system/mt7925-bt-resume.sh", "/etc/systemd/system/mt7925-bt-resume.sh"),
+)
+
+
+def _registered_paths(io: HostIO) -> set:
+    registered = set()
+    for name in sorted(io.listdir(KEEP_DIR)):
+        if not name.endswith(".conf"):
+            continue
+        for line in (io.read(f"{KEEP_DIR}/{name}") or "").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                registered.add(line)
+    return registered
+
+
+def bluetooth_recipe(io: HostIO, src_root: str | None = None) -> Recipe:
+    def source(src: str) -> str:
+        return os.path.join(src_root, src) if src_root is not None else src
+
+    def check() -> str:
+        if not supported_device(io):
+            return "na"
+        for src, dest in BT_FILES:
+            dest_text = io.read(dest)
+            src_text = io.read(source(src))
+            if dest_text is None or src_text is None or dest_text != src_text:
+                return "needs"
+        registered = _registered_paths(io)
+        for _, dest in BT_FILES:
+            if dest not in registered:
+                return "needs"
+        return "ok"
+
+    def apply() -> None:
+        _refuse_unless_supported(io)
+        for src, dest in BT_FILES:
+            src_text = io.read(source(src))
+            if src_text is None:
+                raise RuntimeError(f"cannot read source file {src}")
+            if io.read(dest) != src_text:
+                io.write(dest, src_text)
+        missing = [dest for _, dest in BT_FILES if dest not in _registered_paths(io)]
+        if missing:
+            text = io.read(KEEP_CONF) or ""
+            io.write(KEEP_CONF, text + "".join(path + "\n" for path in missing))
+
+    return Recipe(
+        id="mt7925-bt",
+        title="MT7925 Bluetooth workarounds",
+        fixes="A2DP and HID drops, connect-time race after resume",
+        check=check,
+        apply=apply,
+        sudo=True,
+        default_on=True,
+        replaces=tuple(dest for _, dest in BT_FILES),
+    )
