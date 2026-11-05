@@ -100,19 +100,55 @@ def test_hook_still_dims_screen_and_exit_restores(real_subprocess, env):
 
 
 def test_manual_on_off_still_does_hardware(real_subprocess, env):
-    """`boondock on` / `off` by hand keep their old behaviour."""
+    """`boondock on` / `off` by hand: snapshot the active app profile, not live PPT."""
+    profile = Path(env["BOONDOCK_STATE"]).parent / "z13-profile"
+    profile.write_text(
+        "#!/bin/sh\n"
+        'echo "z13-profile $*" >> "$STUB_LOG"\n'
+        'case "$1" in\n'
+        "  active) echo Balanced ;;\n"
+        '  show) if [ "$2" = Boondock ]; then\n'
+        '    printf \'{"name":"Boondock","tdp":{"pl1":28,"pl2":32,"pl3":45}}\'\n'
+        "  else\n"
+        '    printf \'{"name":"Balanced","tdp":{"pl1":30,"pl2":30,"pl3":30}}\'\n'
+        "  fi ;;\n"
+        "esac\n"
+    )
+    profile.chmod(0o755)
+    env = {**env, "BOONDOCK_Z13_PROFILE": str(profile)}
+
     def manual(arg):
         return real_subprocess(["bash", str(SCRIPT), arg], env=env, capture_output=True, text=True,
                                timeout=30, stdin=subprocess.DEVNULL)
     assert manual("on").returncode == 0
     log = Path(env["STUB_LOG"]).read_text()
     assert "z13ctl profile --set quiet" in log
-    assert "z13ctl tdp --set 20 --pl2 30 --pl3 40" in log
+    assert "z13ctl tdp --set 28 --pl2 32 --pl3 45" in log
+    snapshot = Path(env["BOONDOCK_STATE"]).read_text()
+    assert "profile=Balanced" in snapshot
+    assert "pl1=30" in snapshot
     Path(env["STUB_LOG"]).unlink()
     assert manual("off").returncode == 0
     log = Path(env["STUB_LOG"]).read_text()
-    assert "z13ctl profile --set balanced" in log       # restored snapshot
-    assert "z13ctl tdp --set 30 --pl2 30 --pl3 30" in log
+    assert "z13-profile apply Balanced" in log  # restored snapshot
+    assert "z13ctl profile --set balanced" not in log
+
+
+@pytest.mark.parametrize("command", ["hardware-off", "off"])
+def test_off_reports_a_failed_restore_and_keeps_the_snapshot(real_subprocess, env, command):
+    state = Path(env["BOONDOCK_STATE"])
+    state.write_text("profile=Balanced\npl1=30\npl2=30\npl3=30\nbrightness=800\n")
+    profile = state.parent / "z13-profile"
+    profile.write_text("#!/bin/sh\nexit 1\n")
+    profile.chmod(0o755)
+    env = {**env, "BOONDOCK_Z13_PROFILE": str(profile)}
+    p = real_subprocess(
+        ["bash", str(SCRIPT), command],
+        env=env, capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL,
+    )
+    assert p.returncode != 0
+    assert "profile restore failed" in p.stdout
+    assert "profile=Balanced" in state.read_text()   # a retry can still restore it
 
 
 def test_stored_old_hook_is_migrated(profiles_env):

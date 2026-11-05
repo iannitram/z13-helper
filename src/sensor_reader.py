@@ -81,6 +81,17 @@ class SensorReader:
             return None
         return all(s == 1 for s in states)
 
+    def fan_curve_modes(self) -> tuple[int | None, int | None] | None:
+        """(pwm1_enable, pwm2_enable): 1 = manual custom curve, else firmware
+        auto. Per fan, unlike custom_fan_curve_enabled(), which folds both into
+        one value. None if the node is missing."""
+        hwmon = self._find_hwmon("asus_custom_fan_curve")
+        if hwmon is None:
+            return None
+        return tuple(
+            self._read_int(os.path.join(hwmon, f"pwm{n}_enable")) for n in (1, 2)
+        )
+
     def custom_fan_curve_points(self) -> list[list[int]] | None:
         """The 8 (temp_c, pwm) points of fan 1's custom curve, from sysfs.
 
