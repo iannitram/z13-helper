@@ -36,7 +36,7 @@ STATE_PATH = os.path.expanduser("~/.config/z13-helper/max-fans.json")
 # (z13-profile is a single installed file, so it can't import this).
 _lock_state = threading.local()
 _lock_fallback_warned = False
-LOCK_TIMEOUT = 10.0  # seconds to wait for another writer before giving up
+LOCK_TIMEOUT = 10.0   # seconds to wait for another writer before giving up
 
 
 class StoreLockError(OSError):
@@ -119,14 +119,14 @@ def file_lock(path):
             logger.warning(
                 "Cannot lock %s (%s); continuing without a lock", lock_path, e
             )
-        fd = None  # can't lock (read-only dir?): behave as before, unlocked
+        fd = None   # can't lock (read-only dir?): behave as before, unlocked
     held[path] = 1
     try:
         yield
     finally:
         held.pop(path, None)
         if fd is not None:
-            os.close(fd)  # closing releases the flock
+            os.close(fd)   # closing releases the flock
 
 
 def load() -> dict | None:

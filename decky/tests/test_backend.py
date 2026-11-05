@@ -40,8 +40,8 @@ _SETTINGS = tempfile.mkdtemp(prefix="z13-helper-settings-")
 sys.modules.setdefault(
     "decky",
     types.SimpleNamespace(
-        logger=logging.getLogger("z13-helper-test"),
-        DECKY_PLUGIN_SETTINGS_DIR=_SETTINGS,
+    logger=logging.getLogger("z13-helper-test"),
+    DECKY_PLUGIN_SETTINGS_DIR=_SETTINGS,
     ),
 )
 
@@ -52,7 +52,7 @@ _spec.loader.exec_module(m)
 # Never touch the real deck user's files: every path the backend reads or writes
 # under ~/.config, ~/.local/state or /run/user goes to a scratch folder.
 _HOME = tempfile.mkdtemp(prefix="z13-decky-home-")
-REAL = {}  # the real values, for the tests that check the paths themselves
+REAL = {}   # the real values, for the tests that check the paths themselves
 for _name in (
     "SHARED_CONFIG",
     "MAX_FANS_STATE",
@@ -101,7 +101,7 @@ def _store(active="Balanced"):
         "version": 1,
         "active": active,
         "profiles": [
-            prof("Silent", "quiet", brightness="low", battery_limit=80),
+        prof("Silent", "quiet", brightness="low", battery_limit=80),
             prof(
                 "Balanced",
                 "balanced",
@@ -151,7 +151,7 @@ def fake_host(test, fail_if=(), out=FAIL_OUT):
     contains a fail_if substring answer (1, out)."""
     for attr, value in (
         ("STORE_PATH", os.path.join(_HOME, "engine-profiles.json")),
-        ("MAX_FANS_PATH", os.path.join(_HOME, "engine-max-fans.json")),
+                        ("MAX_FANS_PATH", os.path.join(_HOME, "engine-max-fans.json")),
         ("LEGACY_CURRENT_PATH", os.path.join(_HOME, "engine-legacy")),
     ):
         p = mock.patch.object(profiles, attr, value)
@@ -377,8 +377,8 @@ class TelemetryTest(unittest.TestCase):
         # Deliberately shuffled indices: lookup must go by `name`.
         nodes = {
             "hwmon0": ("amdgpu", {"temp1_input": "48000"}),
-            "hwmon3": ("acpitz", {"temp1_input": "52500"}),
-            "hwmon7": ("asus", {"fan1_input": "2100", "fan2_input": "2250"}),
+                 "hwmon3": ("acpitz", {"temp1_input": "52500"}),
+                 "hwmon7": ("asus", {"fan1_input": "2100", "fan2_input": "2250"}),
             "hwmon9": ("k10temp", {"temp1_input": "99000"}),
         }
         for d, (name, files) in nodes.items():
@@ -447,9 +447,9 @@ class DeckyFansTest(unittest.TestCase):
         self.assertEqual(
             [c[0][1:] for c in run.calls],
             [
-                ["profile", "--set", "performance"],
-                ["fancurve", "--set", m.MAX_FANS_SPEC],
-                ["fancurve", "--set", "40:51,50:102"],
+            ["profile", "--set", "performance"],
+            ["fancurve", "--set", m.MAX_FANS_SPEC],
+            ["fancurve", "--set", "40:51,50:102"],
             ],
         )
         self.assertTrue(all(c[0][0] == m.Z13CTL for c in run.calls))
@@ -462,8 +462,8 @@ class DeckyFansTest(unittest.TestCase):
         self.assertEqual(
             [c[0][1:] for c in run.calls],
             [
-                ["tdp", "--set", "20", "--pl2", "30", "--pl3", "40"],
-                ["fancurve", "--reset"],
+            ["tdp", "--set", "20", "--pl2", "30", "--pl3", "40"],
+            ["fancurve", "--reset"],
             ],
         )
         self.assertEqual([c.as_deck for c in run.calls], [True, False])
@@ -694,7 +694,7 @@ class DesktopAppCheckTest(unittest.TestCase):
 
         return m.DesktopAppCheck(
             in_desktop=lambda: self.state["desktop"],
-            app_up=lambda: self.state["up"],
+                                 app_up=lambda: self.state["up"],
             user_quit=lambda: self.state["user_quit"],
             restart=restart,
         )
@@ -717,7 +717,7 @@ class DesktopAppCheckTest(unittest.TestCase):
             out, ["miss", "restarted", "gave-up", "gave-up", "gave-up", "gave-up"]
         )
         self.state["up"] = True
-        self.assertEqual(c.check(), "ok")  # came back: armed again
+        self.assertEqual(c.check(), "ok")                  # came back: armed again
         self.state["up"] = False
         self.assertEqual([c.check(), c.check()], ["miss", "restarted"])
 

@@ -72,16 +72,16 @@ from evdev_listener import find_side_button_device, EvdevListener
 
 APP_VERSION = "0.5.1"
 
-_INPUTPLUMBER_SERVICE = "org.shadowblip.InputPlumber"
-_INPUTPLUMBER_IFACE = "org.shadowblip.Input.DBusDevice"
-_COMPOSITE_DEV_PATH = "/org/shadowblip/InputPlumber/CompositeDevice0"
-_COMPOSITE_DEV_IFACE = "org.shadowblip.Input.CompositeDevice"
+_INPUTPLUMBER_SERVICE      = "org.shadowblip.InputPlumber"
+_INPUTPLUMBER_IFACE        = "org.shadowblip.Input.DBusDevice"
+_COMPOSITE_DEV_PATH        = "/org/shadowblip/InputPlumber/CompositeDevice0"
+_COMPOSITE_DEV_IFACE       = "org.shadowblip.Input.CompositeDevice"
 # Empirically determined event name emitted by the Z13 InputPlumber profile
 # when the Armoury Crate side button is pressed (legacy fallback path only).
-_QUICK_ACCESS_EVENT = "ui_quick"
-_INTERCEPT_MODE_ALL = 2
-_INTERCEPT_MODE_NONE = 0
-_TARGET_DEVICES_WITH_DBUS = ["xbox-elite", "touchpad", "keyboard", "dbus"]
+_QUICK_ACCESS_EVENT        = "ui_quick"
+_INTERCEPT_MODE_ALL        = 2
+_INTERCEPT_MODE_NONE       = 0
+_TARGET_DEVICES_WITH_DBUS  = ["xbox-elite", "touchpad", "keyboard", "dbus"]
 
 # Built-in tiles: (profile name, accent, icon) — G-Helper's performance presets.
 _TILES = [
@@ -116,12 +116,12 @@ _SIDE_BUTTON_READER_MATCH = (
 
 _CONFIG_PATH = os.path.expanduser("~/.config/z13-helper/config.json")
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_ICON_PATH = os.path.join(_PROJECT_ROOT, "assets", "icon.svg")
+_ICON_PATH    = os.path.join(_PROJECT_ROOT, "assets", "icon.svg")
 _SERVICE = "z13-helper.service"
 
-TICK_VISIBLE_MS, TICK_HIDDEN_MS = 2000, 6000  # G-Helper: 2 s shown, 6 s hidden
+TICK_VISIBLE_MS, TICK_HIDDEN_MS = 2000, 6000     # G-Helper: 2 s shown, 6 s hidden
 UPDATE_CHECK_MS = 24 * 3600 * 1000
-SCREEN_WRITE_MS = 40  # coalesce slider steps into one backlight write
+SCREEN_WRITE_MS = 40            # coalesce slider steps into one backlight write
 SCREEN_FOLLOW_GRACE_S = (
     1.5  # after our own write, don't snap the slider back to a stale read
 )
@@ -167,9 +167,9 @@ class DashboardUI(QMainWindow):
         self._fan_watchdog = FanWatchdog(
             sensors,
             controller,
-            max_fans_on=max_fans_state.is_enabled,
-            may_act=lambda: not self.control._pending,
-            active_tdp=lambda: self.control.active().get("tdp"),
+                                         max_fans_on=max_fans_state.is_enabled,
+                                         may_act=lambda: not self.control._pending,
+                                         active_tdp=lambda: self.control.active().get("tdp"),
             trace=self._make_fan_trace(),
         )
         self._fan_runner = FanWatchdogRunner(self._fan_watchdog, self.worker.submit)
@@ -369,7 +369,7 @@ class DashboardUI(QMainWindow):
             self.hide()
             self._tray.showMessage(
                 "Z13-Helper",
-                "Running in the system tray. Press the side button or click the tray icon to reopen.",
+                                   "Running in the system tray. Press the side button or click the tray icon to reopen.",
                 QSystemTrayIcon.MessageIcon.Information,
                 2000,
             )
@@ -621,7 +621,7 @@ class DashboardUI(QMainWindow):
         level = state_events.lighting_level(state, devices[0])
         if isinstance(level, int) and 0 <= level <= 3:
             self._highlight_brightness(("off", "low", "medium", "high")[level])
-        active = self.control.shown()  # the clicked profile lights up at once
+        active = self.control.shown()       # the clicked profile lights up at once
         name = active["name"]
         # Title: "Performance Mode: Balanced+ 20W" — '+' = custom curve, W = custom SPL
         suffix = ("+" if active.get("fan_curve") else "") + (
@@ -655,7 +655,7 @@ class DashboardUI(QMainWindow):
             self.config.set("profile", active.get("base", "balanced"))
 
     def _tile_clicked(self, name):
-        self._refresh_profile_ui()  # undo the click's own toggle until the apply lands
+        self._refresh_profile_ui()      # undo the click's own toggle until the apply lands
         self.control.switch(name)
 
     def _combo_changed(self, name):
@@ -890,7 +890,7 @@ class DashboardUI(QMainWindow):
             return f"Could not save the choice: {e}"
         app_log.set_to_disk(enabled)
         old, self._fan_watchdog.trace = self._fan_watchdog.trace, None
-        if old is not None:  # close it first: a new trace reuses the same logger
+        if old is not None:     # close it first: a new trace reuses the same logger
             for h in list(old.log.handlers):
                 old.log.removeHandler(h)
                 h.close()

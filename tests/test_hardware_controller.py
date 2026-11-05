@@ -17,7 +17,7 @@ class Fake(HardwareController):
     def __init__(self, fail):
         super().__init__(z13ctl_path="z13ctl")
         self.calls = []
-        self._fail = fail  # fn(args, n_calls_so_far) -> error text or None
+        self._fail = fail      # fn(args, n_calls_so_far) -> error text or None
 
     def _run_command(self, args, quiet=False, timeout=120):
         self.calls.append((list(args), timeout))
@@ -80,7 +80,7 @@ def test_wedged_lightbar_one_reset_one_retry(recover):
 def test_still_wedged_reports_lightbar_failed(recover):
     c = Fake(lambda a, calls: WEDGED if a[1] == "lightbar" else None)
     assert c.set_brightness("high") == ["lightbar"]
-    assert devs(c) == ["keyboard", "lightbar", "lightbar"]  # never more than one retry
+    assert devs(c) == ["keyboard", "lightbar", "lightbar"]      # never more than one retry
     assert len(recover.seen) == 1
 
 
@@ -107,7 +107,7 @@ def test_stale_lightbar_one_daemon_restart_one_retry(recover, recover_stale):
     assert c.set_brightness("high") == []
     assert devs(c) == ["keyboard", "lightbar", "lightbar"]
     assert len(recover_stale.seen) == 1
-    assert recover.seen == []  # no USB reset for a stale handle
+    assert recover.seen == []            # no USB reset for a stale handle
 
 
 def test_still_stale_after_daemon_restart_reports_lightbar_failed(
@@ -115,7 +115,7 @@ def test_still_stale_after_daemon_restart_reports_lightbar_failed(
 ):
     c = Fake(lambda a, calls: STALE if a[1] == "lightbar" else None)
     assert c.set_brightness("high") == ["lightbar"]
-    assert devs(c) == ["keyboard", "lightbar", "lightbar"]  # never more than one retry
+    assert devs(c) == ["keyboard", "lightbar", "lightbar"]      # never more than one retry
     assert len(recover_stale.seen) == 1
 
 

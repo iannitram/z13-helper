@@ -127,28 +127,28 @@ class FanWatchdog:
         self._stall_ticks = 0
         self._last_reapply = float("-inf")
         self._last_auto = float("-inf")
-        self._auto_zero_since = None  # when both fans first read 0 RPM, hot, in auto
+        self._auto_zero_since = None   # when both fans first read 0 RPM, hot, in auto
         self._last_rpm = [None, None]
         now = clock()
         self._rpm_changed_at = [now, now]
-        self._temp_at_change = [None, None]  # APU temp when each reading last changed
-        self._zero_since = [None, None]  # when each fan started reading 0 under demand
+        self._temp_at_change = [None, None]   # APU temp when each reading last changed
+        self._zero_since = [None, None]       # when each fan started reading 0 under demand
         self._alive_since = [
             None,
             None,
         ]  # start of an unbroken run of moving positive readings
-        self._attempts = [0, 0]  # detection recoveries per fan, until it shows life
+        self._attempts = [0, 0]               # detection recoveries per fan, until it shows life
         self._grace_until = float(
             "-inf"
         )  # after our writes / a resume: don't judge yet
         self._last_tick_at = None
         self._suspect_logged = [False, False]
-        self._declared = None  # message for a fault declared this tick
-        self.fault = None  # unresolved fault text for the UI/Decky, else None
+        self._declared = None                 # message for a fault declared this tick
+        self.fault = None                     # unresolved fault text for the UI/Decky, else None
         self._fault_fans = set()
-        self._holding = False  # may_act refused the last due recovery
-        self._tick = None  # this tick's readings + events, for the trace
-        self._defer = None  # tick(defer=...): hand recoveries to a worker
+        self._holding = False   # may_act refused the last due recovery
+        self._tick = None       # this tick's readings + events, for the trace
+        self._defer = None      # tick(defer=...): hand recoveries to a worker
         self._inflight = False  # a deferred recovery has not finished yet
 
     def _ready(self, why: str, last=None, gap=RETRY_S) -> bool:
@@ -313,7 +313,7 @@ class FanWatchdog:
                     self._suspect_logged[i] = True
                     self._event(
                         f"SUSPECT fan {i + 1} reading constant at {rpm} RPM for "
-                        f"{FROZEN_S}s; not corroborated (partner moving: {partner_moving}, "
+                                f"{FROZEN_S}s; not corroborated (partner moving: {partner_moving}, "
                         f"warmed: {warmed})"
                     )
         # Forgive attempts and clear a fault only after sustained health: an
@@ -347,7 +347,7 @@ class FanWatchdog:
             return self._dispatch(
                 max_on,
                 lambda msg: msg.replace(
-                    "Fans were stalled at 0 RPM;",
+                "Fans were stalled at 0 RPM;",
                     f"Fan {frozen[0]} reading frozen at {frozen[1]} RPM for {FROZEN_S}s (stale tach, fan likely stopped);",
                 ),
             )
@@ -379,7 +379,7 @@ class FanWatchdog:
             return self._dispatch(
                 max_on,
                 lambda msg: msg.replace(
-                    "Fans were stalled at 0 RPM;",
+                "Fans were stalled at 0 RPM;",
                     f"Fan {who} stuck at 0 RPM for {ONE_FAN_ZERO_S:.0f}s while the curve asks for cooling;",
                 ),
             )
@@ -523,7 +523,7 @@ class FanWatchdog:
         problems = []
 
         def restore(name):
-            fn = getattr(self.fans, name, None)  # optional on a fans object
+            fn = getattr(self.fans, name, None)   # optional on a fans object
             if fn is None:
                 return
             try:
@@ -614,9 +614,9 @@ class FanTrace:
 
     def __init__(self, logger, sensors=None, wall=time.time):
         self.log = logger
-        self.sensors = sensors  # for the extra reads (ACPI fan, profile)
+        self.sensors = sensors      # for the extra reads (ACPI fan, profile)
         self._wall = wall
-        self._history = collections.deque()  # [mono, line, written], last HISTORY_S
+        self._history = collections.deque()   # [mono, line, written], last HISTORY_S
         self._last_sample = float("-inf")
         self._after_until = float("-inf")
 
@@ -627,7 +627,7 @@ class FanTrace:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         logger = logging.getLogger(f"z13.fans.trace.{name}")
         logger.setLevel(logging.INFO)
-        logger.propagate = False  # its own file; never floods app.log
+        logger.propagate = False   # its own file; never floods app.log
         for h in list(logger.handlers):
             logger.removeHandler(h)
             h.close()
@@ -639,7 +639,7 @@ class FanTrace:
                 backupCount=TRACE_BACKUPS,
                 encoding="utf-8",
             )
-        except OSError as e:  # e.g. a symlink planted at the path: refuse, don't follow
+        except OSError as e:   # e.g. a symlink planted at the path: refuse, don't follow
             print(
                 f"z13 fan trace: refusing to open {path}: {e}; file logging disabled",
                 file=sys.stderr,
@@ -674,11 +674,11 @@ class FanTrace:
         same = "/".join("-" if a is None else f"{a:.0f}" for a in ages)
         return (
             f"{self._stamp()} temp={'-' if temp is None else f'{temp:.1f}'}"
-            f" rpm={_v(rpm[0])}/{_v(rpm[1])} acpi={_v(self._extra('get_acpi_fan_rpm'))}"
-            f" curve={ {True: 'custom', False: 'auto'}.get(enabled, '?') }"
-            f" want={_v(tick.get('want'))} max={'on' if tick.get('max_on') else 'off'}"
-            f" prof={_v(self._extra('get_platform_profile'))}"
-            f" stall={tick.get('stall', 0)} same={same}s"
+                f" rpm={_v(rpm[0])}/{_v(rpm[1])} acpi={_v(self._extra('get_acpi_fan_rpm'))}"
+                f" curve={ {True: 'custom', False: 'auto'}.get(enabled, '?') }"
+                f" want={_v(tick.get('want'))} max={'on' if tick.get('max_on') else 'off'}"
+                f" prof={_v(self._extra('get_platform_profile'))}"
+                f" stall={tick.get('stall', 0)} same={same}s"
             + (f" FAULT={tick['fault']!r}" if tick.get("fault") else "")
         )
 
@@ -724,7 +724,7 @@ class _OwnedRotatingHandler(logging.handlers.RotatingFileHandler):
     """RotatingFileHandler that hands each file it creates to `owner`."""
 
     def __init__(self, path, owner, **kw):
-        self._owner = owner  # set before super() opens the first file
+        self._owner = owner          # set before super() opens the first file
         super().__init__(path, **kw)
 
     def _open(self):

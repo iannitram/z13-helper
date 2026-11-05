@@ -23,7 +23,7 @@ LOGGED = '#!/bin/sh\necho "$(basename "$0") $*" >> "$STUB_LOG"\n'
 STUBS = {
     "z13ctl": LOGGED,
     "sudo": LOGGED + 'case "$1" in tee) cat >/dev/null;; esac\nexit 0\n',
-    "systemctl": LOGGED + "exit 3\n",  # nothing active
+    "systemctl": LOGGED + "exit 3\n",          # nothing active
     "docker": LOGGED + "exit 0\n",
     "virsh": LOGGED + "exit 1\n",
     "cat": '#!/bin/sh\necho "cat $*" >> "$STUB_LOG"\nexec /usr/bin/cat "$@"\n',
@@ -114,7 +114,7 @@ def test_exit_hook_touches_no_power_hardware(real_subprocess, env):
 def test_hook_still_dims_screen_and_exit_restores(real_subprocess, env):
     run_hook(real_subprocess, env, "enter")
     log = Path(env["STUB_LOG"]).read_text()
-    assert "sudo tee" in log  # brightness write
+    assert "sudo tee" in log                         # brightness write
     run_hook(real_subprocess, env, "exit")
     assert not Path(env["BOONDOCK_STATE"]).exists()  # snapshot consumed
 
@@ -201,7 +201,7 @@ def test_session_off_clears_old_combined_snapshot(real_subprocess, env):
         stdin=subprocess.DEVNULL,
     )
     assert p.returncode == 0, p.stdout + p.stderr
-    assert "sudo tee" in Path(env["STUB_LOG"]).read_text()  # brightness restored
+    assert "sudo tee" in Path(env["STUB_LOG"]).read_text()      # brightness restored
     assert hardware_touches(Path(env["STUB_LOG"]).read_text().splitlines()) == []
     assert not state.exists()
     st = real_subprocess(

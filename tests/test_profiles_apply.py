@@ -43,7 +43,7 @@ def test_cleanup_requires_socket_probe_not_cli_headers(profiles_env, fake_host):
     fake_host.fail(
         "profile --list",
         rc=0,
-        out="Firmware profiles: quiet, balanced, performance\n"
+                   out="Firmware profiles: quiet, balanced, performance\n"
         "Custom profiles:\n   custom              fan curve, 20W\n",
     )
 
@@ -180,8 +180,8 @@ def test_lighting_timeout_stops_remaining_writes(profiles_env, fake_host):
     )
     p = full_profile(
         lighting={
-            "keyboard": {"mode": "breathe", "color": "cyan"},
-            "lightbar": {"mode": "cycle", "color": "purple"},
+        "keyboard": {"mode": "breathe", "color": "cyan"},
+        "lightbar": {"mode": "cycle", "color": "purple"},
         }
     )
 
@@ -217,8 +217,8 @@ def test_battery_timeout_stops_enter_hook_after_canonical_lighting(
     fake_host.fail("batterylimit", rc=124, out="timed out after 20 s", timed_out=True)
     p = full_profile(
         lighting={
-            "keyboard": {"mode": "breathe", "color": "cyan"},
-            "lightbar": {"mode": "cycle", "color": "purple"},
+        "keyboard": {"mode": "breathe", "color": "cyan"},
+        "lightbar": {"mode": "cycle", "color": "purple"},
         }
     )
 
@@ -331,7 +331,7 @@ def test_base_profile_timeout_keeps_max_fans_suspended_for_uncertain_state(
         (
             "profile",
             False,
-            "z13ctl write timed out after 20 s (kernel asus-wmi hang?)",
+        "z13ctl write timed out after 20 s (kernel asus-wmi hang?)",
         )
     ]
     assert fake_host.argvs == [[Z, "profile", "--set", "performance"]]
@@ -356,7 +356,7 @@ def test_curve_without_tdp_clears_only_default_custom_tdp_after_base_profile(
     fake_host.fail(
         "profile --list",
         rc=0,
-        out="Firmware profiles: quiet, balanced, performance\n"
+                   out="Firmware profiles: quiet, balanced, performance\n"
         "Custom profiles:\n   custom              fan curve, 20W\n",
     )
     p = bare_profile(base="performance", fan_curve=[list(pt) for pt in CURVE])
@@ -394,7 +394,7 @@ def test_curve_without_tdp_is_skipped_when_custom_tdp_cleanup_fails(
     fake_host.fail(
         "profile --list",
         rc=0,
-        out="Firmware profiles: quiet, balanced, performance\n"
+                   out="Firmware profiles: quiet, balanced, performance\n"
         "Custom profiles:\n   custom              fan curve, 20W\n",
     )
     fake_host.fail("tdp --reset --profile custom", rc=1, out="daemon rejected reset")
@@ -430,7 +430,7 @@ def test_failed_cleanup_disables_max_fans_before_watchdog_tick(
     fake_host.fail(
         "profile --list",
         rc=0,
-        out="Firmware profiles: quiet, balanced, performance\n"
+                   out="Firmware profiles: quiet, balanced, performance\n"
         "Custom profiles:\n   custom              fan curve, 20W\n",
     )
     fake_host.fail("tdp --reset --profile custom", rc=1, out="daemon rejected reset")
@@ -711,7 +711,7 @@ def test_curveless_max_fans_profile_clears_stale_custom_tdp(
     fake_host.fail(
         "profile --list",
         rc=0,
-        out="Firmware profiles: quiet, balanced, performance\n"
+                   out="Firmware profiles: quiet, balanced, performance\n"
         "Custom profiles:\n   custom              20W\n",
     )
     p = bare_profile(name="Turbo", base="performance", max_fans=True)
@@ -730,7 +730,7 @@ def test_default_custom_without_tdp_is_not_created_or_reset(
     fake_host.fail(
         "profile --list",
         rc=0,
-        out="Firmware profiles: quiet, balanced, performance\n"
+                   out="Firmware profiles: quiet, balanced, performance\n"
         "Custom profiles:\n   custom              (empty)\n",
     )
     p = bare_profile(base="performance", fan_curve=[list(pt) for pt in CURVE])
@@ -799,7 +799,7 @@ def test_curve_without_tdp_refuses_reset_if_custom_remains_active(
     fake_host.fail(
         "profile --list",
         rc=0,
-        out="Firmware profiles: quiet, balanced, performance\n"
+                   out="Firmware profiles: quiet, balanced, performance\n"
         "Custom profiles:\n * custom             20W\n",
     )
     p = bare_profile(base="performance", fan_curve=[list(pt) for pt in CURVE])
@@ -871,7 +871,7 @@ def test_one_failing_step_does_not_stop_the_rest(profiles_env, failing, fake_hos
     prev = full_profile("Previous", hooks={"enter": "", "exit": "exit-cmd"})
     results = profiles.apply(full_profile(), previous=prev, z13ctl=Z)
 
-    assert names(results) == EXPECTED_ORDER  # every step still ran
+    assert names(results) == EXPECTED_ORDER          # every step still ran
     assert len(fake_host.argvs) == len(EXPECTED_ORDER)
     bad = [(s, msg) for s, ok, msg in results if not ok]
     assert len(bad) == 1
@@ -938,8 +938,8 @@ def test_wedged_lightbar_recovers_once_and_retries_once(profiles_env, fake_host)
         ],  # keyboard first, before any reset
         [Z, "--device", "lightbar", "brightness", "low"],
         RESET,
-        RESTART,  # daemon cached the old hidraw path
-        [Z, "--device", "lightbar", "brightness", "low"],  # exactly one retry
+        RESTART,                                              # daemon cached the old hidraw path
+        [Z, "--device", "lightbar", "brightness", "low"],     # exactly one retry
         [Z, "batterylimit", "--set", "80"],
     ]
     assert ("brightness (keyboard)", True, "low") in results
@@ -960,8 +960,8 @@ def test_stale_lightbar_recovers_with_daemon_restart_only(profiles_env, fake_hos
             "low",
         ],  # keyboard first, before any recovery
         [Z, "--device", "lightbar", "brightness", "low"],
-        RESTART,  # no reset unit: just a stale handle
-        [Z, "--device", "lightbar", "brightness", "low"],  # exactly one retry
+        RESTART,                                              # no reset unit: just a stale handle
+        [Z, "--device", "lightbar", "brightness", "low"],     # exactly one retry
         [Z, "batterylimit", "--set", "80"],
     ]
     assert RESET not in fake_host.argvs
@@ -982,7 +982,7 @@ def test_wedged_daemon_restart_failure_is_reported_but_still_retries_once(
     assert fake_host.argvs.count(RESET) == 1
     assert fake_host.argvs.count(RESTART) == 1
     lightbar_writes = [a for a in fake_host.argvs if "lightbar" in a]
-    assert len(lightbar_writes) == 2  # the write, plus exactly one retry
+    assert len(lightbar_writes) == 2          # the write, plus exactly one retry
     msg = dict((s, m) for s, _, m in results)["brightness (lightbar)"]
     assert "daemon restart failed" in msg
 
@@ -999,7 +999,7 @@ def test_stale_daemon_restart_failure_is_reported_without_retry(
     assert RESET not in fake_host.argvs
     assert fake_host.argvs.count(RESTART) == 1
     lightbar_writes = [a for a in fake_host.argvs if "lightbar" in a]
-    assert len(lightbar_writes) == 1  # recovery itself failed: no retry
+    assert len(lightbar_writes) == 1          # recovery itself failed: no retry
     msg = dict((s, m) for s, _, m in results)["brightness (lightbar)"]
     assert "daemon restart failed" in msg
 
@@ -1126,7 +1126,7 @@ def test_recover_lightbar_daemon_restart_failure_is_folded_into_message(
 ):
     fake_host.fail(lambda a: a == RESTART, rc=1, out="Unit z13ctl.service not loaded.")
     ok, msg = profiles.recover_lightbar(sleep=lambda s: None)
-    assert ok  # the USB reset itself succeeded; only the daemon restart failed
+    assert ok      # the USB reset itself succeeded; only the daemon restart failed
     assert "daemon restart failed" in msg
 
 
@@ -1157,7 +1157,7 @@ def test_lightbar_timed_out(out, expected):
     [
         (WEDGED, "wedged"),
         ("timed out", "wedged"),
-        ("context deadline exceeded (Client.Timeout)", "wedged"),
+    ("context deadline exceeded (Client.Timeout)", "wedged"),
         (STALE, "stale"),
         ("no such device", "stale"),
         ("write: ENODEV", "stale"),
@@ -1299,10 +1299,10 @@ def test_max_fans_on_keeps_100_percent_and_saves_profile_curve(profiles_env, fak
 
     state = read_max_fans(profiles_env)
     assert state["enabled"] is True
-    assert state["other"] == "kept"  # merged, not replaced
+    assert state["other"] == "kept"                  # merged, not replaced
     # percent -> 0..255, temps unchanged
     assert state["saved_curve"] == [[t, round(p * 255 / 100)] for t, p in CURVE]
-    assert state["saved_curve"][0] == [30, 26]  # 10% -> 25.5 -> 26
+    assert state["saved_curve"][0] == [30, 26]       # 10% -> 25.5 -> 26
     assert state["saved_curve"][-1] == [100, 255]
 
 
@@ -1336,7 +1336,7 @@ def test_max_fans_file_missing_means_off(profiles_env, fake_host):
     assert [a for a in fake_host.argvs if a[1] == "fancurve"][0][
         -1
     ] == profiles.curve_spec(CURVE)
-    assert not profiles_env.max_fans.exists()  # nothing written when OFF
+    assert not profiles_env.max_fans.exists()       # nothing written when OFF
 
 
 # ----------------------------------------------------------------------

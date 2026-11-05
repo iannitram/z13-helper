@@ -10,8 +10,8 @@ import profiles
 logger = logging.getLogger(__name__)
 
 # Regexes for parsing z13ctl --get outputs
-_RE_TDP_LINE = re.compile(r"PL([123])\s+\([^)]+\):\s+(\d+)")
-_RE_FAN_LINE = re.compile(r"(\d+)°C:\s+(\d+)/255\s*\(\s*(\d+)%\)")
+_RE_TDP_LINE   = re.compile(r"PL([123])\s+\([^)]+\):\s+(\d+)")
+_RE_FAN_LINE   = re.compile(r"(\d+)°C:\s+(\d+)/255\s*\(\s*(\d+)%\)")
 _RE_FAN_HEADER = re.compile(r"Fans:\s+(\d+)\s*RPM,\s*mode:\s*(\w+)")
 
 
@@ -300,9 +300,9 @@ class HardwareController:
 
     def get_fancurve(self) -> dict:
         """Returns dict with keys:
-        mode:   current fan mode ("auto" or "manual")
-        rpm:    current fan RPM
-        points: list of (temp_c, pwm_0_255, pct) tuples — 8 entries
+            mode:   current fan mode ("auto" or "manual")
+            rpm:    current fan RPM
+            points: list of (temp_c, pwm_0_255, pct) tuples — 8 entries
         """
         try:
             out = self._run_command(["fancurve", "--get"])
@@ -312,7 +312,7 @@ class HardwareController:
         for line in out.splitlines():
             m = _RE_FAN_HEADER.search(line)
             if m:
-                rpm = int(m.group(1))
+                rpm  = int(m.group(1))
                 mode = m.group(2)
                 continue
             m = _RE_FAN_LINE.search(line)

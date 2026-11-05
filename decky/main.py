@@ -94,8 +94,8 @@ DESKTOP_APP_DIR = "/run/user/1000/app/io.github.iannitram.Z13Helper"
 DESKTOP_APP_SOCKET = os.path.join(DESKTOP_APP_DIR, "z13-helper.sock")
 DESKTOP_APP_USER_QUIT = os.path.join(DESKTOP_APP_DIR, "z13-helper.user-quit")
 DESKTOP_CHECK_S = 30
-DESKTOP_MISSES = 2  # consecutive failed checks (~1 min) before a restart: covers the
-# unit's 10 s tray wait and a takeover from a session-restored copy
+DESKTOP_MISSES = 2   # consecutive failed checks (~1 min) before a restart: covers the
+                     # unit's 10 s tray wait and a takeover from a session-restored copy
 
 # ---- Phase 11 (Decky parity): TDP / battery / brightness / telemetry ----
 # The app profile store (schema owned by src/profiles.py; never change it from here).
@@ -156,8 +156,8 @@ def _open_dir_chain(d, owner=None):
         except (KeyError, ImportError) as e:
             raise OSError(errno.ENOENT, f"no home directory for uid {owner[0]}") from e
         hp = [p for p in home.split(os.sep) if p]
-        if hp and parts[: len(hp)] == hp:
-            start, parts, anchor_uid = home, parts[len(hp) :], owner[0]
+        if hp and parts[:len(hp)] == hp:
+            start, parts, anchor_uid = home, parts[len(hp):], owner[0]
     fd = os.open(start, _DIR_FLAGS)
     try:
         if anchor_uid is not None and os.fstat(fd).st_uid != anchor_uid:
@@ -261,7 +261,7 @@ def _shared_config():
 # app, z13-profile and this backend can't lose each other's updates. The lock file is
 # kept deck-owned because we run as root and the other writers run as deck.
 _lock_state = threading.local()
-LOCK_TIMEOUT = 10.0  # seconds to wait for another writer before giving up
+LOCK_TIMEOUT = 10.0   # seconds to wait for another writer before giving up
 
 
 class StoreLockError(OSError):
@@ -340,14 +340,14 @@ def _file_lock(path):
     except OSError:
         if fd is not None:
             os.close(fd)
-        fd = None  # can't lock (read-only dir?): behave as before, unlocked
+        fd = None   # can't lock (read-only dir?): behave as before, unlocked
     held[path] = 1
     try:
         yield
     finally:
         held.pop(path, None)
         if fd is not None:
-            os.close(fd)  # closing releases the flock
+            os.close(fd)   # closing releases the flock
 
 
 def _load_max_fans():
@@ -362,7 +362,7 @@ def _load_max_fans():
     # Same precedence as the desktop app's migration: its config.json first,
     # then this plugin's old private state.json.
     with _file_lock(MAX_FANS_STATE):
-        try:  # another writer may have seeded it while we waited
+        try:   # another writer may have seeded it while we waited
             with open(MAX_FANS_STATE) as f:
                 state = json.load(f)
             if isinstance(state, dict):
@@ -372,7 +372,7 @@ def _load_max_fans():
         legacy, old = _shared_config(), _load_state()
         state = {"enabled": bool(legacy.get("fans_max", old.get("max_fans", False)))}
         seeded = legacy.get("fan_curve_saved") or old.get("saved_curve")
-        if seeded is not None:  # absent = unknown, null = firmware auto
+        if seeded is not None:   # absent = unknown, null = firmware auto
             state["saved_curve"] = seeded
         _save_max_fans(state)
         return state
@@ -603,7 +603,7 @@ def _extract_z13ctl_timeout(output):
             row = line[:index]
             marker = row.find("ERR  ")
             if marker >= 0:
-                step = row[marker + len("ERR  ") :].strip()
+                step = row[marker + len("ERR  "):].strip()
                 if step:
                     return f"{message} (step: {step})"
             return message
@@ -795,9 +795,9 @@ def make_fan_watchdog(
     return FanWatchdog(
         sensors or _sensors,
         fans or DeckyFans(),
-        max_fans_on=lambda: bool(_load_max_fans().get("enabled", False)),
-        may_act=may_act or _in_gamemode,
-        active_tdp=lambda: (active_profile(_read_store()) or {}).get("tdp"),
+                       max_fans_on=lambda: bool(_load_max_fans().get("enabled", False)),
+                       may_act=may_act or _in_gamemode,
+                       active_tdp=lambda: (active_profile(_read_store()) or {}).get("tdp"),
         clock=clock,
         trace=trace,
     )
@@ -898,7 +898,7 @@ class Plugin:
         if rc != 0:
             return {"names": [], "active": ""}
         try:
-            store = json.loads(out[out.index("{") :])
+            store = json.loads(out[out.index("{"):])
             return {
                 "names": [p["name"] for p in store.get("profiles", [])],
                 "active": store.get("active", ""),
@@ -1001,7 +1001,7 @@ class Plugin:
         return res
 
     async def get_telemetry(self) -> dict:
-        return telemetry()  # a handful of sysfs reads; cheap enough inline
+        return telemetry()   # a handful of sysfs reads; cheap enough inline
 
     # ---- Lifecycle ----
     async def _main(self):

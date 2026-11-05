@@ -162,7 +162,7 @@ BALANCED_CURVE = [
 # are quiet / balanced / performance.
 BUILTIN_FOR_BASE = {"quiet": "Silent", "balanced": "Balanced", "performance": "Turbo"}
 
-LEGACY_NAMES = {  # z13-* script name  ->  profile name
+LEGACY_NAMES = {            # z13-* script name  ->  profile name
     "maximum-throughput": "Turbo",
     "balanced-daily-driver": "Balanced",
     "longevity-cool-stable": "Silent",
@@ -185,8 +185,8 @@ BOONDOCK_BIN = os.path.expanduser("~/.local/bin/boondock")
 # without any USB reset (the daemon's cached node going away on its own);
 # that case needs only the daemon restart, never the reset unit.
 LIGHTBAR_RESET_UNIT = "z13-lightbar-reset.service"
-LIGHTBAR_RESET_MIN_GAP_S = 120  # at most one reset per 2 minutes
-LIGHTBAR_RESET_SETTLE_S = 3  # the device re-enumerates after the reset
+LIGHTBAR_RESET_MIN_GAP_S = 120     # at most one reset per 2 minutes
+LIGHTBAR_RESET_SETTLE_S = 3        # the device re-enumerates after the reset
 Z13CTL_SERVICE = "z13ctl.service"  # the user daemon that holds the HID device
 LIGHTBAR_DAEMON_RESTART_WAIT_S = 2  # wait for the daemon socket before retrying
 
@@ -249,7 +249,7 @@ def default_profiles():
             "Boondock",
             "quiet",
             builtin=True,
-            tdp={"pl1": 20, "pl2": 30, "pl3": 40, "force": False},
+                 tdp={"pl1": 20, "pl2": 30, "pl3": 40, "force": False},
             enter=f"{BOONDOCK_BIN} session-on",
             exit_=f"{BOONDOCK_BIN} session-off",
         ),
@@ -266,7 +266,7 @@ def default_profiles():
 # helper live in max_fans_state.py and decky/main.py; keep them in step.
 _lock_state = threading.local()
 _lock_fallback_warned = False
-LOCK_TIMEOUT = 10.0  # seconds to wait for another writer before giving up
+LOCK_TIMEOUT = 10.0   # seconds to wait for another writer before giving up
 
 
 class StoreLockError(OSError):
@@ -351,14 +351,14 @@ def file_lock(path, *, strict=False):
             logger.warning(
                 "Cannot lock %s (%s); continuing without a lock", lock_path, e
             )
-        fd = None  # can't lock (read-only dir?): behave as before, unlocked
+        fd = None   # can't lock (read-only dir?): behave as before, unlocked
     held[path] = 1
     try:
         yield
     finally:
         held.pop(path, None)
         if fd is not None:
-            os.close(fd)  # closing releases the flock
+            os.close(fd)   # closing releases the flock
 
 
 def store_lock():
@@ -610,7 +610,7 @@ def _keep_aside(copy):
     stamp = f"{time.strftime('%Y%m%d-%H%M%S')}-{time.time_ns() // 1000 % 1_000_000:06d}-{os.getpid()}"
     base = f"{STORE_PATH}.corrupt-{stamp}"
     dest, n = base, 0
-    while os.path.exists(dest):  # never overwrite an existing backup
+    while os.path.exists(dest):      # never overwrite an existing backup
         n += 1
         dest = f"{base}-{n}"
     if copy:
@@ -1015,7 +1015,7 @@ def _stamp_rate_limited(stamp, now, skipped_msg):
     try:
         _atomic_write_text(stamp, f"{now():.0f}\n")
     except OSError:
-        pass  # best effort: the unit/daemon itself serialises concurrent starts
+        pass   # best effort: the unit/daemon itself serialises concurrent starts
     return True, None
 
 

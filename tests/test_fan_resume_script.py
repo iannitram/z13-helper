@@ -146,7 +146,7 @@ def test_fallback_reset_runs_as_deck_not_root(env):
     p = env()
     assert p.returncode == 0, p.stderr
     log = env.ctl_log.read_text()
-    assert log.count("ran as deck via runuser") == 2  # --set attempt, then --reset
+    assert log.count("ran as deck via runuser") == 2          # --set attempt, then --reset
     assert "ran DIRECTLY" not in log
     assert "fancurve --reset" in log
     assert "WARN curve re-apply FAILED" in env.logger_log.read_text()
