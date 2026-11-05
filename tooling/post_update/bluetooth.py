@@ -11,6 +11,7 @@ from .builtin import KEEP_DIR, HostIO, _refuse_unless_supported, supported_devic
 from .recipe import Recipe
 
 KEEP_CONF = "/etc/atomic-update.conf.d/z13-bucket1.conf"
+RESUME_SCRIPT = "/etc/systemd/system/mt7925-bt-resume.sh"
 
 BT_FILES = (
     ("packaging/host/udev/50-mt7925-bt-no-autosuspend.rules", "/etc/udev/rules.d/50-mt7925-bt-no-autosuspend.rules"),
@@ -30,6 +31,12 @@ def _registered_paths(io: HostIO) -> set:
             if line and not line.startswith("#"):
                 registered.add(line)
     return registered
+
+
+def _run_or_raise(io: HostIO, argv: list) -> None:
+    rc, out = io.run(argv)
+    if rc != 0:
+        raise RuntimeError(f"{' '.join(argv)} failed (rc {rc}): {out}")
 
 
 def bluetooth_recipe(io: HostIO, src_root: str | None = None) -> Recipe:
@@ -52,16 +59,28 @@ def bluetooth_recipe(io: HostIO, src_root: str | None = None) -> Recipe:
 
     def apply() -> None:
         _refuse_unless_supported(io)
+        wrote_file = False
+        wrote_script = False
         for src, dest in BT_FILES:
             src_text = io.read(source(src))
             if src_text is None:
                 raise RuntimeError(f"cannot read source file {src}")
             if io.read(dest) != src_text:
                 io.write(dest, src_text)
+                wrote_file = True
+                wrote_script = wrote_script or dest == RESUME_SCRIPT
         missing = [dest for _, dest in BT_FILES if dest not in _registered_paths(io)]
         if missing:
             text = io.read(KEEP_CONF) or ""
+            if text and not text.endswith("\n"):
+                text += "\n"
             io.write(KEEP_CONF, text + "".join(path + "\n" for path in missing))
+        if wrote_script:
+            _run_or_raise(io, ["chmod", "755", RESUME_SCRIPT])
+        if wrote_file:
+            _run_or_raise(io, ["systemctl", "daemon-reload"])
+            _run_or_raise(io, ["systemctl", "enable", "bt-mt7925-cycle.service", "mt7925-bt-resume.service"])
+            _run_or_raise(io, ["udevadm", "control", "--reload"])
 
     return Recipe(
         id="mt7925-bt",

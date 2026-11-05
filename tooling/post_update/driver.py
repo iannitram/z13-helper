@@ -31,7 +31,7 @@ _log = logging.getLogger(__name__)
 BACKUP_ROOT = os.path.join(".local", "state", "z13-helper", "post-update-backups")
 RECORD_NAME = "rollback-record.json"
 # Commands that must run as root; anything else runs as the current user.
-_ROOT_CMDS = {"update-grub", "pacman-key", "pacman", "ldconfig", "mkdir", "bsdtar"}
+_ROOT_CMDS = {"update-grub", "pacman-key", "pacman", "ldconfig", "mkdir", "bsdtar", "chmod", "systemctl", "udevadm"}
 
 
 def _host():
