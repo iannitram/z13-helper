@@ -48,8 +48,7 @@ from updates_dialog import UpdatesDialog, UpdateCheckThread, PostUpdateThread
 from theme import (STYLESHEET, ModeTile, Panel, pill, tip, ECO, STANDARD, TURBO, CUSTOM,
                    ACCENT_FOR_BASE, BORDER)
 from evdev_listener import find_side_button_device, EvdevListener
-
-APP_VERSION = "0.5.1"
+from versions import APP_VERSION
 
 _INPUTPLUMBER_SERVICE      = "org.shadowblip.InputPlumber"
 _INPUTPLUMBER_IFACE        = "org.shadowblip.Input.DBusDevice"
