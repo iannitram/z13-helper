@@ -205,7 +205,9 @@ def test_refuses_symlinks_and_fchowns_when_running_as_root(tmp_path, monkeypatch
     monkeypatch.setattr(os, "chown", lambda path, uid, gid: None)
     monkeypatch.setattr(pwd, "getpwuid", lambda uid: types.SimpleNamespace(pw_uid=1000, pw_gid=1000))
     timeline.append({"kind": "profile", "summary": "root write"}, path=str(root_tl))
-    assert (1000, 1000) in fchowns
+    # The files take the owner of their folder (the test runner here, uid 1000 on the device).
+    owner = tmp_path.stat()
+    assert (owner.st_uid, owner.st_gid) in fchowns
 
 
 # ----------------------------------------------------------------------
