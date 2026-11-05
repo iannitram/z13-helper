@@ -53,7 +53,7 @@ compatibility test coverage; production setters use the shared authority.
 | `decky/src/components/PowerLimits.tsx` | Profile-scoped TDP override controls; no override is labeled “Not set” and remains distinct from the displayed fallback slider positions. |
 | `decky/src/components/BatteryLimit.tsx` | Battery charge limit control. |
 | `decky/src/components/KeyboardBrightness.tsx` | Keyboard brightness control. |
-| `decky/src/components/Telemetry.tsx` | APU/GPU temperatures and fan RPM display. |
+| `decky/src/components/Telemetry.tsx` | CPU and GPU temperatures with their source labels, plus fan RPM display. An unreadable value shows as unavailable, and one missing fan does not hide the other. |
 | Installed plugin `py_modules/fan_watchdog.py` | Root-owned installed copy of `src/fan_watchdog.py`; dropped-curve and fan-stall recovery logic; `FanTrace` history is bounded to 120 s and 256 entries. |
 | Installed plugin `py_modules/sensor_reader.py` | Root-owned installed copy of `src/sensor_reader.py`; read-only hwmon collection. |
 | Installed plugin `py_modules/power_range.py` | Root-owned installed copy of `src/power_range.py`; per-rail metadata bounds matching z13ctl backend selection. |

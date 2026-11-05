@@ -553,13 +553,20 @@ def _live_battery_limit():
 
 
 def telemetry():
-    """APU / GPU temps (degC) and both fan RPMs; None where unreadable.
+    """CPU / GPU temps (degC) with their sensor names and both fan RPMs.
 
-    hwmon nodes are found by `name` (acpitz / amdgpu / asus), never by index.
-    Reads only hwmon; never the asus-armoury ppt_* files.
+    A value that cannot be read is None (shown as unavailable), never 0.
+    hwmon nodes are found by `name` (k10temp / acpitz / amdgpu / asus), never
+    by index; the GPU is the integrated one, picked by device. Key `apu` keeps
+    its name for the plugin bundle; `apu_src` / `gpu_src` say where each came
+    from. Reads only hwmon; never the asus-armoury ppt_* files.
     """
     f1, f2 = _sensors.get_fan_speeds()
-    return {"apu": _sensors.get_apu_temp(), "gpu": _sensors.get_gpu_temp(), "fan1": f1, "fan2": f2}
+    cpu = _sensors.get_cpu_temp()
+    gpu = _sensors.get_gpu_temp_labeled()
+    return {"apu": cpu[0] if cpu else None, "apu_src": cpu[1] if cpu else None,
+            "gpu": gpu[0] if gpu else None, "gpu_src": gpu[1] if gpu else None,
+            "fan1": f1, "fan2": f2}
 
 
 def _save_plugin_state(**changes):
