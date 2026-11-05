@@ -23,6 +23,15 @@ def test_background_comment_updated():
     assert "20W keeps background work usable" in _text()
 
 
+def test_never_reads_live_ppt_nodes_or_shows_them_in_status():
+    t = _text()
+    assert "ppt_pl1_spl" not in t
+    assert "ppt_pl2_sppt" not in t
+    assert "ppt_fppt" not in t
+    assert "TDP(PL1)" not in t
+    assert "z13-profile" in t
+
+
 def test_llama_swap_service_kept_and_driven_with_systemctl_user():
     t = _text()
     assert "BG_SERVICES=(llama-swap)" in t

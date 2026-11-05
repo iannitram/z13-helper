@@ -38,7 +38,7 @@ suspend/resume, sustained load and soak still need verification; 1.0 remains unf
 - **#16** Decky Profile dropdown showing a state that never applied: ✅ fixed by PR #49 (`decky/src/profileSwitch.ts`), merged 2026-10-26; the on-device check is part of #61.
 - **#58** flaky and environment-dependent tests: partly resolved, including temp-name/store-owner fixtures. Current suites pass; this does not close every environment check in the issue.
 - **#86** fan/power regression: individual fixes are under review; root firmware causality and broader device verification remain open. See the release record for observed behaviour and rejected workarounds.
-- **#30** the reported 43 GB memory spike: open (investigation).
+- **#30** the reported 43 GB memory spike: open (investigation). Source audit and preventive trace/RSS bounds are recorded in [fan-watchdog-memory.md](fan-watchdog-memory.md); no completed 24-hour current-identity sampler result or leak attribution is claimed.
 - Also merged 2026-10-26: PR #3, `tooling/z13_gamemode_report.py` (reads a Game Mode session back from local logs).
 
 ### Fixed today (2026-10-09)
@@ -539,7 +539,7 @@ Pick: none recorded yet. Hold FPS is neither confirmed nor a no-go until the own
 **Pieces:**
 - **Signal language** (#129, #130): the lightbar confirms a profile change, pulses while thermal throttling, glows when charging stops at the limit, and turns amber when a SteamOS update needs attention (Phase 12c). Priorities, a strict rate limit (the lightbar wedges under bursts, Phase 7), restore of the owner's lighting, and an off switch.
 - **Side-button gestures** (#131): hold or double-press cycles profiles (goals, after Phase 15) with a lightbar confirmation, in both modes. InputPlumber stays masked (principle 2).
-- **One touch-first interface** (#132, #133): an ADR picks between hosting the Decky React components in the desktop window and shared tokens with a large-tile Qt layout; then the desktop window is rebuilt to match. This is where the R04 design pass's shared design system lands.
+- **One touch-first interface** (#132 ✅, #133): [`docs/adr/0002-shared-touch-ui.md`](adr/0002-shared-touch-ui.md) picks **shared JSON design tokens (`src/design_tokens.json`) and a matching large-tile PyQt6 layout** over a desktop web view (which would add +277.3 MB to the 253.7 MB Flatpak, raise resident RAM from 65 MB to 516 MB across 4 processes in offscreen prototype measurements, and still require a custom `@decky/ui` shim). This is where the R04 design pass's shared design system lands.
 - **Machine timeline** (#134, #135): every hardware or host change is one append-only entry (principle 7's journal line comes from the same call), with Phase 12c's rollback records; a view compares states and rolls back reversible entries. A SteamOS update shows as one entry listing what it changed.
 
 | Step | Issue | Blocked by |
@@ -547,10 +547,13 @@ Pick: none recorded yet. Hold FPS is neither confirmed nor a no-go until the own
 | 16a signal language | #129 | — |
 | 16b signal runner + off switch | #130 | #129 |
 | 16c side-button gestures | #131 | #130 |
-| 16d ADR: shared touch UI | #132 | — |
+| 16d ADR: shared touch UI ✅ | #132 | — |
 | 16e touch-first layout | #133 | #132 |
 | 16f timeline store | #134 | #109 |
 | 16g timeline view | #135 | #134 |
+
+- **16e (#133) Where:** `src/design_tokens.json`, `src/theme.py`, `src/dashboard_ui.py`, `src/fans_window.py`, `decky/src/tokens.ts` (and token consumers in `decky/src/`), `MAP/README.md`, `MAP/decky.md` (no `PyQt6-WebEngine`, local web bridge, or `@decky/ui` DOM shim).
+- **16e (#133) Done when:** `src/design_tokens.json` defines the shared palette, semantic profile/goal accents, radii, spacing and `>= 44 px` touch-target minimums consumed by both `src/theme.py` and `decky/src/` (checked in `pytest` without `PyQt6`); every interactive control in the desktop app is reachable by touch with targets of at least `44 px` while preserving every control from the current windows; the Decky plugin keeps `@decky/ui` `Focusable` QAM navigation styled from the same tokens; screenshots in tablet (keyboard off) and laptop use are in the PR; Flatpak dependencies remain unchanged. *Pending owner/coordinator action:* sync this Where and Done-when, including the shared-token and Decky acceptance criteria, to #133 on GitHub; it has not been posted. The ADR's prototype timings are offscreen only, with no committed harness, and are not application-level startup costs.
 
 **Done when:** on the Z13, signals run an hour with no lightbar wedge; the gesture cycles profiles in both modes with no double-fire; the desktop window and the QAM share one look in tablet use; a SteamOS update appears in the timeline and a reversible entry rolls back.
 

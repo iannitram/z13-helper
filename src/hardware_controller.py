@@ -3,6 +3,7 @@ import re
 import logging
 
 import host
+import state_authority as authority
 import epp
 import profiles
 
@@ -39,6 +40,11 @@ def read_epp_values(paths):
     return values
 
 
+# The Power window's slider range (watts); z13ctl is never asked for more.
+TDP_MIN_W = 5
+TDP_MAX_W = 93
+
+
 class HardwareController:
     """Wraps z13ctl CLI to control ASUS ROG Flow Z13 hardware features."""
 
@@ -55,7 +61,7 @@ class HardwareController:
     def _run_command(self, args, quiet: bool = False, timeout: float = Z13CTL_WRITE_TIMEOUT_S):
         """z13ctl's output; RuntimeError when it fails (ProfileControl relies on that)."""
         cmd = [self.z13ctl_path] + args
-        r = host.run(cmd, timeout=timeout)
+        r = authority.run(cmd, timeout=timeout)
         if r.timed_out:
             if not quiet:
                 logger.error(f"Command '{' '.join(cmd)}' timed out after {timeout} s")
@@ -136,7 +142,8 @@ class HardwareController:
         return v if v in ("quiet", "balanced", "performance") else "balanced"
 
     def set_battery_limit(self, limit_percent: int):
-        """Sets the battery charge limit (40–100)."""
+        """Sets the battery charge limit (40–100), clamped to that range."""
+        limit_percent = max(40, min(100, int(limit_percent)))
         return self._run_command(["batterylimit", "--set", str(limit_percent)])
 
     def set_brightness(self, level: str, devices=None) -> list:
@@ -256,26 +263,24 @@ class HardwareController:
         return result
 
     def set_tdp(self, pl1=None, pl2=None, pl3=None, force: bool = False):
-        """Apply per-rail TDP overrides. None means leave that rail alone.
+        """Apply all three TDP rails (watts).
 
-        If only pl1 is given, all three are pinned to that value (z13ctl behaviour).
-        Pass force=True to allow PL1 above 75W.
+        A partial call is rejected: z13ctl's --set anchor pins every rail it is
+        not told about, so leaving one out would silently change it. Each rail
+        must be 5-93 W and ordered PL1 <= PL2 <= PL3, else ValueError (nothing
+        is written); pass force=True to allow PL1 above 75W.
         """
-        # z13ctl requires --set as the anchor; --plN flags override individual rails.
-        # If only some rails are provided, use the smallest as the --set value and
-        # specify the others explicitly so values stay distinct.
-        provided = [v for v in (pl1, pl2, pl3) if v is not None]
-        if not provided:
-            raise ValueError("set_tdp requires at least one of pl1/pl2/pl3")
-
-        anchor = pl1 if pl1 is not None else min(provided)
-        args = ["tdp", "--set", str(anchor)]
-        if pl1 is not None and pl1 != anchor:
-            args += ["--pl1", str(pl1)]
-        if pl2 is not None:
-            args += ["--pl2", str(pl2)]
-        if pl3 is not None:
-            args += ["--pl3", str(pl3)]
+        if any(v is None for v in (pl1, pl2, pl3)):
+            raise ValueError("set_tdp requires pl1, pl2 and pl3")
+        pl1, pl2, pl3 = int(pl1), int(pl2), int(pl3)
+        for name, v in (("PL1", pl1), ("PL2", pl2), ("PL3", pl3)):
+            if not TDP_MIN_W <= v <= TDP_MAX_W:
+                raise ValueError(
+                    f"{name} {v} W is outside {TDP_MIN_W}-{TDP_MAX_W} W"
+                )
+        if not pl1 <= pl2 <= pl3:
+            raise ValueError(f"TDP rails must satisfy PL1 <= PL2 <= PL3, got {pl1}/{pl2}/{pl3}")
+        args = ["tdp", "--set", str(pl1), "--pl2", str(pl2), "--pl3", str(pl3)]
         if force:
             args.append("--force")
         return self._run_command(args)
@@ -316,11 +321,12 @@ class HardwareController:
         """Apply a custom 8-point fan curve.
 
         `points` is a list of (temp_c, pct) tuples. Temps must be monotonically
-        increasing; percentages must be non-decreasing. z13ctl validates this.
+        increasing; percentages are clamped to 0–100 and must be non-decreasing.
+        z13ctl validates the ordering.
         """
         if len(points) != 8:
             raise ValueError("Fan curve must have exactly 8 points")
-        spec = ",".join(f"{int(t)}:{int(p)}%" for t, p in points)
+        spec = ",".join(f"{int(t)}:{max(0, min(100, int(p)))}%" for t, p in points)
         return self._run_command(["fancurve", "--set", spec])
 
     # Temp anchors for the flat max-fans curve. Any 8 monotonically increasing
@@ -339,10 +345,11 @@ class HardwareController:
 
         Like set_fancurve() but takes raw PWM instead of percent, so a curve
         snapshotted via get_fancurve() restores bit-for-bit (no pct rounding).
+        PWM values are clamped to 0–255.
         """
         if len(points) != 8:
             raise ValueError("Fan curve must have exactly 8 points")
-        spec = ",".join(f"{int(t)}:{int(pwm)}" for t, pwm in points)
+        spec = ",".join(f"{int(t)}:{max(0, min(255, int(pwm)))}" for t, pwm in points)
         return self._run_command(["fancurve", "--set", spec])
 
     def reset_fancurve(self):

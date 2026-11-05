@@ -11,6 +11,14 @@
 #   ./install.sh --dry-run  show what would change, write nothing (combine with either)
 #   ./install.sh --yes      full install without prompts (logging: yes)
 #   ./install.sh --rebuild  rebuild the Flatpak even if it matches the repo
+#   ./install.sh --post-update [--only amdgpu,rocm]
+#                           after a SteamOS update: pick tasks from a list, or run only
+#                           the named ones; --repair then lists tasks still pending
+#   ./install.sh --system-check checks|repair|suspend|bundle
+#                           after a SteamOS update (#27): checks = inventory checks (read-only);
+#                           repair = print the repair plan, ask, run it (with --yes: no question;
+#                           with --dry-run: plan only); suspend = suspend/resume diagnostic
+#                           (read-only); bundle = preview the redacted support bundle
 #
 # Order (each step independent; a failure is reported, the rest still runs):
 #   1. preflight     SteamOS/kernel, `users` group, sudo, network
@@ -36,17 +44,33 @@
 set -uo pipefail
 
 REPO=$(cd "$(dirname "$0")" && pwd)
-MODE=install DRY=0 YES=0 REBUILD=0
-for a in "$@"; do
+MODE=install DRY=0 YES=0 REBUILD=0 POST_UPDATE=0 SYS_CHECK=
+PU_ARGS=()      # --post-update / --only, handed to `python3 -m post_update` (tooling/post_update/cli.py)
+while (($#)); do
+    a=$1; shift
     case "$a" in
         --repair) MODE=repair ;;
         --dry-run) DRY=1 ;;
         --yes|-y) YES=1 ;;
         --rebuild) REBUILD=1 ;;
-        -h|--help) sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        --post-update) POST_UPDATE=1; PU_ARGS+=(--post-update) ;;
+        --system-check)
+            SYS_CHECK=${1:-}; (($#)) && shift
+            case "$SYS_CHECK" in
+                checks|repair|suspend|bundle) ;;
+                *) echo "--system-check needs one of: checks, repair, suspend, bundle" >&2; exit 2 ;;
+            esac ;;
+        --only)
+            PU_ARGS+=(--only)
+            if (($#)) && [[ $1 != --* ]]; then PU_ARGS+=("$1"); shift; fi ;;
+        -h|--help) sed -n '2,42p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown option: $a (try --help)" >&2; exit 2 ;;
     esac
 done
+if ((!POST_UPDATE)) && [[ ${#PU_ARGS[@]} -gt 0 ]]; then
+    echo "--only needs --post-update" >&2
+    exit 2
+fi
 if [[ $EUID -eq 0 ]]; then
     echo "Run as deck, not root (it uses sudo where it must)." >&2
     exit 2
@@ -79,9 +103,14 @@ export PYTHONDONTWRITEBYTECODE=1
 PY="python3"
 CHECK="$REPO/tooling/install_check.py"
 INSTALLERS="$REPO/src/installers.py"
+# post_update_py ARGS: the post-update runner (tooling/post_update/), as this user.
+post_update_py() { PYTHONPATH="$REPO/tooling:$REPO/src" $PY -m post_update "$@"; }
 PLUGIN_DIR="$HOME/homebrew/plugins/z13-helper"
 PLUGIN_FILES=(plugin.json package.json main.py dist/index.js dist/index.js.map
               py_modules/fan_watchdog.py py_modules/sensor_reader.py py_modules/host.py
+              py_modules/state_authority.py py_modules/state_stream.py py_modules/state_events.py
+              py_modules/z13ctl_client.py py_modules/z13ctl_profiles.py py_modules/profiles.py
+              py_modules/hardware_controller.py py_modules/max_fans_state.py py_modules/epp.py
               py_modules/power_range.py py_modules/crash_report.py py_modules/crash_queue.py
               py_modules/crash_scrub.py py_modules/_crash_build.json)
 # py_modules/X comes from src/X (shared with the desktop app, installed root-owned:
@@ -708,6 +737,30 @@ host_files() {
     fi
 }
 
+# ----------------------------------------------------------------------
+# 6b. local MCP client registration
+# ----------------------------------------------------------------------
+mcp_registration() {
+    say "MCP server (local stdio)"
+    if ! command -v claude >/dev/null 2>&1; then
+        info "claude not installed; register later with: claude mcp add --scope user z13-helper -- z13-helper mcp"
+        return 0
+    fi
+    if ((DRY)); then
+        info "(dry run) would run: claude mcp add --scope user z13-helper -- z13-helper mcp"
+        return 0
+    fi
+    if claude mcp get z13-helper >/dev/null 2>&1; then
+        info "already registered"
+        return 0
+    fi
+    if act claude mcp add --scope user z13-helper -- z13-helper mcp; then
+        CHANGED+=("Claude MCP server z13-helper")
+    else
+        fail "claude mcp add z13-helper"
+    fi
+}
+
 etc_files() {
     say "/etc: resume hook, lightbar reset + polkit rule, atomic-update keep-list"
     local rel dest mode root todo=() keep_missing=() p units_changed=0
@@ -823,6 +876,22 @@ EOF
 
 # ----------------------------------------------------------------------
 main() {
+    if [[ -n $SYS_CHECK ]]; then
+        say "System check: $SYS_CHECK"
+        local sc=("$SYS_CHECK")
+        if [[ $SYS_CHECK == repair ]]; then
+            ((DRY)) && sc+=(--plan-only)
+            ((YES && !DRY)) && sc+=(--yes)
+        fi
+        post_update_py "${sc[@]}"
+        return $?
+    fi
+    if ((POST_UPDATE)); then
+        say "Post-update tasks"
+        local pu=("${PU_ARGS[@]}"); ((DRY)) && pu+=(--dry-run)
+        post_update_py "${pu[@]}"
+        return $?
+    fi
     rename_migration
     logging_choice
     if preflight; then
@@ -833,6 +902,7 @@ main() {
     fi
     flatpak_app
     host_files
+    mcp_registration
     if ((DRY)) || sudo -n true 2>/dev/null; then
         etc_files
     else
@@ -850,6 +920,11 @@ main() {
     fi
     if ((${#FAILED[@]})); then
         info "failed steps:"; printf '    - %s\n' "${FAILED[@]}"
+    fi
+    if [[ $MODE == repair ]]; then
+        say "Post-update tasks"
+        post_update_py --list-pending || warn "could not list post-update tasks"
+        info "run ./install.sh --post-update to pick and run them"
     fi
     info "log: $LOG"
     if ((vrc == 0 && ${#FAILED[@]} == 0)); then

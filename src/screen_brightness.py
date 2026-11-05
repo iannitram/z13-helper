@@ -22,7 +22,7 @@ import logging
 import os
 import threading
 
-import host
+import state_authority
 
 logger = logging.getLogger(__name__)
 
@@ -171,10 +171,10 @@ class _SysfsBackend:
                 while self._want is None:
                     self._cond.wait()
                 raw, self._want = self._want, None
-            rc, out, _ = host.run(["tee", os.path.join(self.path, "brightness")],
-                                  timeout=10, input=f"{raw}\n")
-            if rc != 0:
-                logger.error("Screen brightness write failed: %s", out)
+            try:
+                state_authority.set_screen_backlight(self.path, raw)
+            except Exception as e:
+                logger.error("Screen brightness write failed: %s", e)
 
 
 class ScreenBrightness:

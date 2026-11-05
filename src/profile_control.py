@@ -13,6 +13,9 @@ from PyQt6.QtCore import QObject, pyqtSignal
 
 import profiles
 import max_fans_state
+import state_events
+import state_authority as authority
+from state_stream import StateStream
 from hardware_controller import HardwareController
 from apply_worker import ApplyWorker
 from fan_watchdog import FAN_RECOVERY_LABEL
@@ -26,6 +29,8 @@ class ProfileControl(QObject):
     changed = pyqtSignal()        # store (active name or contents) changed
     message = pyqtSignal(str)     # human-readable result for the status bar
     busy = pyqtSignal(bool)
+    state_event = pyqtSignal(object, str)
+    toggle_window = pyqtSignal()
 
     def __init__(self, controller: HardwareController, worker: ApplyWorker, parent=None):
         super().__init__(parent)
@@ -36,6 +41,23 @@ class ProfileControl(QObject):
         # Profile the user just picked, shown at once while the apply runs
         # (a wedged lightbar alone makes an apply take 5 s).
         self.pending_name = None
+        self.backend_state = {}
+        self.state_event.connect(self.dispatch_event)
+        self._events = None
+
+    def start_events(self):
+        self._events = StateStream(lambda state, event: self.state_event.emit(state, event)).start()
+
+    def close_events(self):
+        if self._events:
+            self._events.close()
+
+    def dispatch_event(self, state, name):
+        # The evdev watcher remains the selected button path; gui-toggle must
+        # not double-toggle the window. This slot always runs on Qt's thread.
+        self.backend_state = state or self.backend_state
+        state_events.dispatch_event(name, False, refresh=self.changed.emit,
+                                    toggle_window=self.toggle_window.emit)
 
     # ---------------- store access ----------------
 
@@ -83,20 +105,22 @@ class ProfileControl(QObject):
         self.pending_name = name
         self.message.emit(f"Applying {name}…")
         self.changed.emit()
-        self._submit(f"Profile → {name}", lambda: profiles.apply_by_name(name))
+        self._submit(f"Profile → {name}", lambda: authority.apply_profile(name))
 
     def reapply_active(self):
         name = self.active_name()
-        self._submit(f"Re-applied {name}", lambda: profiles.apply_by_name(name, skip_hooks=True))
+        self._submit(f"Re-applied {name}", lambda: authority.apply_profile(name, skip_hooks=True))
 
     # ---------------- editing ----------------
 
     def save(self, profile, field=None):
         """Persist `profile`; if it is the active one, push `field` live."""
-        profiles.upsert_profile(profile)
-        self.changed.emit()
-        if field and profile["name"] == self.active_name():
+        if field:
             self._submit(f"{profile['name']}: {field}", self._pusher(profile, field))
+        else:
+            profiles.upsert_profile(profile)
+            self.changed.emit()
+            self._submit("Save profile", lambda: authority.mirror_profile(profile))
 
     def add_custom(self, from_name):
         """G-Helper's ＋: copy the selected profile (minus undervolt) as 'Custom N'."""
@@ -106,10 +130,12 @@ class ProfileControl(QObject):
         while f"Custom {n}" in existing:
             n += 1
         new = dict(src)
+        new.pop("z13ctl_profile", None)
         new.update({"name": f"Custom {n}", "builtin": False, "undervolt": None,
                     "hooks": dict(src.get("hooks") or {"enter": "", "exit": ""})})
         profiles.upsert_profile(new)
         self.changed.emit()
+        self._submit("Create profile", lambda: authority.mirror_profile(new))
         return new["name"]
 
     def rename(self, old, new_name):
@@ -126,6 +152,8 @@ class ProfileControl(QObject):
                     if p.get("builtin"):
                         self.message.emit("Built-in profiles keep their names")
                         return False
+                    from z13ctl_client import Z13CtlClient
+                    p.setdefault("z13ctl_profile", Z13CtlClient.mapped_profile_name(p))
                     p["name"] = new_name
             if store.get("active") == old:
                 store["active"] = new_name
@@ -135,6 +163,7 @@ class ProfileControl(QObject):
 
     def remove(self, name):
         was_active = name == self.active_name()
+        removed = self.get(name)
         try:
             profiles.delete_profile(name)
         except (KeyError, ValueError) as e:
@@ -146,6 +175,8 @@ class ProfileControl(QObject):
         # 5-10 s fan dip for nothing).
         if was_active:
             self.reapply_active()
+        if removed:
+            self._submit("Remove profile", lambda: authority.delete_named_profile(removed))
 
     def factory_defaults(self, name):
         """Reset a built-in to its shipped values; a custom profile loses its overrides."""
@@ -163,53 +194,14 @@ class ProfileControl(QObject):
         self.changed.emit()
         if name == self.active_name():
             self.reapply_active()
+        else:
+            self._submit("Reset profile", lambda: authority.mirror_profile(self.get(name)))
 
     # ---------------- live push ----------------
 
     def _pusher(self, profile, field):
-        c = self.controller
-
-        def full():
-            return profiles.apply(profile, previous=profile, skip_hooks=True)
-
-        def push_tdp():
-            tdp = profile.get("tdp")
-            if not tdp:
-                return full()          # firmware limits come back with a profile write
-            return c.set_tdp(pl1=tdp["pl1"], pl2=tdp["pl2"], pl3=tdp["pl3"], force=bool(tdp.get("force")))
-
-        def push_curve():
-            curve = profile.get("fan_curve")
-            if max_fans_state.is_enabled():
-                max_fans_state.record_profile_curve(curve)
-                return "saved (Max Fans is ON; applies when it's switched off)"
-            if curve:
-                return c.set_fancurve(curve)
-            c.reset_fancurve()
-            tdp = profile.get("tdp")
-            if tdp:   # releasing the fans lets the firmware re-apply its limits
-                c.set_tdp(pl1=tdp["pl1"], pl2=tdp["pl2"], pl3=tdp["pl3"], force=bool(tdp.get("force")))
-            return "firmware auto"
-
-        def push_uv():
-            uv = profile.get("undervolt")
-            return c.set_undervolt(uv) if uv is not None else c.reset_undervolt()
-
-        def push_brightness():
-            br = profile.get("brightness")
-            return c.set_brightness(br) if br else "unchanged"
-
-        def push_battery():
-            bl = profile.get("battery_limit")
-            return c.set_battery_limit(bl) if bl is not None else "unchanged"
-
-        def push_epp():
-            value = profile.get("epp")
-            return c.set_epp(value) if value is not None else "unchanged"
-
-        return {"tdp": push_tdp, "fan_curve": push_curve, "undervolt": push_uv,
-                "brightness": push_brightness, "battery_limit": push_battery,
-                "epp": push_epp}.get(field, full)
+        # Evaluate the target on the worker, after any queued profile switch.
+        return lambda: authority.edit(profile, field)
 
     def _submit(self, label, fn):
         self._pending += 1
