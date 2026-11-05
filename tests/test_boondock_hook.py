@@ -161,6 +161,22 @@ def test_manual_on_off_still_does_hardware(real_subprocess, env):
     assert "z13ctl profile --set balanced" not in log
 
 
+def test_off_reports_a_failed_restore_and_keeps_the_snapshot(real_subprocess, env):
+    state = Path(env["BOONDOCK_STATE"])
+    state.write_text("profile=Balanced\npl1=30\npl2=30\npl3=30\n")
+    profile = state.parent / "z13-profile"
+    profile.write_text("#!/bin/sh\nexit 1\n")
+    profile.chmod(0o755)
+    env = {**env, "BOONDOCK_Z13_PROFILE": str(profile)}
+    p = real_subprocess(
+        ["bash", str(SCRIPT), "hardware-off"],
+        env=env, capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL,
+    )
+    assert p.returncode != 0
+    assert "profile restore failed" in p.stdout
+    assert "profile=Balanced" in state.read_text()   # a retry can still restore it
+
+
 def test_stored_old_hook_is_migrated(profiles_env):
     store = profiles.load_store()
     b = next(p for p in store["profiles"] if p["name"] == "Boondock")

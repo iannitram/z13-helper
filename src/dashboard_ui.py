@@ -168,6 +168,7 @@ class DashboardUI(QMainWindow):
             sensors,
             controller,
                                          max_fans_on=max_fans_state.is_enabled,
+                                         suspended=max_fans_state.is_suspended,
                                          may_act=lambda: not self.control._pending,
                                          active_tdp=lambda: self.control.active().get("tdp"),
             trace=self._make_fan_trace(),
@@ -589,10 +590,14 @@ class DashboardUI(QMainWindow):
             pass
         # config.json is migration input only: seed the active profile from an
         # old limit once, then every change lives in the profile store.
+        # The key is consumed on first sight, so a profile that has no limit on
+        # purpose (Boondock) is not given the old one on every later launch.
         legacy = self.config.get("battery_limit")
-        active = self.control.active()
-        if isinstance(legacy, int) and active.get("battery_limit") is None:
-            self.control.save(dict(active, battery_limit=legacy), "battery_limit")
+        if legacy is not None:
+            self.config.remove("battery_limit")
+            active = self.control.active()
+            if isinstance(legacy, int) and active.get("battery_limit") is None:
+                self.control.save(dict(active, battery_limit=legacy), "battery_limit")
         self.batt_100.setChecked(self.battery_slider.value() == 100)
         self._highlight_brightness(self.config.get("brightness", "medium"))
         self._sync_screen_brightness(force=True)

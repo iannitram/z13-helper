@@ -32,6 +32,11 @@ class FakeSensors(SensorReader):
     def custom_fan_curve_enabled(self):
         return self.enabled
 
+    def fan_curve_modes(self):
+        if getattr(self, "modes", None) is not None:
+            return self.modes
+        return None if self.enabled is None else ((1, 1) if self.enabled else (2, 2))
+
     def custom_fan_curve_points(self):
         return [list(p) for p in self.curve] if self.curve else None
 
@@ -76,7 +81,8 @@ def env(clock):
     """Fake clock, Max Fans flag and may_act gate; build the watchdog with env.make().
     Set ns.allowed = False to have may_act() refuse; ns.asked counts its calls."""
     ns = types.SimpleNamespace(clock=clock, sensors=None, ctl=None, wd=None,
-                               max_on=False, allowed=True, asked=0, tdp=None)
+                               max_on=False, allowed=True, asked=0, tdp=None,
+                               suspended=False)
 
     def may_act():
         ns.asked += 1
@@ -87,7 +93,7 @@ def env(clock):
         ns.sensors = FakeSensors(**sensor_kw)
         ns.ctl = FakeController(fail_on)
         ns.wd = FanWatchdog(ns.sensors, ns.ctl, max_fans_on=lambda: ns.max_on,
-                            may_act=may_act, active_tdp=lambda: ns.tdp, clock=clock)
+                            suspended=lambda: ns.suspended, may_act=may_act, active_tdp=lambda: ns.tdp, clock=clock)
         return ns
 
     def set_max(v):
@@ -703,6 +709,33 @@ def test_queued_stall_recovery_still_runs_if_max_fans_turns_off(env):
 BOONDOCK_TDP = {"pl1": 20, "pl2": 30, "pl3": 40, "force": False}
 # The streak starts on the first 0-RPM tick, so it reaches AUTO_STALL_S this many ticks in.
 AUTO_TICKS = math.ceil(AUTO_STALL_S / TICK) + 1
+
+
+def test_suspended_marker_stops_all_recovery(env):
+    # A timed-out apply left the hardware state unknown: no guess, no write.
+    ns = env.make(max_fans=True, enabled=False)
+    ns.suspended = True
+    assert run(ns, 10) == [None] * 10
+    assert call_names(ns.ctl) == []
+
+
+def test_auto_recovery_skipped_when_one_fan_is_still_manual(env):
+    # custom_fan_curve_enabled() reads False for a mixed pair; the rewrite
+    # would still drop the manual fan's curve, so it must not run.
+    ns = auto(env, tdp=BOONDOCK_TDP)
+    ns.sensors.modes = (1, 2)
+    msgs = run(ns, AUTO_TICKS)
+    assert "skipped" in (msgs[-1] or "")
+    assert call_names(ns.ctl) == []
+
+
+def test_auto_recovery_skipped_when_fan_mode_changed_since_stall_began(env):
+    ns = auto(env, tdp=BOONDOCK_TDP)
+    run(ns, 1)
+    ns.sensors.modes = (2, 3)
+    msgs = run(ns, AUTO_TICKS - 1)
+    assert "skipped" in (msgs[-1] or "")
+    assert call_names(ns.ctl) == []
 
 
 def auto(env, **kw):

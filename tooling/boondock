@@ -147,32 +147,45 @@ do_hw_on() {
 
 do_hw_off() {
   echo "🔌 boondock hardware OFF — restoring"
-  local p p1 p2 p3 restored_by_profile=0
+  local p p1 p2 p3 restored_by_profile=0 rc=0
   p=$(state_get profile); p1=$(state_get pl1); p2=$(state_get pl2); p3=$(state_get pl3)
   if [ -n "$p$p1" ]; then
     case "$p" in
       quiet|balanced|performance)
-        [ -n "$p" ] && { "$Z" profile --set "$p" >/dev/null 2>&1; say "profile → $p"; }
+        if "$Z" profile --set "$p" >/dev/null 2>&1; then
+          say "profile → $p"
+        else
+          say "profile restore failed: $p"; rc=1
+        fi
         ;;
       *)
         if [ -n "$p" ] && [ -x "$ZP" ] && "$ZP" apply "$p" >/dev/null 2>&1; then
           say "profile → $p (restored)"
           restored_by_profile=1
         elif [ -n "$p" ]; then
-          say "profile restore failed: $p"
+          say "profile restore failed: $p"; rc=1
         fi
         ;;
     esac
     if [ -n "$p1" ] && [ "$restored_by_profile" -eq 0 ]; then
-      "$Z" tdp --set "$p1" --pl2 "${p2:-$p1}" --pl3 "${p3:-$p1}" >/dev/null 2>&1 \
-        && say "TDP → ${p1}/${p2:-$p1}/${p3:-$p1}W"
+      if "$Z" tdp --set "$p1" --pl2 "${p2:-$p1}" --pl3 "${p3:-$p1}" >/dev/null 2>&1; then
+        say "TDP → ${p1}/${p2:-$p1}/${p3:-$p1}W"
+      else
+        say "TDP restore failed: ${p1}/${p2:-$p1}/${p3:-$p1}W"; rc=1
+      fi
     fi
-    state_drop "$HW_KEYS"
+    # Keep the snapshot when anything failed, so a retry can still restore it.
+    [ "$rc" -eq 0 ] && state_drop "$HW_KEYS"
   else
     say "no snapshot — restoring to defaults"
-    "$Z" profile --set balanced >/dev/null 2>&1; say "profile → balanced (firmware TDP)"
+    if "$Z" profile --set balanced >/dev/null 2>&1; then
+      say "profile → balanced (firmware TDP)"
+    else
+      say "profile → balanced FAILED"; rc=1
+    fi
   fi
   state_cleanup
+  return "$rc"
 }
 
 # `on` / `off` (by hand): both halves, as before.

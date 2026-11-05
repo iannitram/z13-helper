@@ -335,7 +335,9 @@ def test_base_profile_timeout_keeps_max_fans_suspended_for_uncertain_state(
         )
     ]
     assert fake_host.argvs == [[Z, "profile", "--set", "performance"]]
-    assert not max_fans_state.is_enabled()
+    # The flag stays as the user had it; the marker tells the watchdog to wait.
+    assert max_fans_state.is_enabled()
+    assert max_fans_state.is_suspended()
 
 
 def test_null_fields_are_left_alone(profiles_env, fake_host):
@@ -700,7 +702,7 @@ def test_timed_out_apply_keeps_max_fans_suspended_with_a_marker(
     profiles.apply(bare_profile(base="performance"), z13ctl=Z)
 
     state = json.loads(profiles_env.max_fans.read_text())
-    assert state["enabled"] is False
+    assert state["enabled"] is True      # not guessed off while the hardware is unknown
     assert state["suspended"] == "z13ctl write timed out"
 
 
@@ -1271,7 +1273,7 @@ def test_hook_timeout_does_not_suspend_max_fans(profiles_env, fake_host):
         )
     ]
     state_z = json.loads(profiles_env.max_fans.read_text())
-    assert state_z["enabled"] is False
+    assert state_z["enabled"] is True
     assert state_z["suspended"] == "z13ctl write timed out"
 
 
@@ -1368,3 +1370,27 @@ def test_undervolt_other_failure_passes_message_through(profiles_env, fake_host)
     fake_host.fail(lambda a: "undervolt" in a, rc=2, out="value out of range")
     results = profiles.apply(bare_profile(undervolt=-10), z13ctl=Z)
     assert ("undervolt", False, "value out of range") in results
+
+
+def test_failure_after_a_good_fan_step_keeps_the_max_fans_flag_the_fan_step_set(
+    profiles_env, fake_host
+):
+    # Leaving a Max Fans profile: the fan reset worked, the battery write did not.
+    # The flag must stay off; restoring it would make the watchdog pin 100% again.
+    max_fans_state.save(enabled=True, saved_curve=None)
+    prev = bare_profile(name="Loud", base="performance", max_fans=True)
+    cur = bare_profile(name="Quiet", base="quiet", battery_limit=80)
+    fake_host.fail("batterylimit", rc=1, out="boom")
+    results = profiles.apply(cur, previous=prev, z13ctl=Z)
+    assert ("battery limit", False, "boom") in results
+    assert not max_fans_state.is_enabled()
+    assert not max_fans_state.is_suspended()
+
+
+def test_failed_fan_step_restores_the_previous_max_fans_flag(profiles_env, fake_host):
+    max_fans_state.save(enabled=True, saved_curve=None)
+    prev = bare_profile(name="Loud", base="performance", max_fans=True)
+    cur = bare_profile(name="Quiet", base="quiet")
+    fake_host.fail("fancurve --reset", rc=1, out="boom")
+    profiles.apply(cur, previous=prev, z13ctl=Z)
+    assert max_fans_state.is_enabled()

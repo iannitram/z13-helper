@@ -7,6 +7,7 @@ the store lock the second writer never reaches the barrier until the first is do
 so the barrier times out and the writers simply run one after the other.
 """
 
+import errno
 import threading
 
 import max_fans_state
@@ -268,7 +269,7 @@ def test_loader_repair_does_not_drop_a_locked_writers_edit(profiles_env, monkeyp
 ])
 def test_lock_fallback_warns_once(profiles_env, monkeypatch, caplog, module, store):
     def no_lock(_path):
-        raise PermissionError("read-only directory")
+        raise OSError(errno.EROFS, "read-only file system")
 
     monkeypatch.setattr(module, "_open_lock", no_lock)
     monkeypatch.setattr(module, "_lock_fallback_warned", False)
@@ -279,3 +280,19 @@ def test_lock_fallback_warns_once(profiles_env, monkeypatch, caplog, module, sto
                 pass
     warnings = [r for r in caplog.records if "without a lock" in r.message]
     assert len(warnings) == 1
+
+
+@pytest.mark.parametrize("module,store", [
+    pytest.param(profiles, lambda env: str(env.store), id="profiles"),
+    pytest.param(max_fans_state, lambda env: str(env.max_fans), id="max_fans_state"),
+])
+def test_unopenable_lock_file_refuses_instead_of_writing_unlocked(
+        profiles_env, monkeypatch, module, store):
+    # EACCES (say a root-made 0660 lock file): another writer may hold it.
+    def no_lock(_path):
+        raise PermissionError(errno.EACCES, "permission denied")
+
+    monkeypatch.setattr(module, "_open_lock", no_lock)
+    with pytest.raises(PermissionError):
+        with module.file_lock(store(profiles_env)):
+            pytest.fail("ran without a lock")

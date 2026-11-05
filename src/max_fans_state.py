@@ -39,6 +39,9 @@ _lock_fallback_warned = False
 LOCK_TIMEOUT = 10.0   # seconds to wait for another writer before giving up
 
 
+_NO_LOCK_ERRNOS = {errno.EROFS}
+
+
 class StoreLockError(OSError):
     """The lock file is unsafe to use, or another writer held it too long."""
 
@@ -113,13 +116,17 @@ def file_lock(path):
     except OSError as e:
         if fd is not None:
             os.close(fd)
+        if e.errno not in _NO_LOCK_ERRNOS:
+            # EACCES and the like mean another writer may hold a lock we can't
+            # open: writing unlocked would lose its update. Fail instead.
+            raise
         global _lock_fallback_warned
         if not _lock_fallback_warned:
             _lock_fallback_warned = True
             logger.warning(
                 "Cannot lock %s (%s); continuing without a lock", lock_path, e
             )
-        fd = None   # can't lock (read-only dir?): behave as before, unlocked
+        fd = None   # read-only filesystem: nothing else can be writing either
     held[path] = 1
     try:
         yield
@@ -141,6 +148,11 @@ def load() -> dict | None:
 
 def is_enabled() -> bool:
     return bool((load() or {}).get("enabled", False))
+
+
+def is_suspended() -> bool:
+    """An apply timed out and left the hardware state unknown."""
+    return (load() or {}).get("suspended") is not None
 
 
 def saved_curve():

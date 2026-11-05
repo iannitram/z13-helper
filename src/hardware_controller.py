@@ -42,6 +42,11 @@ def read_epp_values(paths):
     return values
 
 
+# The Power window's slider range (watts); z13ctl is never asked for more.
+TDP_MIN_W = 5
+TDP_MAX_W = 93
+
+
 class HardwareController:
     """Wraps z13ctl CLI to control ASUS ROG Flow Z13 hardware features."""
 
@@ -272,15 +277,20 @@ class HardwareController:
         """Apply all three TDP rails (watts).
 
         A partial call is rejected: z13ctl's --set anchor pins every rail it is
-        not told about, so leaving one out would silently change it. The rails
-        are ordered PL1 <= PL2 <= PL3 by raising the higher ones, as the Decky
-        clamp does; pass force=True to allow PL1 above 75W.
+        not told about, so leaving one out would silently change it. Each rail
+        must be 5-93 W and ordered PL1 <= PL2 <= PL3, else ValueError (nothing
+        is written); pass force=True to allow PL1 above 75W.
         """
         if any(v is None for v in (pl1, pl2, pl3)):
             raise ValueError("set_tdp requires pl1, pl2 and pl3")
         pl1, pl2, pl3 = int(pl1), int(pl2), int(pl3)
-        pl2 = max(pl2, pl1)
-        pl3 = max(pl3, pl2)
+        for name, v in (("PL1", pl1), ("PL2", pl2), ("PL3", pl3)):
+            if not TDP_MIN_W <= v <= TDP_MAX_W:
+                raise ValueError(
+                    f"{name} {v} W is outside {TDP_MIN_W}-{TDP_MAX_W} W"
+                )
+        if not pl1 <= pl2 <= pl3:
+            raise ValueError(f"TDP rails must satisfy PL1 <= PL2 <= PL3, got {pl1}/{pl2}/{pl3}")
         args = ["tdp", "--set", str(pl1), "--pl2", str(pl2), "--pl3", str(pl3)]
         if force:
             args.append("--force")

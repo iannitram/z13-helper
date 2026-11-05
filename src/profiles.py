@@ -343,7 +343,9 @@ def file_lock(path, *, strict=False):
     except OSError as e:
         if fd is not None:
             os.close(fd)
-        if strict:
+        if strict or e.errno != errno.EROFS:
+            # Only a read-only filesystem is safe to write unlocked; EACCES and
+            # the like mean another writer may hold a lock we cannot open.
             raise
         global _lock_fallback_warned
         if not _lock_fallback_warned:
@@ -351,7 +353,7 @@ def file_lock(path, *, strict=False):
             logger.warning(
                 "Cannot lock %s (%s); continuing without a lock", lock_path, e
             )
-        fd = None   # can't lock (read-only dir?): behave as before, unlocked
+        fd = None   # read-only filesystem: nothing else can be writing either
     held[path] = 1
     try:
         yield
@@ -1342,21 +1344,31 @@ def apply(
 
     timed_out = False
     flag_pinned = False
+    fan_ok = None   # None until the fan step has run, then whether it worked
 
     def finish(out):
         """Settle the shared Max Fans flag before apply() returns.
 
-        A timed-out write keeps it suspended with a marker, because the write
-        may have reached the daemon and the watchdog must not guess. Any other
-        failure restores the flag the user had before this attempt.
+        A timed-out write leaves the flag as the user had it and sets a
+        `suspended` marker: the write may have reached the daemon, so the
+        hardware curve is unknown and the watchdog (which reads the marker)
+        must not guess. Once the fan step itself has worked, the flag it set
+        stands whatever failed later. Any earlier failure, or a failed fan
+        step, restores the flag the user had before this attempt.
         """
         if timed_out:
-            _save_max_fans(enabled=False, suspended="z13ctl write timed out")
-        elif flag_pinned:
-            _save_max_fans(suspended=None)
-        elif any(not ok for _, ok, _ in out):
+            _save_max_fans(
+                enabled=initial_max_fans_on, suspended="z13ctl write timed out"
+            )
+        elif not (flag_pinned or fan_ok) and (
+            fan_ok is False or any(not ok for _, ok, _ in out)
+        ):
             _save_max_fans(enabled=initial_max_fans_on, suspended=None)
-        elif initial_max_fans_on or _max_fans_state().get("suspended") is not None:
+        elif (
+            flag_pinned
+            or initial_max_fans_on
+            or _max_fans_state().get("suspended") is not None
+        ):
             # Nothing to add when Max Fans was off and no stale marker exists.
             _save_max_fans(suspended=None)
         return out
@@ -1464,6 +1476,7 @@ def apply(
             enabled=planned_max_fans_on,
         )
         results.append(("fans", True, "z13ctl named profile"))
+        fan_ok = True
     elif curve_write_needed and not tdp:
         # Editing a fan curve through z13ctl activates its default `custom`
         # profile. Clear only its inactive saved TDP first, so neither a
@@ -1508,27 +1521,31 @@ def apply(
             if curve
             else None
         )
-        if step(
+        fan_ok = step(
             "fans",
             [z13ctl, "fancurve", "--set", MAX_FANS_SPEC],
             "Max Fans stays ON (100%)",
-        ):
+        )
+        if fan_ok:
             _save_max_fans(enabled=True)
     elif curve:
-        step("fans", [z13ctl, "fancurve", "--set", curve_spec(curve)], "custom curve")
+        fan_ok = step(
+            "fans", [z13ctl, "fancurve", "--set", curve_spec(curve)], "custom curve"
+        )
     elif released or tdp:
         # Leaving a Max Fans profile for one without a curve: hand the fans back
         # explicitly rather than trusting the profile write to drop the 100% curve.
         # A TDP without a curve needs it too: `tdp --set` activates z13ctl's
         # "custom" profile, which re-applies the last curve it stored (Max Fans,
         # say) -- a reset now, with "custom" active, is what clears it.
-        step(
+        fan_ok = step(
             "fans",
             [z13ctl, "fancurve", "--reset"],
             "Max Fans OFF, firmware auto" if released else "firmware auto",
         )
     else:
         results.append(("fans", True, "firmware auto"))
+        fan_ok = True
     if timed_out:
         return finish(results)
 

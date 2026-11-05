@@ -239,16 +239,26 @@ def test_set_battery_limit_clamps_40_100(fake_host, given, want):
     assert fake_host.argvs == [["z13ctl", "batterylimit", "--set", want]]
 
 
-@pytest.mark.parametrize("given,want", [
-    ((40, 20, 30), ["40", "40", "40"]),
-    ((40, 50, 30), ["40", "50", "50"]),
-    ((20, 30, 40), ["20", "30", "40"]),
-])
-def test_set_tdp_orders_pl1_le_pl2_le_pl3(fake_host, given, want):
-    HardwareController(z13ctl_path="z13ctl").set_tdp(*given)
+def test_set_tdp_passes_ordered_rails(fake_host):
+    HardwareController(z13ctl_path="z13ctl").set_tdp(20, 30, 40)
     assert fake_host.argvs == [
-        ["z13ctl", "tdp", "--set", want[0], "--pl2", want[1], "--pl3", want[2]]
+        ["z13ctl", "tdp", "--set", "20", "--pl2", "30", "--pl3", "40"]
     ]
+
+
+@pytest.mark.parametrize("given", [
+    (40, 20, 30),      # PL2 below PL1
+    (40, 50, 30),      # PL3 below PL2
+    (0, 30, 40),
+    (-5, 30, 40),
+    (20, 30, 200),
+    (4, 30, 40),
+    (20, 94, 94),
+])
+def test_set_tdp_rejects_bad_rails_without_writing(fake_host, given):
+    with pytest.raises(ValueError):
+        HardwareController(z13ctl_path="z13ctl").set_tdp(*given)
+    assert fake_host.argvs == []
 
 
 def test_set_fancurve_clamps_percent_0_100(fake_host):

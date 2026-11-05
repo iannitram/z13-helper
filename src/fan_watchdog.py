@@ -97,6 +97,8 @@ class FanWatchdog:
                  apply_tdp(tdp) (a profiles.json tdp dict) and
                  reset_fancurve(). Each raises on failure.
     max_fans_on  () -> bool: is Max Fans on right now (re-read every tick).
+    suspended    () -> bool: an apply timed out and the hardware state is
+                 unknown; the watchdog then writes nothing and guesses nothing.
     may_act      () -> bool: asked only just before a fan recovery. When it
                  says no, nothing is written and the retry gap doesn't start,
                  so the recovery happens on the first tick it says yes.
@@ -112,6 +114,7 @@ class FanWatchdog:
         fans,
         *,
         max_fans_on,
+        suspended=lambda: False,
         may_act=lambda: True,
         active_tdp=lambda: None,
         clock=time.monotonic,
@@ -120,6 +123,8 @@ class FanWatchdog:
         self.sensors = sensors
         self.fans = fans
         self._max_fans_on = max_fans_on
+        self._suspended = suspended
+        self._auto_modes = None   # per-fan pwm modes when the auto stall began
         self._may_act = may_act
         self._active_tdp = active_tdp
         self._clock = clock
@@ -240,6 +245,12 @@ class FanWatchdog:
 
     def _check(self, now) -> str | None:
         t = self._tick
+        if self._suspended():
+            self._stall_ticks = 0
+            self._zero_since = [None, None]
+            self._auto_zero_since = None
+            self._holding = False
+            return None
         max_on = t["max_on"] = self._max_fans_on()
         enabled = t["enabled"] = self.sensors.custom_fan_curve_enabled()
         if self.trace is not None:
@@ -461,6 +472,7 @@ class FanWatchdog:
             return None
         if self._auto_zero_since is None:
             self._auto_zero_since = now
+            self._auto_modes = self._fan_modes()
         stalled_s = now - self._auto_zero_since
         t["stall"] = int(stalled_s)
         if stalled_s < AUTO_STALL_S or not self._ready(
@@ -473,23 +485,30 @@ class FanWatchdog:
             f"ACT auto stall: both fans 0 RPM at {temp:.0f} C for {stalled_s:.0f}s"
         )
         max_on = self._max_fans_on()
-        curve_enabled = self.sensors.custom_fan_curve_enabled()
+        modes = self._auto_modes
         if self._defer is None:
-            return self._recover_auto(temp, max_on, curve_enabled)
-        return self._defer_run(lambda: self._recover_auto(temp, max_on, curve_enabled))
+            return self._recover_auto(temp, max_on, modes)
+        return self._defer_run(lambda: self._recover_auto(temp, max_on, modes))
+
+    def _fan_modes(self):
+        read = getattr(self.sensors, "fan_curve_modes", None)
+        return read() if read else None
 
     @authority.serialized
-    def _recover_auto(self, temp, max_on=None, curve_enabled=None) -> str:
+    def _recover_auto(self, temp, max_on=None, modes=None) -> str:
         """Rewrite the platform profile, then put the active profile's TDP back
         (the rewrite dropped it to the firmware's limits) and reset the curve
         (`tdp --set` re-applies z13ctl's last stored curve). No profile hooks.
 
         The decision was made on an earlier tick; a profile apply queued since
-        then can have turned Max Fans on or enabled a custom curve, so re-read
-        both and skip rather than overwrite a newer state."""
+        then can have turned Max Fans on or put a fan in manual mode, so re-read
+        Max Fans and each fan's mode (`modes`: the pair seen when the stall
+        began) and skip rather than overwrite a newer state."""
+        now_modes = self._fan_modes() if max_on is not None else None
         if max_on is not None and (
             self._max_fans_on() != max_on
-            or self.sensors.custom_fan_curve_enabled() != curve_enabled
+            or now_modes != modes
+            or 1 in (now_modes or ())
         ):
             return "Auto fan recovery skipped; fan state changed before it ran"
         named = authority.recover_performance()
