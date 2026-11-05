@@ -55,12 +55,8 @@ logger = logging.getLogger(__name__)
 # Installed as ~/.local/bin/z13-profile, the host seam sits in ~/.local/lib/z13-helper/
 # (install.sh puts it there). In the Flatpak and the tests it's next to this file.
 _HOST_LIB = os.path.expanduser("~/.local/lib/z13-helper")
-if (
-    __name__ == "__main__"
-    and os.path.basename(__file__) == "z13-profile"
-    and os.path.isdir(_HOST_LIB)
-    and _HOST_LIB not in sys.path
-):
+if (__name__ == "__main__" and os.path.basename(__file__) == "z13-profile"
+        and os.path.isdir(_HOST_LIB) and _HOST_LIB not in sys.path):
     sys.path.append(_HOST_LIB)
 if __name__ == "__main__":
     sys.modules["profiles"] = sys.modules[__name__]
@@ -85,78 +81,28 @@ BASES = ("quiet", "balanced", "performance")
 BRIGHTNESS_LEVELS = ("off", "low", "medium", "high")
 LIGHTING_DEVICES = ("keyboard", "lightbar")
 LIGHTING_MODES = ("static", "breathe", "cycle", "rainbow", "strobe")
-LIGHTING_COLORS = (
-    "red",
-    "orange",
-    "yellow",
-    "green",
-    "cyan",
-    "blue",
-    "purple",
-    "white",
-)
+LIGHTING_COLORS = ("red", "orange", "yellow", "green", "cyan", "blue", "purple", "white")
 # CPU Boost: amd-pstate energy_performance_preference, display order. Same list as
 # src/epp.py (the app's copy); kept here too because z13-profile runs without it.
 EPP_CHOICES = ("power", "balance_power", "balance_performance", "performance")
 EPP_SYSFS = "/sys/devices/system/cpu/cpu{n}/cpufreq/energy_performance_preference"
 
 # Max Fans = every point at 100%. Must match the desktop app and the Decky plugin.
-MAX_FAN_TEMPS = (
-    20,
-    30,
-    40,
-    50,
-    60,
-    70,
-    80,
-    90,
-)  # Low anchor; firmware response still needs verification.
+MAX_FAN_TEMPS = (20, 30, 40, 50, 60, 70, 80, 90)   # Low anchor; firmware response still needs verification.
 MAX_FANS_SPEC = ",".join(f"{t}:100%" for t in MAX_FAN_TEMPS)
 
 # Curves carried over from the z13-max / z13-balanced host scripts (the
 # "hardware-longevity" curves; factory auto tops out at 40% @ 76 °C). The
 # explicit 20 C anchor keeps the first PWM plateau defined below 40 C; the
 # redundant 85 C plateau point is removed to retain z13ctl's eight-point limit.
-LEGACY_TURBO_CURVE = [
-    [40, 50],
-    [50, 75],
-    [60, 90],
-    [70, 100],
-    [75, 100],
-    [80, 100],
-    [85, 100],
-    [90, 100],
-]
-LEGACY_BALANCED_CURVE = [
-    [40, 20],
-    [50, 35],
-    [60, 55],
-    [70, 75],
-    [75, 90],
-    [80, 100],
-    [85, 100],
-    [90, 100],
-]
-TURBO_CURVE = [
-    [20, 50],
-    [40, 50],
-    [50, 75],
-    [60, 90],
-    [70, 100],
-    [75, 100],
-    [80, 100],
-    [90, 100],
-]
-BALANCED_CURVE = [
-    [20, 20],
-    [40, 20],
-    [50, 35],
-    [60, 55],
-    [70, 75],
-    [75, 90],
-    [80, 100],
-    [90, 100],
-]
+LEGACY_TURBO_CURVE = [[40, 50], [50, 75], [60, 90], [70, 100],
+                      [75, 100], [80, 100], [85, 100], [90, 100]]
+LEGACY_BALANCED_CURVE = [[40, 20], [50, 35], [60, 55], [70, 75],
+                         [75, 90], [80, 100], [85, 100], [90, 100]]
+TURBO_CURVE = [[20, 50], [40, 50], [50, 75], [60, 90],
+               [70, 100], [75, 100], [80, 100], [90, 100]]
+BALANCED_CURVE = [[20, 20], [40, 20], [50, 35], [60, 55],
+                  [70, 75], [75, 90], [80, 100], [90, 100]]
 
 # Built-in names follow G-Helper (Silent / Balanced / Turbo); z13ctl's bases
 # are quiet / balanced / performance.
@@ -191,29 +137,13 @@ Z13CTL_SERVICE = "z13ctl.service"  # the user daemon that holds the HID device
 LIGHTBAR_DAEMON_RESTART_WAIT_S = 2  # wait for the daemon socket before retrying
 
 
-def _profile(
-    name,
-    base,
-    *,
-    builtin=False,
-    tdp=None,
-    fan_curve=None,
-    undervolt=None,
-    brightness=None,
-    battery_limit=None,
-    max_fans=False,
-    enter="",
-    exit_="",
-):
+def _profile(name, base, *, builtin=False, tdp=None, fan_curve=None,
+             undervolt=None, brightness=None, battery_limit=None,
+             max_fans=False, enter="", exit_=""):
     return {
-        "name": name,
-        "builtin": builtin,
-        "base": base,
-        "tdp": tdp,
-        "fan_curve": fan_curve,
-        "undervolt": undervolt,
-        "brightness": brightness,
-        "battery_limit": battery_limit,
+        "name": name, "builtin": builtin, "base": base,
+        "tdp": tdp, "fan_curve": fan_curve, "undervolt": undervolt,
+        "brightness": brightness, "battery_limit": battery_limit,
         # Switching TO this profile turns Max Fans ON; switching away turns it
         # OFF again. A restore of the same profile leaves the user's toggle alone.
         "max_fans": max_fans,
@@ -225,34 +155,16 @@ def default_profiles():
     """The built-in set: mirrors the three z13-* host scripts plus Boondock."""
     return [
         _profile("Silent", "quiet", builtin=True, brightness="low", battery_limit=80),
-        _profile(
-            "Balanced",
-            "balanced",
-            builtin=True,
-            fan_curve=BALANCED_CURVE,
-            brightness="medium",
-            battery_limit=80,
-        ),
-        _profile(
-            "Turbo",
-            "performance",
-            builtin=True,
-            fan_curve=TURBO_CURVE,
-            brightness="high",
-            battery_limit=80,
-            max_fans=True,
-        ),
+        _profile("Balanced", "balanced", builtin=True, fan_curve=BALANCED_CURVE,
+                 brightness="medium", battery_limit=80),
+        _profile("Turbo", "performance", builtin=True, fan_curve=TURBO_CURVE,
+                 brightness="high", battery_limit=80, max_fans=True),
         # Hardware side of boondock is explicit here; the hooks run only the script's
         # session half (screen dim, background services), never its power writes,
         # which would overwrite this profile's own settings.
-        _profile(
-            "Boondock",
-            "quiet",
-            builtin=True,
+        _profile("Boondock", "quiet", builtin=True,
                  tdp={"pl1": 20, "pl2": 30, "pl3": 40, "force": False},
-            enter=f"{BOONDOCK_BIN} session-on",
-            exit_=f"{BOONDOCK_BIN} session-off",
-        ),
+                 enter=f"{BOONDOCK_BIN} session-on", exit_=f"{BOONDOCK_BIN} session-off"),
     ]
 
 
@@ -295,9 +207,7 @@ def _open_lock(lock_path):
     try:
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
-            raise StoreLockError(
-                f"{lock_path} is not a plain single-link file; refusing"
-            )
+            raise StoreLockError(f"{lock_path} is not a plain single-link file; refusing")
         if created:
             os.fchmod(fd, 0o660)
         elif st.st_uid not in {0, os.geteuid()}:
@@ -368,6 +278,7 @@ def store_lock():
     return file_lock(STORE_PATH)
 
 
+
 def _read_json(path):
     try:
         with open(path) as f:
@@ -393,9 +304,7 @@ def _atomic_write_text(path, text, *, mode=0o644, owner=None):
             raise OSError(errno.ELOOP, "refusing to write through a symlink", path)
     except FileNotFoundError:
         pass
-    fd, tmp = tempfile.mkstemp(
-        dir=d, prefix=f".{os.path.basename(path)}.", suffix=".tmp"
-    )
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=f".{os.path.basename(path)}.", suffix=".tmp")
     try:
         with os.fdopen(fd, "w") as f:
             f.write(text)
@@ -441,10 +350,7 @@ def _migrate_boondock_hooks(p):
     hooks = p.get("hooks")
     if not isinstance(hooks, dict):
         return
-    for key, old, new in (
-        ("enter", "on", "session-on"),
-        ("exit", "off", "session-off"),
-    ):
+    for key, old, new in (("enter", "on", "session-on"), ("exit", "off", "session-off")):
         cmd = hooks.get(key)
         if isinstance(cmd, str):
             parts = cmd.split()
@@ -477,14 +383,8 @@ def _max_fans_curve_migration(store):
     if not isinstance(store, dict) or not isinstance(store.get("profiles"), list):
         return None
     active_name = store.get("active")
-    active = next(
-        (
-            p
-            for p in store["profiles"]
-            if isinstance(p, dict) and p.get("name") == active_name
-        ),
-        None,
-    )
+    active = next((p for p in store["profiles"]
+                   if isinstance(p, dict) and p.get("name") == active_name), None)
     if active is None or active.get("builtin") is not True:
         return None
     migration = {
@@ -510,7 +410,8 @@ def _migrate_enabled_max_fans_snapshot(store):
     if migration is None:
         return
     old_curve, new_curve = migration
-    old_snapshot = [[int(temp), round(int(pwm) * 255 / 100)] for temp, pwm in old_curve]
+    old_snapshot = [[int(temp), round(int(pwm) * 255 / 100)]
+                    for temp, pwm in old_curve]
     state = _read_json(MAX_FANS_PATH)
     if (
         not isinstance(state, dict)
@@ -525,12 +426,10 @@ def _migrate_enabled_max_fans_snapshot(store):
         if current_migration is None:
             return
         old_curve, new_curve = current_migration
-        old_snapshot = [
-            [int(temp), round(int(pwm) * 255 / 100)] for temp, pwm in old_curve
-        ]
-        new_snapshot = [
-            [int(temp), round(int(pwm) * 255 / 100)] for temp, pwm in new_curve
-        ]
+        old_snapshot = [[int(temp), round(int(pwm) * 255 / 100)]
+                        for temp, pwm in old_curve]
+        new_snapshot = [[int(temp), round(int(pwm) * 255 / 100)]
+                        for temp, pwm in new_curve]
         with file_lock(MAX_FANS_PATH):
             state = _read_json(MAX_FANS_PATH)
             if (
@@ -539,10 +438,8 @@ def _migrate_enabled_max_fans_snapshot(store):
                 or state.get("saved_curve") != old_snapshot
             ):
                 return
-            stamp = (
-                f"{time.strftime('%Y%m%d-%H%M%S')}-"
-                f"{time.time_ns() // 1000 % 1_000_000:06d}-{os.getpid()}"
-            )
+            stamp = (f"{time.strftime('%Y%m%d-%H%M%S')}-"
+                     f"{time.time_ns() // 1000 % 1_000_000:06d}-{os.getpid()}")
             backup = f"{MAX_FANS_PATH}.before-idle-curve-{stamp}"
             suffix = 0
             while os.path.exists(backup):
@@ -561,20 +458,14 @@ def _loaded_profile_ok(p):
     """
     try:
         validate(p)
-    except (
-        Exception
-    ) as e:  # any shape surprise (KeyError, OverflowError...) drops the entry
-        print(
-            f"z13-profile: ignoring invalid profile entry: {type(e).__name__}: {e}",
-            file=sys.stderr,
-        )
+    except Exception as e:   # any shape surprise (KeyError, OverflowError...) drops the entry
+        print(f"z13-profile: ignoring invalid profile entry: {type(e).__name__}: {e}", file=sys.stderr)
         return False
     hooks = p.get("hooks")
     if hooks is None:
         return True
     return isinstance(hooks, dict) and all(
-        isinstance(hooks.get(k, ""), str) for k in ("enter", "exit")
-    )
+        isinstance(hooks.get(k, ""), str) for k in ("enter", "exit"))
 
 
 def _sanitize_store(store):
@@ -630,11 +521,8 @@ def _repair_or_seed(create):
             _keep_aside(copy=True)
             _write_json(STORE_PATH, store)
         return store
-    store = {
-        "version": 1,
-        "active": _legacy_active() or "Balanced",
-        "profiles": default_profiles(),
-    }
+    store = {"version": 1, "active": _legacy_active() or "Balanced",
+             "profiles": default_profiles()}
     if create:
         if os.path.exists(STORE_PATH):
             # Unreadable or malformed: keep it for recovery instead of silently
@@ -664,18 +552,13 @@ def load_store(create=True):
             with store_lock():
                 store = _repair_or_seed(create)
         elif store is None:
-            store = {
-                "version": 1,
-                "active": _legacy_active() or "Balanced",
-                "profiles": default_profiles(),
-            }
+            store = {"version": 1, "active": _legacy_active() or "Balanced",
+                     "profiles": default_profiles()}
     # Keys added after a store was seeded: built-ins take the shipped value.
     shipped = {p["name"]: p for p in default_profiles()}
     for p in store["profiles"]:
         if "max_fans" not in p:
-            p["max_fans"] = bool(
-                p.get("builtin") and shipped.get(p["name"], {}).get("max_fans")
-            )
+            p["max_fans"] = bool(p.get("builtin") and shipped.get(p["name"], {}).get("max_fans"))
         _migrate_boondock_hooks(p)
     if create:
         _migrate_enabled_max_fans_snapshot(store)
@@ -715,61 +598,35 @@ def sync_active_from_backend(state):
         return None
     try:
         from z13ctl_client import Z13CtlClient
-
         mapped_name = Z13CtlClient.mapped_profile_name
     except ImportError:
         return None
     with authority.transaction(), store_lock():
         store = load_store()
         before = json.dumps(store, sort_keys=True)
-        selected = next(
-            (p for p in store["profiles"] if mapped_name(p) == backend_name), None
-        )
+        selected = next((p for p in store["profiles"] if mapped_name(p) == backend_name), None)
         if selected is None and backend_name in BASES:
             # Upstream refuses to activate an empty custom profile. Such an app
             # profile is an alias for its firmware base; retain its app identity
             # rather than bouncing back to a built-in on every snapshot.
             current = get_profile(store.get("active"), store)
-            saved = (
-                (state.get("custom_profiles") or {}).get(mapped_name(current))
-                if current
-                else None
-            )
-            if (
-                current
-                and current.get("base") == backend_name
-                and isinstance(saved, dict)
-                and not any(
-                    current.get(k) is not None
-                    for k in ("tdp", "fan_curve", "undervolt")
-                )
-                and not any(
-                    saved.get(k) is not None for k in ("tdp", "fan_curve", "undervolt")
-                )
-            ):
+            saved = ((state.get("custom_profiles") or {}).get(mapped_name(current))
+                     if current else None)
+            if (current and current.get("base") == backend_name and isinstance(saved, dict)
+                    and not any(current.get(k) is not None for k in ("tdp", "fan_curve", "undervolt"))
+                    and not any(saved.get(k) is not None for k in ("tdp", "fan_curve", "undervolt"))):
                 selected = current
             else:
-                selected = next(
-                    (
-                        p
-                        for p in store["profiles"]
-                        if p.get("builtin") and p.get("base") == backend_name
-                    ),
-                    None,
-                )
+                selected = next((p for p in store["profiles"]
+                                 if p.get("builtin") and p.get("base") == backend_name), None)
         custom = (state.get("custom_profiles") or {}).get(backend_name)
         if selected is None and isinstance(custom, dict):
             # Profiles created through z13ctl are visible in both frontends too.
             name = backend_name
             if get_profile(name, store):
                 name = f"Backend {name}"
-            selected = {
-                "name": name,
-                "base": "balanced",
-                "builtin": False,
-                "z13ctl_profile": backend_name,
-                "hooks": {"enter": "", "exit": ""},
-            }
+            selected = {"name": name, "base": "balanced", "builtin": False,
+                        "z13ctl_profile": backend_name, "hooks": {"enter": "", "exit": ""}}
             store["profiles"].append(selected)
         if selected is None:
             return None
@@ -778,16 +635,9 @@ def sync_active_from_backend(state):
             if state.get("platform_profile") in BASES:
                 selected["base"] = state["platform_profile"]
             tdp = custom.get("tdp")
-            selected["tdp"] = (
-                {
-                    "pl1": tdp["pl1_spl"],
-                    "pl2": tdp["pl2_sppt"],
-                    "pl3": tdp["fppt"],
-                    "force": tdp["pl1_spl"] > 75,
-                }
-                if tdp
-                else None
-            )
+            selected["tdp"] = ({"pl1": tdp["pl1_spl"], "pl2": tdp["pl2_sppt"],
+                                "pl3": tdp["fppt"], "force": tdp["pl1_spl"] > 75}
+                               if tdp else None)
             uv = custom.get("undervolt")
             selected["undervolt"] = uv.get("cpu_co") if uv else None
             points = (custom.get("fan_curve") or {}).get("points") or []
@@ -795,9 +645,8 @@ def sync_active_from_backend(state):
             _save_max_fans(enabled=max_on)
             # A Max Fans curve is temporary; retain the profile's restore curve.
             if not max_on:
-                selected["fan_curve"] = [
-                    [p["temp"], round(p["pwm"] * 100 / 255)] for p in points
-                ] or None
+                selected["fan_curve"] = [[p["temp"], round(p["pwm"] * 100 / 255)]
+                                         for p in points] or None
         elif backend_name in BASES:
             _save_max_fans(enabled=False)
         if isinstance(state.get("battery_limit"), int):
@@ -961,7 +810,6 @@ def validate_curve(curve):
 # Apply engine
 # ----------------------------------------------------------------------
 
-
 def _runtime_dir():
     """Where the lightbar-reset stamp lives: $XDG_RUNTIME_DIR, or /tmp.
 
@@ -1028,10 +876,7 @@ def restart_lightbar_daemon(*, sleep=time.sleep):
     limit, custom fan curve), so nothing else needs to be re-pushed here.
     Returns (ok, message).
     """
-    rc, out, _ = host.run(
-        ["systemctl", "--user", "restart", "--no-ask-password", Z13CTL_SERVICE],
-        timeout=30,
-    )
+    rc, out, _ = host.run(["systemctl", "--user", "restart", "--no-ask-password", Z13CTL_SERVICE], timeout=30)
     if rc != 0:
         return False, f"daemon restart failed ({out or f'rc={rc}'})"
     sleep(LIGHTBAR_DAEMON_RESTART_WAIT_S)
@@ -1054,18 +899,13 @@ def recover_lightbar(*, sleep=time.sleep, now=time.time):
 
     decky/main.py carries a copy of this (the Decky backend can't import src/).
     """
-    ok, msg = _stamp_rate_limited(
-        lightbar_stamp_path(),
-        now,
-        lambda age: f"lightbar reset skipped (last one {age} s ago)",
-    )
+    ok, msg = _stamp_rate_limited(lightbar_stamp_path(), now,
+                                   lambda age: f"lightbar reset skipped (last one {age} s ago)")
     if not ok:
         return False, msg
     # --no-ask-password: without the polkit rule, fail instead of popping a
     # password dialog from a background apply.
-    rc, out, _ = host.run(
-        ["systemctl", "start", "--no-ask-password", LIGHTBAR_RESET_UNIT], timeout=30
-    )
+    rc, out, _ = host.run(["systemctl", "start", "--no-ask-password", LIGHTBAR_RESET_UNIT], timeout=30)
     if rc != 0:
         return False, f"lightbar reset failed ({out or f'rc={rc}'})"
     sleep(LIGHTBAR_RESET_SETTLE_S)
@@ -1084,11 +924,8 @@ def recover_lightbar_stale(*, sleep=time.sleep, now=time.time):
 
     decky/main.py carries a copy of this.
     """
-    ok, msg = _stamp_rate_limited(
-        lightbar_daemon_stamp_path(),
-        now,
-        lambda age: f"daemon restart skipped (last one {age} s ago)",
-    )
+    ok, msg = _stamp_rate_limited(lightbar_daemon_stamp_path(), now,
+                                   lambda age: f"daemon restart skipped (last one {age} s ago)")
     if not ok:
         return False, msg
     return restart_lightbar_daemon(sleep=sleep)
@@ -1115,27 +952,15 @@ def apply_tdp(profile, *, z13ctl=Z13CTL):
     tdp = profile.get("tdp")
     if not tdp:
         return []
-    argv = [
-        z13ctl,
-        "tdp",
-        "--set",
-        str(tdp["pl1"]),
-        "--pl2",
-        str(tdp["pl2"]),
-        "--pl3",
-        str(tdp["pl3"]),
-    ]
+    argv = [z13ctl, "tdp", "--set", str(tdp["pl1"]),
+            "--pl2", str(tdp["pl2"]), "--pl3", str(tdp["pl3"])]
     if tdp.get("force"):
         argv.append("--force")
     rc, out, timed_out = authority.run(argv, timeout=Z13CTL_WRITE_TIMEOUT_S)
     ok = rc == 0
-    message = (
-        f"{tdp['pl1']}/{tdp['pl2']}/{tdp['pl3']} W"
-        if ok
-        else f"z13ctl write timed out after {Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)"
-        if timed_out
-        else (out or f"rc={rc}")
-    )
+    message = (f"{tdp['pl1']}/{tdp['pl2']}/{tdp['pl3']} W" if ok else
+               f"z13ctl write timed out after {Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)"
+               if timed_out else (out or f"rc={rc}"))
     return [("tdp", ok, message)]
 
 
@@ -1156,41 +981,28 @@ def clear_z13ctl_default_custom_tdp(*, z13ctl=Z13CTL):
     if rc == 0 and "--profile" not in help_text:
         return True, None
     if rc != 0:
-        return False, (
-            "tdp",
-            False,
-            help_text or f"could not check z13ctl capabilities (rc={rc})",
-        )
+        return False, ("tdp", False,
+                       help_text or f"could not check z13ctl capabilities (rc={rc})")
 
     # Only the socket's JSON profile-list proves the daemon honours the target
     # field; the CLI firmware listing proves neither capability.
     try:
         client = authority.named_client()
     except (OSError, RuntimeError) as exc:
-        return False, (
-            "tdp",
-            False,
-            f"could not verify z13ctl daemon profile support ({exc})",
-        )
+        return False, ("tdp", False, f"could not verify z13ctl daemon profile support ({exc})")
     if client is None:
         return False, ("tdp", False, "could not verify z13ctl daemon profile support")
     rc, listing, _ = host.run([z13ctl, "profile", "--list"], timeout=15)
     if rc != 0:
-        return False, (
-            "tdp",
-            False,
-            listing or f"could not read z13ctl profile list (rc={rc})",
-        )
+        return False, ("tdp", False,
+                       listing or f"could not read z13ctl profile list (rc={rc})")
     lines = listing.splitlines()
     custom = None
     for line in lines:
         # `profile --list` uses a padded 20-character name column; requiring
         # its separator also keeps the `Custom profiles:` heading from matching.
-        match = re.match(
-            r"^[ \t]*(?P<active>\*)?[ \t]*custom[ \t]{2,}(?P<description>.*)$",
-            line,
-            re.IGNORECASE,
-        )
+        match = re.match(r"^[ \t]*(?P<active>\*)?[ \t]*custom[ \t]{2,}(?P<description>.*)$",
+                         line, re.IGNORECASE)
         if match:
             custom = match
             break
@@ -1199,26 +1011,17 @@ def clear_z13ctl_default_custom_tdp(*, z13ctl=Z13CTL):
         # headers prove the daemon replied, and there is no saved TDP to clear.
         return True, None
     if custom.group("active"):
-        return False, (
-            "tdp",
-            False,
-            "z13ctl custom profile is still active; saved TDP was left unchanged",
-        )
+        return False, ("tdp", False,
+                       "z13ctl custom profile is still active; saved TDP was left unchanged")
     if not re.search(r"(?:^|,\s*)\d+W(?:,|$)", custom.group("description")):
         return True, None
 
-    rc, out, timed_out = authority.run(
-        [z13ctl, "tdp", "--reset", "--profile", "custom"],
-        timeout=Z13CTL_WRITE_TIMEOUT_S,
-    )
+    rc, out, timed_out = authority.run([z13ctl, "tdp", "--reset", "--profile", "custom"],
+                                  timeout=Z13CTL_WRITE_TIMEOUT_S)
     ok = rc == 0
-    message = (
-        "cleared saved z13ctl custom TDP"
-        if ok
-        else f"z13ctl write timed out after {Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)"
-        if timed_out
-        else (out or f"rc={rc}")
-    )
+    message = ("cleared saved z13ctl custom TDP" if ok else
+               f"z13ctl write timed out after {Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)"
+               if timed_out else (out or f"rc={rc}"))
     result = ("tdp", ok, message)
     return ok, result
 
@@ -1229,26 +1032,14 @@ def apply_undervolt(profile, *, z13ctl=Z13CTL):
     uv = profile.get("undervolt")
     if uv is None:
         return []
-    rc, out, timed_out = authority.run(
-        [z13ctl, "undervolt", "--set", str(uv)], timeout=Z13CTL_WRITE_TIMEOUT_S
-    )
+    rc, out, timed_out = authority.run([z13ctl, "undervolt", "--set", str(uv)], timeout=Z13CTL_WRITE_TIMEOUT_S)
     if rc == 0:
         return [("undervolt", True, f"{uv}")]
     if timed_out:
-        return [
-            (
-                "undervolt",
-                False,
-                f"z13ctl write timed out after {Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)",
-            )
-        ]
-    return [
-        (
-            "undervolt",
-            False,
-            "unavailable (ryzen_smu not loaded)" if "ryzen_smu" in out else out,
-        )
-    ]
+        return [("undervolt", False,
+                 f"z13ctl write timed out after {Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)")]
+    return [("undervolt", False, "unavailable (ryzen_smu not loaded)"
+             if "ryzen_smu" in out else out)]
 
 
 def epp_argv(value, cpu_count):
@@ -1263,10 +1054,8 @@ def epp_argv(value, cpu_count):
     if value not in EPP_CHOICES:
         raise ValueError(f"epp must be one of {EPP_CHOICES}")
     paths = [EPP_SYSFS.format(n=i) for i in range(cpu_count)]
-    script = (
-        'v=$1; shift; n=0; for f in "$@"; do [ -e "$f" ] || continue; '
-        'printf %s "$v" > "$f" || exit 1; n=$((n+1)); done; [ "$n" -gt 0 ]'
-    )
+    script = ('v=$1; shift; n=0; for f in "$@"; do [ -e "$f" ] || continue; '
+              'printf %s "$v" > "$f" || exit 1; n=$((n+1)); done; [ "$n" -gt 0 ]')
     return ["sh", "-c", script, "sh", value, *paths]
 
 
@@ -1275,9 +1064,7 @@ def write_epp(value, *, cpu_count=None):
     n = cpu_count if cpu_count is not None else (os.cpu_count() or 0)
     if n < 1:
         return False, "no CPUs found"
-    rc, out, timed_out = authority.run(
-        epp_argv(value, n), timeout=Z13CTL_WRITE_TIMEOUT_S
-    )
+    rc, out, timed_out = authority.run(epp_argv(value, n), timeout=Z13CTL_WRITE_TIMEOUT_S)
     if rc == 0:
         return True, value
     if timed_out:
@@ -1303,29 +1090,13 @@ def lighting_argv(device, setting, brightness, z13ctl=Z13CTL):
     validate(candidate)
     if brightness not in BRIGHTNESS_LEVELS:
         raise ValueError("bad brightness level")
-    return [
-        z13ctl,
-        "--device",
-        device,
-        "apply",
-        "--mode",
-        setting["mode"],
-        "--color",
-        setting["color"],
-        "--brightness",
-        brightness,
-    ]
+    return [z13ctl, "--device", device, "apply", "--mode", setting["mode"],
+            "--color", setting["color"], "--brightness", brightness]
 
 
 @authority.serialized
-def apply(
-    profile,
-    *,
-    previous=None,
-    z13ctl=Z13CTL,
-    skip_hooks=False,
-    login_battery_default=None,
-):
+def apply(profile, *, previous=None, z13ctl=Z13CTL,
+          skip_hooks=False, login_battery_default=None):
     """Put the machine into the state `profile` describes.
 
     Order matters: the platform-profile write makes asus-wmi drop any custom
@@ -1377,16 +1148,11 @@ def apply(
         nonlocal timed_out
         rc, out, hit_timeout = authority.run(argv, timeout=timeout)
         ok = rc == 0
-        timed_out = (
-            hit_timeout and os.path.basename(argv[0]) == os.path.basename(z13ctl)
-        )
-        message = (
-            ok_msg
-            if ok and ok_msg
-            else f"z13ctl write timed out after {Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)"
-            if timed_out
-            else (out or f"rc={rc}")
-        )
+        timed_out = hit_timeout and os.path.basename(argv[0]) == os.path.basename(z13ctl)
+        message = (ok_msg if ok and ok_msg else
+                   f"z13ctl write timed out after {Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)"
+                   if timed_out
+                   else (out or f"rc={rc}"))
         results.append((name, ok, message))
         return ok
 
@@ -1394,12 +1160,8 @@ def apply(
     if not skip_hooks and previous and previous.get("name") != profile["name"]:
         exit_cmd = (previous.get("hooks") or {}).get("exit") or ""
         if exit_cmd.strip():
-            step(
-                "exit hook",
-                ["bash", "-lc", exit_cmd],
-                f"ran: {exit_cmd}",
-                timeout=HOOK_TIMEOUT_S,
-            )
+            step("exit hook", ["bash", "-lc", exit_cmd], f"ran: {exit_cmd}",
+                 timeout=HOOK_TIMEOUT_S)
 
     # Compute the desired state now, but suspend the shared Max Fans flag for
     # the whole apply. The watchdog must not re-pin a curve between the base
@@ -1412,13 +1174,8 @@ def apply(
     released = False
     if switching and profile.get("max_fans"):
         planned_max_fans_on = True
-    elif (
-        switching
-        and previous
-        and previous.get("max_fans")
-        and not profile.get("max_fans")
-        and initial_max_fans_on
-    ):
+    elif switching and previous and previous.get("max_fans") and not profile.get("max_fans") \
+            and initial_max_fans_on:
         planned_max_fans_on = False
         released = True
     if initial_max_fans_on:
@@ -1436,9 +1193,7 @@ def apply(
         base_ok = True
         results.append(("profile", True, mapped_name))
     else:
-        base_ok = step(
-            "profile", [z13ctl, "profile", "--set", profile["base"]], profile["base"]
-        )
+        base_ok = step("profile", [z13ctl, "profile", "--set", profile["base"]], profile["base"])
     if timed_out:
         # A timed-out write may still have reached the daemon. The Max Fans flag
         # represents confirmed enforcement, so keep it suspended rather than
@@ -1456,9 +1211,7 @@ def apply(
     #    profile write above).
     if named_client is None:
         results.extend(apply_tdp(profile, z13ctl=z13ctl))
-    timed_out = any(
-        msg.startswith("z13ctl write timed out after ") for _, _, msg in results
-    )
+    timed_out = any(msg.startswith("z13ctl write timed out after ") for _, _, msg in results)
     if timed_out:
         return finish(results)
 
@@ -1469,12 +1222,8 @@ def apply(
     curve_write_needed = bool(curve) or planned_max_fans_on
     cleanup_ok = True
     if named_client is not None:
-        _save_max_fans(
-            saved_curve=[[int(t), round(int(p) * 255 / 100)] for t, p in curve]
-            if curve
-            else None,
-            enabled=planned_max_fans_on,
-        )
+        _save_max_fans(saved_curve=[[int(t), round(int(p) * 255 / 100)] for t, p in curve]
+                       if curve else None, enabled=planned_max_fans_on)
         results.append(("fans", True, "z13ctl named profile"))
         fan_ok = True
     elif curve_write_needed and not tdp:
@@ -1484,13 +1233,8 @@ def apply(
         # can reactivate a limit from an older app profile.
         if not base_ok:
             cleanup_ok = False
-            results.append(
-                (
-                    "tdp",
-                    False,
-                    "base profile switch failed; saved custom TDP was not changed",
-                )
-            )
+            results.append(("tdp", False,
+                            "base profile switch failed; saved custom TDP was not changed"))
         else:
             cleanup_ok, cleanup_result = clear_z13ctl_default_custom_tdp(z13ctl=z13ctl)
             if cleanup_result:
@@ -1506,43 +1250,27 @@ def apply(
         # state that was already in force before this attempted transition.
         flag_pinned = True
         _save_max_fans(enabled=initial_max_fans_on if not base_ok else False)
-        results.append(
-            (
-                "fans",
-                False,
-                "saved custom TDP could not be safely cleared; fan curve was not applied",
-            )
-        )
+        results.append(("fans", False,
+                        "saved custom TDP could not be safely cleared; fan curve was not applied"))
     elif planned_max_fans_on:
         # What Max Fans OFF should go back to: this profile's curve, or none
         # (= firmware auto) -- never the previous profile's leftover curve.
-        _save_max_fans(
-            saved_curve=[[int(t), round(int(p) * 255 / 100)] for t, p in curve]
-            if curve
-            else None
-        )
-        fan_ok = step(
-            "fans",
-            [z13ctl, "fancurve", "--set", MAX_FANS_SPEC],
-            "Max Fans stays ON (100%)",
-        )
+        _save_max_fans(saved_curve=[[int(t), round(int(p) * 255 / 100)] for t, p in curve]
+                        if curve else None)
+        fan_ok = step("fans", [z13ctl, "fancurve", "--set", MAX_FANS_SPEC],
+                      "Max Fans stays ON (100%)")
         if fan_ok:
             _save_max_fans(enabled=True)
     elif curve:
-        fan_ok = step(
-            "fans", [z13ctl, "fancurve", "--set", curve_spec(curve)], "custom curve"
-        )
+        fan_ok = step("fans", [z13ctl, "fancurve", "--set", curve_spec(curve)], "custom curve")
     elif released or tdp:
         # Leaving a Max Fans profile for one without a curve: hand the fans back
         # explicitly rather than trusting the profile write to drop the 100% curve.
         # A TDP without a curve needs it too: `tdp --set` activates z13ctl's
         # "custom" profile, which re-applies the last curve it stored (Max Fans,
         # say) -- a reset now, with "custom" active, is what clears it.
-        fan_ok = step(
-            "fans",
-            [z13ctl, "fancurve", "--reset"],
-            "Max Fans OFF, firmware auto" if released else "firmware auto",
-        )
+        fan_ok = step("fans", [z13ctl, "fancurve", "--reset"],
+                      "Max Fans OFF, firmware auto" if released else "firmware auto")
     else:
         results.append(("fans", True, "firmware auto"))
         fan_ok = True
@@ -1552,9 +1280,7 @@ def apply(
     # 5. Undervolt (needs ryzen_smu; absent on stock SteamOS -> reported, not fatal).
     if named_client is None:
         results.extend(apply_undervolt(profile, z13ctl=z13ctl))
-    timed_out = any(
-        msg.startswith("z13ctl write timed out after ") for _, _, msg in results
-    )
+    timed_out = any(msg.startswith("z13ctl write timed out after ") for _, _, msg in results)
     if timed_out:
         return finish(results)
 
@@ -1574,15 +1300,9 @@ def apply(
             rc, out, timed_out = authority.run(argv, timeout=Z13CTL_WRITE_TIMEOUT_S)
             if timed_out:
                 out = f"z13ctl write timed out after {Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)"
-            results.append(
-                (
-                    f"lighting ({dev})",
-                    rc == 0,
-                    f"{setting['mode']} / {setting['color']} / {level}"
-                    if rc == 0
-                    else (out or f"rc={rc}"),
-                )
-            )
+            results.append((f"lighting ({dev})", rc == 0,
+                            f"{setting['mode']} / {setting['color']} / {level}" if rc == 0
+                            else (out or f"rc={rc}")))
             if timed_out:
                 return finish(results)
         elif br:
@@ -1601,30 +1321,19 @@ def apply(
                     rec_ok = None
                 if rec_ok is not None:
                     if rec_ok:
-                        rc, out, hit_timeout = authority.run(
-                            argv, timeout=Z13CTL_WRITE_TIMEOUT_S
-                        )
+                        rc, out, hit_timeout = authority.run(argv, timeout=Z13CTL_WRITE_TIMEOUT_S)
                         timed_out = hit_timeout
                         if hit_timeout:
                             out = f"z13ctl write timed out after {Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)"
                         if rc == 0:
-                            results.append(
-                                (
-                                    f"brightness ({dev})",
-                                    True,
-                                    f"{br} (lightbar recovered)",
-                                )
-                            )
+                            results.append((f"brightness ({dev})", True,
+                                            f"{br} (lightbar recovered)"))
                             continue
                         if not hit_timeout:
-                            out = (
-                                f"{out or f'rc={rc}'} (still failing after a {rec_msg})"
-                            )
+                            out = f"{out or f'rc={rc}'} (still failing after a {rec_msg})"
                     else:
                         out = f"{out}; {rec_msg}"
-            results.append(
-                (f"brightness ({dev})", rc == 0, br if rc == 0 else (out or f"rc={rc}"))
-            )
+            results.append((f"brightness ({dev})", rc == 0, br if rc == 0 else (out or f"rc={rc}")))
             if timed_out:
                 return finish(results)
 
@@ -1636,9 +1345,7 @@ def apply(
     if bl is None and login_battery_default is not None:
         bl, note = login_battery_default, " (fallback: profile sets no limit)"
     if bl is not None:
-        step(
-            "battery limit", [z13ctl, "batterylimit", "--set", str(bl)], f"{bl}%{note}"
-        )
+        step("battery limit", [z13ctl, "batterylimit", "--set", str(bl)], f"{bl}%{note}")
         if timed_out:
             return finish(results)
 
@@ -1646,12 +1353,8 @@ def apply(
     if not skip_hooks:
         enter_cmd = (profile.get("hooks") or {}).get("enter") or ""
         if enter_cmd.strip():
-            step(
-                "enter hook",
-                ["bash", "-lc", enter_cmd],
-                f"ran: {enter_cmd}",
-                timeout=HOOK_TIMEOUT_S,
-            )
+            step("enter hook", ["bash", "-lc", enter_cmd], f"ran: {enter_cmd}",
+                 timeout=HOOK_TIMEOUT_S)
 
     return finish(results)
 
@@ -1673,7 +1376,6 @@ def apply_by_name(name, **kw):
 # CLI
 # ----------------------------------------------------------------------
 
-
 def _print_results(results):
     worst = 0
     for step, ok, msg in results:
@@ -1684,17 +1386,12 @@ def _print_results(results):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(
-        prog="z13-profile", description=__doc__.split("\n\n")[0]
-    )
+    ap = argparse.ArgumentParser(prog="z13-profile", description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
-    s = sub.add_parser("list")
-    s.add_argument("--json", action="store_true")
+    s = sub.add_parser("list"); s.add_argument("--json", action="store_true")
     sub.add_parser("active")
-    s = sub.add_parser("show")
-    s.add_argument("name")
-    s = sub.add_parser("apply")
-    s.add_argument("name")
+    s = sub.add_parser("show"); s.add_argument("name")
+    s = sub.add_parser("apply"); s.add_argument("name")
     s.add_argument("--no-hooks", action="store_true", help="skip enter/exit hooks")
     s = sub.add_parser("restore", help="re-apply the active profile (login / resume)")
     s.add_argument("--no-hooks", action="store_true")
@@ -1708,28 +1405,17 @@ def main(argv=None):
             print(f"z13-profile watch unavailable: {exc}", file=sys.stderr)
             return 1
         import signal
-
         stop = threading.Event()
         client = Z13CtlClient()
         signal.signal(signal.SIGTERM, lambda *_: (stop.set(), client.close()))
         signal.signal(signal.SIGINT, lambda *_: (stop.set(), client.close()))
 
         def emit(state, event):
-            print(
-                json.dumps({"event": event, "state": state}, separators=(",", ":")),
-                flush=True,
-            )
+            print(json.dumps({"event": event, "state": state}, separators=(",", ":")), flush=True)
 
         try:
-            follow_state(
-                client,
-                emit,
-                stop,
-                read_state=lambda: authority.snapshot(client),
-                on_error=lambda e: print(
-                    f"z13-profile watch reconnecting: {e}", file=sys.stderr, flush=True
-                ),
-            )
+            follow_state(client, emit, stop, read_state=lambda: authority.snapshot(client), on_error=lambda e: print(
+                f"z13-profile watch reconnecting: {e}", file=sys.stderr, flush=True))
         except Exception as exc:
             print(f"z13-profile watch failed: {exc}", file=sys.stderr)
             return 1
@@ -1763,11 +1449,8 @@ def main(argv=None):
             print(f"Applying profile: {name}")
             # On restore the hooks are intentionally skipped: a login shouldn't
             # re-run `boondock on` (its snapshot is from the previous session).
-            results = apply_by_name(
-                name,
-                skip_hooks=args.no_hooks or args.cmd == "restore",
-                login_battery_default=80 if args.cmd == "restore" else None,
-            )
+            results = apply_by_name(name, skip_hooks=args.no_hooks or args.cmd == "restore",
+                                    login_battery_default=80 if args.cmd == "restore" else None)
         except KeyError as e:
             print(e, file=sys.stderr)
             return 1

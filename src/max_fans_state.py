@@ -68,9 +68,7 @@ def _open_lock(lock_path):
     try:
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
-            raise StoreLockError(
-                f"{lock_path} is not a plain single-link file; refusing"
-            )
+            raise StoreLockError(f"{lock_path} is not a plain single-link file; refusing")
         if created:
             os.fchmod(fd, 0o660)
         elif st.st_uid not in {0, os.geteuid()}:
@@ -134,6 +132,8 @@ def file_lock(path):
         held.pop(path, None)
         if fd is not None:
             os.close(fd)   # closing releases the flock
+
+
 
 
 def load() -> dict | None:
@@ -205,7 +205,5 @@ def migrate_legacy(config):
             return
         seed = {"enabled": bool(config.get("fans_max", False))}
         if config.get("fan_curve_saved") is not None:
-            seed["saved_curve"] = config[
-                "fan_curve_saved"
-            ]  # absent = unknown, null = auto
+            seed["saved_curve"] = config["fan_curve_saved"]   # absent = unknown, null = auto
         save(**seed)

@@ -15,10 +15,7 @@ from pathlib import Path
 
 import pytest
 
-SCRIPT = (
-    Path(__file__).resolve().parent.parent
-    / "packaging/host/systemd/system/z13-fan-resume.sh"
-)
+SCRIPT = Path(__file__).resolve().parent.parent / "packaging/host/systemd/system/z13-fan-resume.sh"
 
 pytestmark = pytest.mark.skipif(shutil.which("sh") is None, reason="needs /bin/sh")
 
@@ -80,9 +77,7 @@ def env(tmp_path, real_subprocess):
             "Z13CTL_LOG": str(ctl_log),
             "PROFILE_LOG": str(tmp_path / "profile.txt"),
         }
-        return real_subprocess(
-            ["sh", str(SCRIPT)], env=e, capture_output=True, text=True, timeout=20
-        )
+        return real_subprocess(["sh", str(SCRIPT)], env=e, capture_output=True, text=True, timeout=20)
 
     run.home, run.stubs = home, stubs
     run.write_ctl, run.write_profile = write_ctl, write_profile

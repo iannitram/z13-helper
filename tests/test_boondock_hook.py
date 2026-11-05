@@ -30,9 +30,7 @@ STUBS = {
 }
 
 pytestmark = pytest.mark.skipif(
-    shutil.which("bash") is None or not os.path.exists("/usr/bin/cat"),
-    reason="needs bash",
-)
+    shutil.which("bash") is None or not os.path.exists("/usr/bin/cat"), reason="needs bash")
 
 
 @pytest.fixture
@@ -52,9 +50,7 @@ def env(tmp_path):
         (ppt / f).write_text("30\n")
     (tmp_path / "platform_profile").write_text("balanced\n")
     return {
-        "HOME": str(tmp_path),
-        "PATH": f"{stubs}:/usr/bin:/bin",
-        "LANG": "C.UTF-8",
+        "HOME": str(tmp_path), "PATH": f"{stubs}:/usr/bin:/bin", "LANG": "C.UTF-8",
         "STUB_LOG": str(tmp_path / "stub.log"),
         "BOONDOCK_Z13CTL": str(stubs / "z13ctl"),
         "BOONDOCK_STATE": str(tmp_path / "boondock.state"),
@@ -68,32 +64,16 @@ def run_hook(real_subprocess, env, which):
     """Run the built-in Boondock profile's enter/exit hook with the script swapped in."""
     boondock = next(p for p in profiles.default_profiles() if p["name"] == "Boondock")
     cmd = boondock["hooks"][which].replace(profiles.BOONDOCK_BIN, f"bash {SCRIPT}")
-    p = real_subprocess(
-        ["bash", "-c", cmd],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=30,
-        stdin=subprocess.DEVNULL,
-    )
+    p = real_subprocess(["bash", "-c", cmd], env=env, capture_output=True, text=True, timeout=30,
+                        stdin=subprocess.DEVNULL)
     log = Path(env["STUB_LOG"])
     return p, (log.read_text().splitlines() if log.exists() else [])
 
 
 def hardware_touches(log):
-    bad = [
-        l
-        for l in log
-        if l.startswith("z13ctl ")
-        and any(
-            w in l.split()[1:2] for w in ("profile", "tdp", "fancurve", "undervolt")
-        )
-    ]
-    bad += [
-        l
-        for l in log
-        if l.startswith("cat ") and ("ppt_" in l or "platform_profile" in l)
-    ]
+    bad = [l for l in log if l.startswith("z13ctl ") and any(
+        w in l.split()[1:2] for w in ("profile", "tdp", "fancurve", "undervolt"))]
+    bad += [l for l in log if l.startswith("cat ") and ("ppt_" in l or "platform_profile" in l)]
     return bad
 
 
@@ -138,15 +118,8 @@ def test_manual_on_off_still_does_hardware(real_subprocess, env):
     env = {**env, "BOONDOCK_Z13_PROFILE": str(profile)}
 
     def manual(arg):
-        return real_subprocess(
-            ["bash", str(SCRIPT), arg],
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=30,
-            stdin=subprocess.DEVNULL,
-        )
-
+        return real_subprocess(["bash", str(SCRIPT), arg], env=env, capture_output=True, text=True,
+                               timeout=30, stdin=subprocess.DEVNULL)
     assert manual("on").returncode == 0
     log = Path(env["STUB_LOG"]).read_text()
     assert "z13ctl profile --set quiet" in log
@@ -180,18 +153,11 @@ def test_off_reports_a_failed_restore_and_keeps_the_snapshot(real_subprocess, en
 def test_stored_old_hook_is_migrated(profiles_env):
     store = profiles.load_store()
     b = next(p for p in store["profiles"] if p["name"] == "Boondock")
-    b["hooks"] = {
-        "enter": f"{profiles.BOONDOCK_BIN} on",
-        "exit": f"{profiles.BOONDOCK_BIN} off",
-    }
+    b["hooks"] = {"enter": f"{profiles.BOONDOCK_BIN} on", "exit": f"{profiles.BOONDOCK_BIN} off"}
     profiles.save_store(store)
     got = next(p for p in profiles.load_store()["profiles"] if p["name"] == "Boondock")
-    assert (
-        got["hooks"]
-        == next(p for p in profiles.default_profiles() if p["name"] == "Boondock")[
-            "hooks"
-        ]
-    )
+    assert got["hooks"] == next(p for p in profiles.default_profiles()
+                                if p["name"] == "Boondock")["hooks"]
 
 
 def test_user_edited_boondock_hook_is_left_alone(profiles_env):
@@ -208,24 +174,12 @@ def test_session_off_clears_old_combined_snapshot(real_subprocess, env):
     session-off hook restores the session part, writes no power, and clears the file."""
     state = Path(env["BOONDOCK_STATE"])
     state.write_text("brightness=800\nprofile=balanced\npl1=30\npl2=30\npl3=30\n")
-    p = real_subprocess(
-        ["bash", str(SCRIPT), "session-off"],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=30,
-        stdin=subprocess.DEVNULL,
-    )
+    p = real_subprocess(["bash", str(SCRIPT), "session-off"], env=env, capture_output=True,
+                        text=True, timeout=30, stdin=subprocess.DEVNULL)
     assert p.returncode == 0, p.stdout + p.stderr
     assert "sudo tee" in Path(env["STUB_LOG"]).read_text()      # brightness restored
     assert hardware_touches(Path(env["STUB_LOG"]).read_text().splitlines()) == []
     assert not state.exists()
-    st = real_subprocess(
-        ["bash", str(SCRIPT), "status"],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=30,
-        stdin=subprocess.DEVNULL,
-    )
+    st = real_subprocess(["bash", str(SCRIPT), "status"], env=env, capture_output=True,
+                         text=True, timeout=30, stdin=subprocess.DEVNULL)
     assert "MODE: normal" in st.stdout

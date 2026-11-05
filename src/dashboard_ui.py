@@ -18,21 +18,8 @@ import threading
 import time
 
 from PyQt6.QtWidgets import (
-    QApplication,
-    QMainWindow,
-    QWidget,
-    QVBoxLayout,
-    QHBoxLayout,
-    QLabel,
-    QPushButton,
-    QSlider,
-    QStatusBar,
-    QSystemTrayIcon,
-    QMenu,
-    QMessageBox,
-    QComboBox,
-    QCheckBox,
-    QFrame,
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QSlider, QStatusBar, QSystemTrayIcon, QMenu, QMessageBox, QComboBox, QCheckBox, QFrame,
 )
 from PyQt6.QtCore import QTimer, Qt, pyqtSlot, pyqtSignal
 from PyQt6.QtDBus import QDBusConnection
@@ -55,19 +42,8 @@ import state_events
 from profile_control import ProfileControl
 from fans_window import FansWindow
 from updates_dialog import UpdatesDialog, UpdateCheckThread
-from theme import (
-    STYLESHEET,
-    ModeTile,
-    Panel,
-    pill,
-    tip,
-    ECO,
-    STANDARD,
-    TURBO,
-    CUSTOM,
-    ACCENT_FOR_BASE,
-    BORDER,
-)
+from theme import (STYLESHEET, ModeTile, Panel, pill, tip, ECO, STANDARD, TURBO, CUSTOM,
+                   ACCENT_FOR_BASE, BORDER)
 from evdev_listener import find_side_button_device, EvdevListener
 
 APP_VERSION = "0.5.1"
@@ -84,25 +60,12 @@ _INTERCEPT_MODE_NONE       = 0
 _TARGET_DEVICES_WITH_DBUS  = ["xbox-elite", "touchpad", "keyboard", "dbus"]
 
 # Built-in tiles: (profile name, accent, icon) — G-Helper's performance presets.
-_TILES = [
-    ("Silent", ECO, "leaf"),
-    ("Balanced", STANDARD, "balance"),
-    ("Turbo", TURBO, "bolt"),
-]
+_TILES = [("Silent", ECO, "leaf"), ("Balanced", STANDARD, "balance"),
+          ("Turbo", TURBO, "bolt")]
 _BRIGHTNESS = [("Off", "off"), ("Low", "low"), ("Medium", "medium"), ("High", "high")]
-_LIGHT_TARGETS = [
-    ("Both", ("keyboard", "lightbar")),
-    ("Keyboard", ("keyboard",)),
-    ("Rear light", ("lightbar",)),
-]
-_LIGHT_MODES = [
-    ("Unchanged", None),
-    ("Static", "static"),
-    ("Breathe", "breathe"),
-    ("Cycle", "cycle"),
-    ("Rainbow", "rainbow"),
-    ("Strobe", "strobe"),
-]
+_LIGHT_TARGETS = [("Both", ("keyboard", "lightbar")), ("Keyboard", ("keyboard",)), ("Rear light", ("lightbar",))]
+_LIGHT_MODES = [("Unchanged", None), ("Static", "static"), ("Breathe", "breathe"),
+                ("Cycle", "cycle"), ("Rainbow", "rainbow"), ("Strobe", "strobe")]
 _LIGHT_COLORS = [(name.title(), name) for name in profiles.LIGHTING_COLORS]
 
 # Unique marker on the host-side side-button reader's argv, so we can reap stale
@@ -110,9 +73,7 @@ _LIGHT_COLORS = [(name.title(), name) for name in profiles.LIGHTING_COLORS]
 _SIDE_BUTTON_READER_TAG = "z13-side-button-reader"
 # pkill pattern: matches ONLY the reader's full invocation. The bracketed last
 # char keeps the regex from matching its own invoker.
-_SIDE_BUTTON_READER_MATCH = (
-    "emit " + _SIDE_BUTTON_READER_TAG[:-1] + "[" + _SIDE_BUTTON_READER_TAG[-1] + "]"
-)
+_SIDE_BUTTON_READER_MATCH = "emit " + _SIDE_BUTTON_READER_TAG[:-1] + "[" + _SIDE_BUTTON_READER_TAG[-1] + "]"
 
 _CONFIG_PATH = os.path.expanduser("~/.config/z13-helper/config.json")
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -122,9 +83,7 @@ _SERVICE = "z13-helper.service"
 TICK_VISIBLE_MS, TICK_HIDDEN_MS = 2000, 6000     # G-Helper: 2 s shown, 6 s hidden
 UPDATE_CHECK_MS = 24 * 3600 * 1000
 SCREEN_WRITE_MS = 40            # coalesce slider steps into one backlight write
-SCREEN_FOLLOW_GRACE_S = (
-    1.5  # after our own write, don't snap the slider back to a stale read
-)
+SCREEN_FOLLOW_GRACE_S = 1.5     # after our own write, don't snap the slider back to a stale read
 
 
 class DashboardUI(QMainWindow):
@@ -133,12 +92,7 @@ class DashboardUI(QMainWindow):
     _errorLogged = pyqtSignal()
     _crashReported = pyqtSignal(str, str)
 
-    def __init__(
-        self,
-        controller: HardwareController,
-        sensors: SensorReader,
-        config: ConfigManager,
-    ):
+    def __init__(self, controller: HardwareController, sensors: SensorReader, config: ConfigManager):
         super().__init__()
         self.controller = controller
         self.sensors = sensors
@@ -164,15 +118,12 @@ class DashboardUI(QMainWindow):
         # the curve for a moment, and the watchdog would race the worker with its
         # own profile + curve writes.
         self._sensors = sensors
-        self._fan_watchdog = FanWatchdog(
-            sensors,
-            controller,
+        self._fan_watchdog = FanWatchdog(sensors, controller,
                                          max_fans_on=max_fans_state.is_enabled,
                                          suspended=max_fans_state.is_suspended,
                                          may_act=lambda: not self.control._pending,
                                          active_tdp=lambda: self.control.active().get("tdp"),
-            trace=self._make_fan_trace(),
-        )
+                                         trace=self._make_fan_trace())
         self._fan_runner = FanWatchdogRunner(self._fan_watchdog, self.worker.submit)
         self.worker.done.connect(self._on_fan_recovery_done)
         self._fans_window = None
@@ -213,25 +164,14 @@ class DashboardUI(QMainWindow):
         self._crashReported.connect(self._on_crash_reported)
         if app_log.ring() is not None:
             app_log.ring().add_listener(
-                lambda item: (
-                    self._errorLogged.emit() if item[0] >= logging.ERROR else None
-                )
-            )
-            errors = sum(
-                1 for lv, _c, _t in list(app_log.ring().records) if lv >= logging.ERROR
-            )
+                lambda item: self._errorLogged.emit() if item[0] >= logging.ERROR else None)
+            errors = sum(1 for lv, _c, _t in list(app_log.ring().records) if lv >= logging.ERROR)
             if errors:
                 QTimer.singleShot(0, lambda: self._bump_error_badge(errors))
-        app_log.on_crash(
-            lambda path, summary: self._crashReported.emit(path or "", summary)
-        )
+        app_log.on_crash(lambda path, summary: self._crashReported.emit(path or "", summary))
         if app_log.previous_fatal():
-            QTimer.singleShot(
-                4000,
-                lambda: self._notify_crash(
-                    "Z13-Helper crashed last time. The report is in Help → Error log."
-                ),
-            )
+            QTimer.singleShot(4000, lambda: self._notify_crash(
+                "Z13-Helper crashed last time. The report is in Help → Error log."))
 
     # ------------------------------------------------------------------
     # Icon, menu bar, tray
@@ -286,14 +226,12 @@ class DashboardUI(QMainWindow):
 
     def _show_about(self):
         QMessageBox.about(
-            self,
-            "About Z13-Helper",
+            self, "About Z13-Helper",
             f"<h3>Z13-Helper {APP_VERSION}</h3>"
             "<p>Hardware control for the ASUS ROG Flow Z13 (2025) on SteamOS.</p>"
             "<p>Layout after G-Helper (seerge/g-helper). Backend: <code>z13ctl</code>.</p>"
             "<p>Profiles bundle platform profile, power limits, fan curve, lighting and "
-            "battery limit; the Fans + Power window edits them.</p>",
-        )
+            "battery limit; the Fans + Power window edits them.</p>")
 
     def _setup_tray(self):
         self._tray = None
@@ -310,13 +248,9 @@ class DashboardUI(QMainWindow):
 
     def _on_control_message(self, message):
         self.status_bar.showMessage(message, 8000)
-        if (
-            message.startswith("z13ctl write timed out after ")
-            and self._tray is not None
-        ):
-            self._tray.showMessage(
-                "Z13-Helper", message, QSystemTrayIcon.MessageIcon.Warning, 8000
-            )
+        if message.startswith("z13ctl write timed out after ") and self._tray is not None:
+            self._tray.showMessage("Z13-Helper", message,
+                                   QSystemTrayIcon.MessageIcon.Warning, 8000)
 
     def _rebuild_tray_menu(self):
         m = self._tray_menu
@@ -368,12 +302,9 @@ class DashboardUI(QMainWindow):
         if self._tray is not None:
             event.ignore()
             self.hide()
-            self._tray.showMessage(
-                "Z13-Helper",
+            self._tray.showMessage("Z13-Helper",
                                    "Running in the system tray. Press the side button or click the tray icon to reopen.",
-                QSystemTrayIcon.MessageIcon.Information,
-                2000,
-            )
+                                   QSystemTrayIcon.MessageIcon.Information, 2000)
         else:
             event.accept()
             self._user_quit()
@@ -382,7 +313,6 @@ class DashboardUI(QMainWindow):
         """A Quit the user chose: leave the marker that keeps the Decky plugin's
         desktop-app check from starting the app again (single_instance.py)."""
         import single_instance
-
         single_instance.mark_user_quit()
         QApplication.quit()
 
@@ -399,9 +329,7 @@ class DashboardUI(QMainWindow):
         self.error_badge.setObjectName("errorBadge")
         self.error_badge.setFlat(True)
         self.error_badge.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.error_badge.setToolTip(
-            "Errors were logged. Click for the Error log (Help → Error log)."
-        )
+        self.error_badge.setToolTip("Errors were logged. Click for the Error log (Help → Error log).")
         self.error_badge.clicked.connect(lambda: self._open_error_log())
         self.error_badge.hide()
         self.status_bar.addPermanentWidget(self.error_badge)
@@ -416,9 +344,7 @@ class DashboardUI(QMainWindow):
         # 1. Performance Mode
         self.perf = Panel("Performance Mode")
         self.maxfans_pill = pill("MAX FANS", orange=True)
-        self.maxfans_pill.setToolTip(
-            "Both fans at 100%. Off restores the profile's curve."
-        )
+        self.maxfans_pill.setToolTip("Both fans at 100%. Off restores the profile's curve.")
         self.maxfans_pill.clicked.connect(self._toggle_max_fans)
         self.maxfans_pill.setFixedHeight(28)
         tiles = QHBoxLayout()
@@ -429,9 +355,7 @@ class DashboardUI(QMainWindow):
             t.clicked.connect(lambda checked, n=name: self._tile_clicked(n))
             tiles.addWidget(t)
             self._tiles[name] = t
-        self.fans_tile = ModeTile(
-            "Fans + Power", CUSTOM, secondary=True, height=60, icon="fan"
-        )
+        self.fans_tile = ModeTile("Fans + Power", CUSTOM, secondary=True, height=60, icon="fan")
         self.fans_tile.clicked.connect(self._fans_tile_clicked)
         tiles.addWidget(self.fans_tile)
         self.perf.body.addLayout(tiles)
@@ -454,10 +378,7 @@ class DashboardUI(QMainWindow):
         self.light.add_head_widget(self.light_target)
         self._lighting_syncing = False
         self._lighting_combos = {}
-        for device, label in (
-            ("lightbar", "Rear Light"),
-            ("keyboard", "Laptop Keyboard"),
-        ):
+        for device, label in (("lightbar", "Rear Light"), ("keyboard", "Laptop Keyboard")):
             lrow = QHBoxLayout()
             lrow.setSpacing(6)
             lrow.addWidget(QLabel(label))
@@ -470,26 +391,20 @@ class DashboardUI(QMainWindow):
                 color_combo.addItem(text, value)
             color_combo.setMinimumWidth(95)
             mode_combo.currentIndexChanged.connect(
-                lambda _index, dev=device: self._lighting_changed(dev)
-            )
+                lambda _index, dev=device: self._lighting_changed(dev))
             color_combo.currentIndexChanged.connect(
-                lambda _index, dev=device: self._lighting_changed(dev)
-            )
+                lambda _index, dev=device: self._lighting_changed(dev))
             lrow.addWidget(mode_combo)
             lrow.addWidget(color_combo)
             self.light.body.addLayout(lrow)
             self._lighting_combos[device] = (mode_combo, color_combo)
         brow = QHBoxLayout()
         brow.setSpacing(6)
-        self.light_target.currentIndexChanged.connect(
-            lambda _index: self._refresh_profile_ui()
-        )
+        self.light_target.currentIndexChanged.connect(lambda _index: self._refresh_profile_ui())
         self._bright_tiles = {}
         for label, level in _BRIGHTNESS:
             t = ModeTile(label, STANDARD, height=36)
-            t.clicked.connect(
-                lambda checked, lv=level, lb=label: self._change_brightness(lv, lb)
-            )
+            t.clicked.connect(lambda checked, lv=level, lb=label: self._change_brightness(lv, lb))
             brow.addWidget(t)
             self._bright_tiles[level] = t
         self.light.body.addLayout(brow)
@@ -520,9 +435,7 @@ class DashboardUI(QMainWindow):
         self.battery_slider = QSlider(Qt.Orientation.Horizontal)
         self.battery_slider.setRange(40, 100)
         self.battery_slider.setSingleStep(5)
-        self.battery_slider.valueChanged.connect(
-            lambda v: self.batt.title.setText(f"Battery Charge Limit: {v}%")
-        )
+        self.battery_slider.valueChanged.connect(lambda v: self.batt.title.setText(f"Battery Charge Limit: {v}%"))
         self.battery_slider.sliderReleased.connect(self._apply_battery_limit)
         srow.addWidget(self.battery_slider, 1)
         self.batt_100 = pill("100%")
@@ -536,9 +449,7 @@ class DashboardUI(QMainWindow):
         row4 = QHBoxLayout()
         row4.setContentsMargins(10, 6, 10, 6)
         self.startup = QCheckBox("Run on Startup")
-        self.startup.setToolTip(
-            "Enable the resident z13-helper user service (tray + side button)."
-        )
+        self.startup.setToolTip("Enable the resident z13-helper user service (tray + side button).")
         self.startup.toggled.connect(self._toggle_startup)
         row4.addWidget(self.startup)
         row4.addStretch(1)
@@ -601,9 +512,7 @@ class DashboardUI(QMainWindow):
         self.batt_100.setChecked(self.battery_slider.value() == 100)
         self._highlight_brightness(self.config.get("brightness", "medium"))
         self._sync_screen_brightness(force=True)
-        rc, out, _ = host.run(
-            ["systemctl", "--user", "is-enabled", _SERVICE], timeout=10
-        )
+        rc, out, _ = host.run(["systemctl", "--user", "is-enabled", _SERVICE], timeout=10)
         self.startup.blockSignals(True)
         self.startup.setChecked(rc == 0 and out.strip() == "enabled")
         self.startup.blockSignals(False)
@@ -614,10 +523,7 @@ class DashboardUI(QMainWindow):
 
     def _refresh_profile_ui(self):
         state = self.control.backend_state
-        if (
-            isinstance(state.get("battery_limit"), int)
-            and not self.battery_slider.isSliderDown()
-        ):
+        if isinstance(state.get("battery_limit"), int) and not self.battery_slider.isSliderDown():
             self.battery_slider.blockSignals(True)
             self.battery_slider.setValue(state["battery_limit"])
             self.battery_slider.blockSignals(False)
@@ -629,22 +535,16 @@ class DashboardUI(QMainWindow):
         active = self.control.shown()       # the clicked profile lights up at once
         name = active["name"]
         # Title: "Performance Mode: Balanced+ 20W" — '+' = custom curve, W = custom SPL
-        suffix = ("+" if active.get("fan_curve") else "") + (
-            f" {active['tdp']['pl1']}W" if active.get("tdp") else ""
-        )
+        suffix = ("+" if active.get("fan_curve") else "") + (f" {active['tdp']['pl1']}W" if active.get("tdp") else "")
         self.perf.title.setText(f"Performance Mode: {name}{suffix}")
         builtin = name in self._tiles
         for n, t in self._tiles.items():
             t.setChecked(n == name)
         self.fans_tile.setChecked(not builtin)
-        self.fans_tile.setAccent(
-            ACCENT_FOR_BASE.get(active.get("base"), STANDARD) if not builtin else CUSTOM
-        )
+        self.fans_tile.setAccent(ACCENT_FOR_BASE.get(active.get("base"), STANDARD) if not builtin else CUSTOM)
         names = self.control.names()
         self.profile_combo.blockSignals(True)
-        if [
-            self.profile_combo.itemText(i) for i in range(self.profile_combo.count())
-        ] != names:
+        if [self.profile_combo.itemText(i) for i in range(self.profile_combo.count())] != names:
             self.profile_combo.clear()
             self.profile_combo.addItems(names)
         self.profile_combo.setCurrentText(name)
@@ -673,9 +573,7 @@ class DashboardUI(QMainWindow):
 
     def _toggle_fans_window(self):
         if self._fans_window is None:
-            self._fans_window = FansWindow(
-                self.control, self.controller, self.sensors, self
-            )
+            self._fans_window = FansWindow(self.control, self.controller, self.sensors, self)
         w = self._fans_window
         if w.isVisible():
             w.hide()
@@ -702,14 +600,10 @@ class DashboardUI(QMainWindow):
         self._highlight_brightness(level)
 
         target = self.control.active_name()
-
         def go():
             failed = authority.set_field("brightness", level, target, devices=devices)
             self.config.set("brightness", level)
-            return f"Brightness {label}" + (
-                f" ({', '.join(failed)} not responding)" if failed else ""
-            )
-
+            return f"Brightness {label}" + (f" ({', '.join(failed)} not responding)" if failed else "")
         self.control._submit("Brightness", go)
 
     def _highlight_brightness(self, level):
@@ -738,14 +632,10 @@ class DashboardUI(QMainWindow):
         name = self.control.shown()["name"]
         mode_combo, color_combo = self._lighting_combos[device]
         mode = mode_combo.currentData()
-        setting = (
-            None if mode is None else {"mode": mode, "color": color_combo.currentData()}
-        )
+        setting = None if mode is None else {"mode": mode, "color": color_combo.currentData()}
         brightness = self.config.get("brightness", "medium")
-        self.control._submit(
-            f"Lighting → {device}",
-            lambda: authority.set_lighting(name, device, setting, brightness),
-        )
+        self.control._submit(f"Lighting → {device}",
+                             lambda: authority.set_lighting(name, device, setting, brightness))
 
     # ------------------------------------------------------------------
     # Screen brightness
@@ -762,19 +652,15 @@ class DashboardUI(QMainWindow):
         try:
             self.screen.set(value)
         except Exception as e:
-            logging.getLogger("z13.screen").error(
-                "Screen brightness %d%% failed: %s", value, e
-            )
+            logging.getLogger("z13.screen").error("Screen brightness %d%% failed: %s", value, e)
             self.status_bar.showMessage(f"Screen brightness failed: {e}", 8000)
 
     def _sync_screen_brightness(self, force=False):
         """Follow brightness changed elsewhere (Fn keys, Plasma's slider, dim-on-idle)."""
         if not self.screen.available() or self.screen_slider.isSliderDown():
             return
-        if not force and (
-            self._screen_write_timer.isActive()
-            or time.monotonic() - self._screen_last_write < SCREEN_FOLLOW_GRACE_S
-        ):
+        if not force and (self._screen_write_timer.isActive()
+                          or time.monotonic() - self._screen_last_write < SCREEN_FOLLOW_GRACE_S):
             return
         value = self.screen.get()
         if value is None:
@@ -805,10 +691,8 @@ class DashboardUI(QMainWindow):
 
     def _toggle_startup(self, on):
         verb = "enable" if on else "disable"
-        self.control._submit(
-            f"Run on Startup {'on' if on else 'off'}",
-            lambda: host.run(["systemctl", "--user", verb, _SERVICE], timeout=15),
-        )
+        self.control._submit(f"Run on Startup {'on' if on else 'off'}",
+                             lambda: host.run(["systemctl", "--user", verb, _SERVICE], timeout=15))
 
     # ------------------------------------------------------------------
     # Updates
@@ -828,32 +712,18 @@ class DashboardUI(QMainWindow):
         self._new_updates = new
         n = len(new)
         if n:
-            self.version_label.setText(
-                f"Version: {APP_VERSION} — {n} upstream update{'s' if n > 1 else ''}"
-            )
-            self.version_label.setStyleSheet(
-                f"color: {TURBO}; text-decoration: underline;"
-            )
+            self.version_label.setText(f"Version: {APP_VERSION} — {n} upstream update{'s' if n > 1 else ''}")
+            self.version_label.setStyleSheet(f"color: {TURBO}; text-decoration: underline;")
             self.btn_updates.setText(f"Updates ({n})")
         else:
             self.version_label.setText(f"Version: {APP_VERSION}")
             self.version_label.setStyleSheet("")
             self.btn_updates.setText("Updates")
         keys = sorted(f"{r['id']}:{r['latest']}" for r in new)
-        if (
-            keys
-            and keys != self.config.get("updates_notified", [])
-            and self._tray is not None
-        ):
-            names = ", ".join(
-                f"{r['label'].split(' (')[0]} {r['latest']}" for r in new[:4]
-            )
-            self._tray.showMessage(
-                "Z13-Helper — upstream updates",
-                names,
-                QSystemTrayIcon.MessageIcon.Information,
-                6000,
-            )
+        if keys and keys != self.config.get("updates_notified", []) and self._tray is not None:
+            names = ", ".join(f"{r['label'].split(' (')[0]} {r['latest']}" for r in new[:4])
+            self._tray.showMessage("Z13-Helper — upstream updates", names,
+                                   QSystemTrayIcon.MessageIcon.Information, 6000)
             self.config.set("updates_notified", keys)
 
     # ------------------------------------------------------------------
@@ -862,7 +732,6 @@ class DashboardUI(QMainWindow):
 
     def _open_error_log(self, show_crashes=False):
         from log_dialog import LogDialog
-
         if self._log_dialog is None:
             self._log_dialog = LogDialog(self, on_logging=self.set_logging)
         self._log_dialog.refresh(show_crashes=show_crashes)
@@ -877,9 +746,7 @@ class DashboardUI(QMainWindow):
         if not app_log.to_disk():
             return None
         try:
-            return FanTrace.to_file(
-                app_log.fan_trace_path("desktop"), self._sensors, "desktop"
-            )
+            return FanTrace.to_file(app_log.fan_trace_path("desktop"), self._sensors, "desktop")
         except OSError as e:
             logging.getLogger("z13.fans").warning("No fan trace: %s", e)
             return None
@@ -906,9 +773,7 @@ class DashboardUI(QMainWindow):
         if self._log_dialog is not None and self._log_dialog.isVisible():
             return
         self._errors_unseen += n
-        self.error_badge.setText(
-            f"⚠ {self._errors_unseen} error{'s' if self._errors_unseen != 1 else ''}"
-        )
+        self.error_badge.setText(f"⚠ {self._errors_unseen} error{'s' if self._errors_unseen != 1 else ''}")
         self.error_badge.show()
 
     def _on_error_logged(self):
@@ -916,9 +781,7 @@ class DashboardUI(QMainWindow):
 
     def _on_crash_reported(self, path, summary):
         self.status_bar.showMessage(f"Error caught and saved: {summary[:90]}", 15000)
-        self._notify_crash(
-            f"An error was caught and saved ({summary[:80]}). See Help → Error log."
-        )
+        self._notify_crash(f"An error was caught and saved ({summary[:80]}). See Help → Error log.")
 
     def _notify_crash(self, text):
         # One tray notice a minute at most: a failing timer slot would otherwise
@@ -926,16 +789,12 @@ class DashboardUI(QMainWindow):
         if self._tray is None or time.monotonic() - self._last_crash_notice < 60:
             return
         self._last_crash_notice = time.monotonic()
-        self._tray.showMessage(
-            "Z13-Helper", text, QSystemTrayIcon.MessageIcon.Warning, 6000
-        )
+        self._tray.showMessage("Z13-Helper", text, QSystemTrayIcon.MessageIcon.Warning, 6000)
 
     def _open_updates(self):
         if self._updates_dialog is None:
             self._updates_dialog = UpdatesDialog(self)
-            self._updates_dialog.finished.connect(
-                lambda _r: self._updates_done(update_watch.summary())
-            )
+            self._updates_dialog.finished.connect(lambda _r: self._updates_done(update_watch.summary()))
         self._updates_dialog.populate(update_watch.summary())
         self._updates_dialog.show()
         self._updates_dialog.raise_()
@@ -955,9 +814,7 @@ class DashboardUI(QMainWindow):
             if gpu is not None:
                 parts.append(f"GPU {gpu:.0f}°C")
             if fan1 is not None and fan2 is not None:
-                parts.append(
-                    f"Fans {fan1}/{fan2}RPM"
-                )  # fan1 = CPU side, fan2 = GPU side
+                parts.append(f"Fans {fan1}/{fan2}RPM")   # fan1 = CPU side, fan2 = GPU side
             elif fan1 is not None:
                 parts.append(f"Fan {fan1}RPM")
             text = "  ".join(parts)
@@ -971,14 +828,9 @@ class DashboardUI(QMainWindow):
             cap, st, pw = b.get("capacity"), b.get("status") or "", b.get("power_w")
             self.batt.right.setText(f"Charge: {cap}%" if cap is not None else "")
             if st == "Discharging":
-                self.power_label.setText(
-                    f"On battery · {pw:.1f} W" if pw else "On battery"
-                )
+                self.power_label.setText(f"On battery · {pw:.1f} W" if pw else "On battery")
             elif st:
-                self.power_label.setText(
-                    "On AC"
-                    + (f" · {st.lower()}" if st not in ("Charging",) else " · charging")
-                )
+                self.power_label.setText("On AC" + (f" · {st.lower()}" if st not in ("Charging",) else " · charging"))
         except Exception:
             pass
         # Decides and enqueues only; the recovery runs on the worker.
@@ -1015,20 +867,14 @@ class DashboardUI(QMainWindow):
             device, code = find_side_button_device()
             if device:
                 self._evdev_listener = EvdevListener(
-                    device,
-                    lambda ev: self.sideButtonPressed.emit() if ev == code else None,
-                )
+                    device, lambda ev: self.sideButtonPressed.emit() if ev == code else None)
                 self._evdev_listener.start()
-                self.button_label.setText(
-                    f"Side button: evdev {os.path.basename(device)}"
-                )
+                self.button_label.setText(f"Side button: evdev {os.path.basename(device)}")
                 return
         self._start_inputplumber_dbus_listener()
 
     def _start_host_side_button_reader(self) -> bool:
-        reader_src = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "evdev_listener.py"
-        )
+        reader_src = os.path.join(os.path.dirname(os.path.abspath(__file__)), "evdev_listener.py")
         try:
             with open(reader_src) as f:
                 source = f.read()
@@ -1036,30 +882,14 @@ class DashboardUI(QMainWindow):
             self.button_label.setText(f"Side button: cannot read reader: {exc}")
             return False
         try:
-            subprocess.run(
-                ["flatpak-spawn", "--host", "pkill", "-f", _SIDE_BUTTON_READER_MATCH],
-                capture_output=True,
-                timeout=5,
-            )
+            subprocess.run(["flatpak-spawn", "--host", "pkill", "-f", _SIDE_BUTTON_READER_MATCH],
+                           capture_output=True, timeout=5)
         except Exception:
             pass
         try:
             proc = subprocess.Popen(
-                [
-                    "flatpak-spawn",
-                    "--host",
-                    "--watch-bus",
-                    "python3",
-                    "-u",
-                    "-",
-                    "--emit",
-                    _SIDE_BUTTON_READER_TAG,
-                ],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                text=True,
-            )
+                ["flatpak-spawn", "--host", "--watch-bus", "python3", "-u", "-", "--emit", _SIDE_BUTTON_READER_TAG],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
         except Exception as exc:
             self.button_label.setText(f"Side button: reader failed: {exc}")
             return False
@@ -1078,43 +908,27 @@ class DashboardUI(QMainWindow):
                     if line.strip() == "PRESS":
                         self.sideButtonPressed.emit()
             except Exception:
-                logging.getLogger("z13.button").exception(
-                    "Side-button reader pipe failed"
-                )
+                logging.getLogger("z13.button").exception("Side-button reader pipe failed")
             rc = proc.poll()
             if not getattr(self, "_quitting", False):
                 # The button is dead until the app restarts (ROADMAP: self-heal is open).
                 logging.getLogger("z13.button").error(
                     "Side-button host reader exited (rc %s); the button won't open the window "
-                    "until the app restarts",
-                    rc,
-                )
-
+                    "until the app restarts", rc)
         threading.Thread(target=pump, daemon=True).start()
         self.button_label.setText("Side button: active")
         return True
 
     def _stop_side_button_listener(self):
-        self._quitting = (
-            True  # the reader's exit from here on is expected, not an error
-        )
+        self._quitting = True    # the reader's exit from here on is expected, not an error
         if self._host_reader_proc is not None:
             try:
                 self._host_reader_proc.terminate()
             except Exception:
                 pass
             try:
-                subprocess.run(
-                    [
-                        "flatpak-spawn",
-                        "--host",
-                        "pkill",
-                        "-f",
-                        _SIDE_BUTTON_READER_MATCH,
-                    ],
-                    capture_output=True,
-                    timeout=5,
-                )
+                subprocess.run(["flatpak-spawn", "--host", "pkill", "-f", _SIDE_BUTTON_READER_MATCH],
+                               capture_output=True, timeout=5)
             except Exception:
                 pass
             self._host_reader_proc = None
@@ -1131,20 +945,10 @@ class DashboardUI(QMainWindow):
             self.button_label.setText("Side button: unavailable")
             return
         try:
-            r = subprocess.run(
-                [
-                    "dbus-send",
-                    "--system",
-                    "--print-reply",
-                    f"--dest={_INPUTPLUMBER_SERVICE}",
-                    _COMPOSITE_DEV_PATH,
-                    f"{_COMPOSITE_DEV_IFACE}.SetTargetDevices",
-                    "array:string:" + ",".join(_TARGET_DEVICES_WITH_DBUS),
-                ],
-                capture_output=True,
-                text=True,
-                timeout=3,
-            )
+            r = subprocess.run(["dbus-send", "--system", "--print-reply", f"--dest={_INPUTPLUMBER_SERVICE}",
+                                _COMPOSITE_DEV_PATH, f"{_COMPOSITE_DEV_IFACE}.SetTargetDevices",
+                                "array:string:" + ",".join(_TARGET_DEVICES_WITH_DBUS)],
+                               capture_output=True, text=True, timeout=3)
             if r.returncode != 0:
                 self.button_label.setText("Side button: unavailable (InputPlumber)")
                 return
@@ -1153,40 +957,21 @@ class DashboardUI(QMainWindow):
             self.button_label.setText("Side button: unavailable")
             return
         try:
-            r = subprocess.run(
-                [
-                    "dbus-send",
-                    "--system",
-                    "--print-reply",
-                    f"--dest={_INPUTPLUMBER_SERVICE}",
-                    _COMPOSITE_DEV_PATH,
-                    "org.freedesktop.DBus.Properties.Set",
-                    f"string:{_COMPOSITE_DEV_IFACE}",
-                    "string:InterceptMode",
-                    f"variant:uint32:{_INTERCEPT_MODE_ALL}",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=3,
-            )
+            r = subprocess.run(["dbus-send", "--system", "--print-reply", f"--dest={_INPUTPLUMBER_SERVICE}",
+                                _COMPOSITE_DEV_PATH, "org.freedesktop.DBus.Properties.Set",
+                                f"string:{_COMPOSITE_DEV_IFACE}", "string:InterceptMode",
+                                f"variant:uint32:{_INTERCEPT_MODE_ALL}"],
+                               capture_output=True, text=True, timeout=3)
             self._intercept_mode_set = r.returncode == 0
         except Exception:
             pass
         connected = []
         for n in range(4):
             path = f"/org/shadowblip/InputPlumber/devices/target/dbus{n}"
-            if bus.connect(
-                _INPUTPLUMBER_SERVICE,
-                path,
-                _INPUTPLUMBER_IFACE,
-                "InputEvent",
-                "sd",
-                self._on_inputplumber_dbus,
-            ):
+            if bus.connect(_INPUTPLUMBER_SERVICE, path, _INPUTPLUMBER_IFACE, "InputEvent", "sd",
+                           self._on_inputplumber_dbus):
                 connected.append(f"dbus{n}")
-        self.button_label.setText(
-            "Side button: InputPlumber" if connected else "Side button: unavailable"
-        )
+        self.button_label.setText("Side button: InputPlumber" if connected else "Side button: unavailable")
 
     @pyqtSlot("QString", "double")
     def _on_inputplumber_dbus(self, event: str, value: float):
@@ -1197,20 +982,10 @@ class DashboardUI(QMainWindow):
         if not self._intercept_mode_set:
             return
         try:
-            subprocess.run(
-                [
-                    "dbus-send",
-                    "--system",
-                    f"--dest={_INPUTPLUMBER_SERVICE}",
-                    _COMPOSITE_DEV_PATH,
-                    "org.freedesktop.DBus.Properties.Set",
-                    f"string:{_COMPOSITE_DEV_IFACE}",
-                    "string:InterceptMode",
-                    f"variant:uint32:{_INTERCEPT_MODE_NONE}",
-                ],
-                capture_output=True,
-                timeout=3,
-            )
+            subprocess.run(["dbus-send", "--system", f"--dest={_INPUTPLUMBER_SERVICE}", _COMPOSITE_DEV_PATH,
+                            "org.freedesktop.DBus.Properties.Set", f"string:{_COMPOSITE_DEV_IFACE}",
+                            "string:InterceptMode", f"variant:uint32:{_INTERCEPT_MODE_NONE}"],
+                           capture_output=True, timeout=3)
         except Exception:
             pass
 
