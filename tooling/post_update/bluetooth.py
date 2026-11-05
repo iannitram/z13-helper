@@ -39,9 +39,26 @@ def _run_or_raise(io: HostIO, argv: list) -> None:
         raise RuntimeError(f"{' '.join(argv)} failed (rc {rc}): {out}")
 
 
+def default_source_root() -> str:
+    here = os.path.abspath(__file__)
+    cand_a = os.path.dirname(os.path.dirname(here))
+    cand_b = os.path.dirname(cand_a)
+    for cand in (cand_a, cand_b):
+        if all(os.path.isfile(os.path.join(cand, src)) for src, _ in BT_FILES):
+            return cand
+    return cand_b
+
+
 def bluetooth_recipe(io: HostIO, src_root: str | None = None) -> Recipe:
+    if src_root is None:
+        src_root = default_source_root()
+
     def source(src: str) -> str:
-        return os.path.join(src_root, src) if src_root is not None else src
+        if src_root is not None:
+            full = os.path.join(src_root, src)
+            if io.exists(full) or not io.exists(src):
+                return full
+        return src
 
     def check() -> str:
         if not supported_device(io):

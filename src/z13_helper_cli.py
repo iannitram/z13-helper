@@ -1075,11 +1075,10 @@ def _local_recipes(io):
 
 
 def _all_recipes(privileged=False):
-    from post_update.builtin import builtin_recipes
-    from post_update.builtin_4_6 import builtin_recipes_4_6
+    from post_update.registry import ordered_builtins
 
     io = _host_io(privileged)
-    recipes = builtin_recipes(io) + builtin_recipes_4_6(_host_sys(privileged))
+    recipes = ordered_builtins(io, _host_sys(privileged))
     local, errors = _local_recipes(io)
     return recipes + local, errors
 
