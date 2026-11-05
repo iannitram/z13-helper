@@ -73,6 +73,9 @@ _CRASH_BUILD = ("src/_crash_build.json" if os.path.isfile(os.path.join(REPO, "sr
 MANIFEST = [
     ("src/profiles.py", f"{BIN}/z13-profile", "755", False),
     ("src/z13_helper_cli.py", f"{BIN}/z13-helper", "755", False),
+    # `z13-helper mcp` imports the CLI module from the host library folder.
+    ("src/z13_helper_cli.py", f"{LIB}/z13_helper_cli.py", "644", False),
+    ("src/mcp_server.py", f"{LIB}/mcp_server.py", "644", False),
     # z13-profile's host seam (profiles.py puts this folder on sys.path).
     ("src/host.py", f"{LIB}/host.py", "644", False),
     ("src/state_authority.py", f"{LIB}/state_authority.py", "644", False),
