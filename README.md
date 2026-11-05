@@ -233,7 +233,9 @@ app's profile engine.
 `crash queue|list|upload` and `version`. Every command accepts `--json`. It reads through the
 same shared modules, writes only through the state owner, and clamps values to the GUI's safe
 ranges, so it cannot race a running app. `z13-profile` remains the profile engine's own entry
-point, backed by the same store.
+point, backed by the same store. `z13-helper mcp` serves the same commands as local Model Context
+Protocol tools over stdio (no listener or network); `install.sh` registers it with
+`claude mcp add z13-helper -- z13-helper mcp`.
 
 Built-in Balanced and Turbo curves start with a 20 °C plateau. Exact old built-ins and matching
 enabled Max Fans restore snapshots migrate with backups; edited/custom curves are preserved.
