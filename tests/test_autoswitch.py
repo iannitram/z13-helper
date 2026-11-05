@@ -137,3 +137,28 @@ def test_describe_reports_disabled_as_off():
     assert autoswitch.describe(cfg) == "Autoswitch off"
     assert autoswitch.describe({}) == "Autoswitch off"
     assert autoswitch.describe({"enabled": True}) == "Autoswitch off"
+
+
+def test_decision_unknown_power_state_stays_put():
+    # None means "unknown", never "battery": the battery profile must not apply.
+    cfg = autoswitch.normalize(
+        {"ac": "Turbo", "battery": "Silent", "enabled": True}, NAMES
+    )
+    assert autoswitch.decision(cfg, None) is None
+    assert autoswitch.decision({}, None) is None
+
+
+def test_decision_non_bool_power_state_stays_put():
+    cfg = autoswitch.normalize(
+        {"ac": "Turbo", "battery": "Silent", "enabled": True}, NAMES
+    )
+    for value in ("yes", 1, 0, "", [], 2.0):
+        assert autoswitch.decision(cfg, value) is None, repr(value)
+
+
+def test_backend_argv_tolerates_none_inputs():
+    # Matches the empty-config result: nothing to send means clear.
+    assert autoswitch.backend_argv(None, {}) == ["autoswitch", "--clear"]
+    assert autoswitch.backend_argv({}, None) == ["autoswitch", "--clear"]
+    assert autoswitch.backend_argv(None, None) == ["autoswitch", "--clear"]
+    assert autoswitch.backend_argv({}, {}) == ["autoswitch", "--clear"]

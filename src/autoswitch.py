@@ -39,6 +39,8 @@ def decision(config, on_ac):
     value is not a profile name. The daemon is the writer; this is the pure
     decision the UI and tests share.
     """
+    if not isinstance(on_ac, bool):
+        return None
     if not isinstance(config, dict) or not config.get("enabled") or config.get("hold"):
         return None
     target = config.get("ac" if on_ac else "battery")
@@ -56,6 +58,11 @@ def has_hardware_overrides(profile):
     )
 
 
+def _target(targets, name):
+    """The daemon target for an app profile name; anything but a str has none."""
+    return targets.get(name) if isinstance(name, str) else None
+
+
 def backend_argv(config, targets):
     """z13ctl autoswitch arguments (without the binary) for `config`.
 
@@ -63,8 +70,12 @@ def backend_argv(config, targets):
     that side. Disabled or held means `--off` with the targets retained;
     no targets at all clears the configuration.
     """
-    ac = targets.get(config.get("ac"))
-    battery = targets.get(config.get("battery"))
+    if not isinstance(config, dict):
+        config = {}
+    if not isinstance(targets, dict):
+        targets = {}
+    ac = _target(targets, config.get("ac"))
+    battery = _target(targets, config.get("battery"))
     if not ac and not battery:
         return ["autoswitch", "--clear"]
     argv = ["autoswitch", "--ac", ac or "", "--battery", battery or ""]
