@@ -48,23 +48,37 @@ RANGES = g.Limits(ranges={"pl1": (28, 80), "pl2": (32, 92), "pl3": (45, 93)})
 
 
 def test_each_rail_uses_its_own_range():
-    d = run(g.Goal("max"), g.Readings(), sp(79, 91, 92, 50), limits=RANGES)
-    assert d.setpoints == sp(80, 92, 93, 100)
+    d = run(g.Goal("max"), g.Readings(apu_temp_c=70), sp(79, 91, 92, 50), limits=RANGES)
+    assert d.setpoints == sp(80, 92, 93, 60)
     d = run(g.Goal("quiet", 3000), g.Readings(fan_rpm=4500), sp(29, 33, 46, 20), limits=RANGES)
     assert d.setpoints == sp(28, 32, 45, 20)
+
+
+@pytest.mark.parametrize("ranges,current,expected", [
+    ({"pl1": (30, 80), "pl2": (20, 92), "pl3": (40, 93)},
+     sp(30, 30, 40, 20), sp(30, 30, 40, 20)),
+    ({"pl1": (30, 80), "pl2": (20, 92), "pl3": (40, 93)},
+     sp(31, 32, 44, 20), sp(30, 30, 41, 20)),
+    ({"pl1": (20, 80), "pl2": (40, 92), "pl3": (30, 93)},
+     sp(30, 40, 40, 20), sp(27, 40, 40, 20)),
+])
+def test_downward_step_preserves_rail_minima(ranges, current, expected):
+    d = run(g.Goal("quiet", 3000), g.Readings(fan_rpm=4500), current,
+            limits=g.Limits(ranges=ranges))
+    assert d.setpoints == expected
 
 
 def test_rail_ordering_enforced():
     # sPPT's range floor must not drop below SPL, fPPT not below sPPT.
     lim = g.Limits(ranges={"pl1": (5, 93), "pl2": (5, 93), "pl3": (5, 93)})
-    d = run(g.Goal("max"), g.Readings(), sp(40, 30, 20, 50), limits=lim)
+    d = run(g.Goal("max"), g.Readings(apu_temp_c=70), sp(40, 30, 20, 50), limits=lim)
     s = d.setpoints
     assert s.spl_w <= s.sppt_w <= s.fppt_w
 
 
 def test_ordering_after_unequal_clamping():
     lim = g.Limits(ranges={"pl1": (5, 93), "pl2": (5, 50), "pl3": (5, 93)})
-    d = run(g.Goal("max"), g.Readings(), sp(49, 49, 49, 50), limits=lim)
+    d = run(g.Goal("max"), g.Readings(apu_temp_c=70), sp(49, 49, 49, 50), limits=lim)
     s = d.setpoints
     assert s.spl_w <= s.sppt_w <= s.fppt_w
     lo, hi = lim.ranges["pl2"]
@@ -85,17 +99,33 @@ def test_curve_points():
 
 # --- defect 3: dwell does not block Max fans ---
 
-def test_max_full_fans_during_dwell():
+def test_max_steps_fans_during_dwell():
     st = g.State(last_change_at=100.0)
-    d = run(g.Goal("max"), g.Readings(), CUR, st, 101.0)
-    assert d.changed and d.setpoints.fan_pct == 100
+    d = run(g.Goal("max"), g.Readings(apu_temp_c=70), CUR, st, 101.0)
+    assert d.changed and d.setpoints.fan_pct == 60
     assert (d.setpoints.spl_w, d.setpoints.sppt_w, d.setpoints.fppt_w) == (30, 40, 50)
     assert d.state == st
 
 
 def test_max_wins_to_top():
     d = run(g.Goal("max"), g.Readings(fan_rpm=0))
-    assert d.setpoints == sp(33, 43, 53, 100)
+    assert d.setpoints == sp(33, 43, 53, 60)
+
+
+@pytest.mark.parametrize("state", [g.State(), g.State(last_change_at=99.0)])
+def test_max_holds_when_all_readings_missing(state):
+    d = run(g.Goal("max"), g.Readings(), state=state)
+    assert not d.changed and d.setpoints == CUR
+    assert d.state == state
+    assert d.reason == "no change: missing reading"
+
+
+@pytest.mark.parametrize("fan", [20, 50, 95, 100])
+@pytest.mark.parametrize("state", [g.State(), g.State(last_change_at=99.0)])
+def test_max_fan_step_is_bounded(fan, state):
+    d = run(g.Goal("max"), g.Readings(apu_temp_c=70),
+            sp(30, 40, 50, fan), state=state)
+    assert d.setpoints.fan_pct == min(fan + g.MAX_FAN_STEP_PCT, 100)
 
 
 # --- defect 4: dwell holds above the temperature limit too ---
@@ -111,7 +141,7 @@ def test_temperature_limit_respects_dwell():
 
 def test_temperature_limit_sheds_power_for_max():
     d = run(g.Goal("max"), g.Readings(apu_temp_c=96))
-    assert d.setpoints == sp(27, 37, 47, 100)
+    assert d.setpoints == sp(27, 37, 47, 60)
 
 
 # --- defect 5: missing reading holds even when hot ---
@@ -172,21 +202,25 @@ def change_times(out):
     return [t for t, d in out if d.changed]
 
 
-def assert_stable(out, limits=g.Limits()):
+def assert_stable(out, limits=g.Limits(), fan_during_dwell=False):
     prev = None
+    lastsp = CUR
     for t, d in out:
         s = d.setpoints
         assert s.spl_w <= s.sppt_w <= s.fppt_w
         for rail, v in zip(("pl1", "pl2", "pl3"), (s.spl_w, s.sppt_w, s.fppt_w)):
             assert limits.ranges[rail][0] <= v <= limits.ranges[rail][1]
-        if prev is not None and d.changed:
-            assert t - prev >= g.MIN_DWELL_S
-            assert abs(s.fan_pct - lastsp.fan_pct) <= g.MAX_FAN_STEP_PCT
-            assert abs(s.spl_w - lastsp.spl_w) <= g.MAX_TDP_STEP_W
+        power_changed = (s.spl_w, s.sppt_w, s.fppt_w) != (lastsp.spl_w, lastsp.sppt_w, lastsp.fppt_w)
         if d.changed:
-            prev, lastsp = t, s
-        elif prev is None:
-            lastsp = s
+            if prev is not None and (not fan_during_dwell or power_changed):
+                assert t - prev >= g.MIN_DWELL_S
+            assert abs(s.fan_pct - lastsp.fan_pct) <= g.MAX_FAN_STEP_PCT
+            for value, old in zip((s.spl_w, s.sppt_w, s.fppt_w),
+                                  (lastsp.spl_w, lastsp.sppt_w, lastsp.fppt_w)):
+                assert abs(value - old) <= g.MAX_TDP_STEP_W
+            if not fan_during_dwell or power_changed:
+                prev = t
+        lastsp = s
 
 
 # recorded: fan RPM climbing in a game, then settling under the ceiling
@@ -211,7 +245,7 @@ MAX_TRACE = ([g.Readings(apu_temp_c=70)] * 40 + [g.Readings(apu_temp_c=97)] * 40
 ])
 def test_trace_is_stable(goal, trace):
     out = replay(goal, trace, limits=RANGES)
-    assert_stable(out, RANGES)
+    assert_stable(out, RANGES, fan_during_dwell=goal.kind == "max")
 
 
 def test_quiet_trace_settles_and_stays():
@@ -233,8 +267,8 @@ def test_fps_trace_band_is_quiet():
 
 def test_max_trace_full_fans_and_sheds_when_hot():
     out = replay(g.Goal("max"), MAX_TRACE, limits=RANGES)
-    assert out[0][1].setpoints.fan_pct == 100
-    assert all(d.setpoints.fan_pct == 100 for _, d in out)
+    assert [d.setpoints.fan_pct for _, d in out[:5]] == [60, 70, 80, 90, 100]
+    assert all(d.setpoints.fan_pct == 100 for _, d in out[4:])
     hot = [d.setpoints.spl_w for t, d in out if 40 <= t < 80]
     assert hot[-1] < hot[0]                     # power shed under the limit breach
 

@@ -105,9 +105,12 @@ def _move_power(cur, direction, limits):
     """Move all three rails ``direction`` steps, inside each rail's own range and
     keeping SPL <= sPPT <= fPPT."""
     rails = []
+    floor = limits.ranges["pl1"][0]
     for rail, v in zip(("pl1", "pl2", "pl3"), (cur.spl_w, cur.sppt_w, cur.fppt_w)):
         lo, hi = limits.ranges[rail]
-        rails.append(int(_clamp(v + direction * MAX_TDP_STEP_W, lo, hi)))
+        # Later rails must also respect every earlier rail's minimum.
+        floor = max(floor, lo)
+        rails.append(int(_clamp(v + direction * MAX_TDP_STEP_W, floor, hi)))
     spl, sppt, fppt = rails
     # Upper bounds win downwards so each value stays inside its own range and
     # SPL <= sPPT <= fPPT holds.
@@ -167,13 +170,16 @@ def decide(goal, readings, current, state=State(), now=0.0, limits=Limits()):
     over_limit = (readings.apu_temp_c is not None
                   and readings.apu_temp_c >= limits.apu_temp_limit_c)
     if goal.kind == "max":
+        if readings == Readings():
+            return Decision(current, False, state, "no change: missing reading")
+        fan = _move_fan(current.fan_pct, FAN_MAX_PCT)
         if dwelling:
-            # Max wins: full fans at once; power waits out the dwell and the
+            # Max wins: fans step up; power waits out the dwell and the
             # dwell clock is not restarted by this fan-only change.
-            new = replace(current, fan_pct=FAN_MAX_PCT)
-            return Decision(new, new != current, state, "max: full fans, power in dwell")
+            new = replace(current, fan_pct=fan)
+            return Decision(new, new != current, state, "max: raise fans, power in dwell")
         spl, sppt, fppt = _move_power(current, -1 if over_limit else 1, limits)
-        return _result(current, state, now, spl, sppt, fppt, FAN_MAX_PCT,
+        return _result(current, state, now, spl, sppt, fppt, fan,
                        "over APU temperature limit" if over_limit else "max")
     need = _needed(goal)
     if goal.target is None or getattr(readings, need) is None:
