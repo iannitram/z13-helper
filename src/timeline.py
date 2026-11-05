@@ -90,19 +90,46 @@ def _resolve_owner(dir_path, owner=None):
 
 
 def _ensure_dir(dir_path, owner=None):
-    """Create `dir_path` if missing; refuse a symlink at the target directory."""
+    """Create the missing components of `dir_path` (0o755), one at a time.
+
+    Each component is opened from its parent with `O_NOFOLLOW`, so a symlink
+    (or any non-directory) anywhere in the path is refused with TimelineError
+    instead of being followed. When running as root, a root-owned leaf folder
+    is handed back to `owner` by descriptor (`fchown`), never by path.
+    """
     if not dir_path:
         return
-    os.makedirs(dir_path, mode=0o755, exist_ok=True)
-    st = os.lstat(dir_path)
-    if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
-        raise TimelineError(errno.ELOOP, "timeline directory is not a real directory", dir_path)
-    resolved = _resolve_owner(os.path.dirname(dir_path), owner)
-    if os.geteuid() == 0 and resolved is not None and st.st_uid == 0:
-        try:
-            os.chown(dir_path, resolved[0], resolved[1])
-        except OSError:
-            pass
+    target = os.path.abspath(dir_path)
+    parts = [p for p in target.split(os.sep) if p]
+    nofollow = getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(os.sep, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        for name in parts:
+            try:
+                fd = os.open(name, os.O_RDONLY | nofollow, dir_fd=fd)
+            except OSError as exc:
+                if exc.errno != errno.ENOENT:
+                    # ELOOP (symlink), ENOTDIR (file component) or a real
+                    # permission/IO problem: refuse, never follow.
+                    raise TimelineError(exc.errno, f"refusing non-directory component {name!r} of {target}", target) from exc
+                try:
+                    os.mkdir(name, 0o755, dir_fd=fd)
+                except OSError as mk_exc:
+                    raise TimelineError(mk_exc.errno, f"cannot create timeline directory {target}", target) from mk_exc
+                fd = os.open(name, os.O_RDONLY | nofollow, dir_fd=fd)
+        resolved = _resolve_owner(target, owner)
+        if target != os.sep and resolved is not None and os.geteuid() == 0:
+            try:
+                st = os.lstat(target)
+            except OSError:
+                st = None
+            if st is not None and st.st_uid == 0:
+                try:
+                    os.fchown(fd, resolved[0], resolved[1])
+                except OSError:
+                    pass
+    finally:
+        os.close(fd)
 
 
 def _open_regular_nofollow(path, flags, mode=0o644, owner=None):
@@ -270,13 +297,31 @@ def _emit_journal(rec, journal, journal_tag, journal_fn):
             host.run(["logger", "-t", journal_tag, msg], timeout=5)
 
 
+def _needs_recovery_newline(target, size):
+    """True when a non-empty segment's last byte is not the newline of a complete record."""
+    try:
+        fd = os.open(target, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError:
+        return False
+    try:
+        return os.pread(fd, 1, size - 1) != b"\n"
+    except OSError:
+        return False
+    finally:
+        os.close(fd)
+
+
 def _append_locked(line, target, max_b, bak_n, owner):
     parent = os.path.dirname(os.path.abspath(target))
     resolved_owner = _resolve_owner(parent, owner)
     st = _check_not_symlink(target)
     existing_size = st.st_size if st is not None else 0
-    if existing_size > 0 and max_b > 0 and existing_size + len(line) > max_b:
+    # A crashed writer can leave a partial last line; the recovery newline we
+    # would prepend must count toward the segment cap, so check before rotating.
+    separator = 1 if existing_size > 0 and _needs_recovery_newline(target, existing_size) else 0
+    if existing_size > 0 and max_b > 0 and existing_size + separator + len(line) > max_b:
         _rotate_locked(target, bak_n)
+        separator = 0
     if max_b > 0 and len(line) > max_b:
         # Larger than a whole segment: it can never fit, so never write it.
         return
@@ -427,6 +472,13 @@ def profile_snapshot(profile, *, max_fans_active=None):
     return snap
 
 
+def _scrub_step_message(step_name, ok, message):
+    """A hook step's message can carry the hook command or its output; store only fixed text."""
+    if str(step_name) in ("enter hook", "exit hook") or str(message).startswith("ran:"):
+        return "hook ran" if ok else "hook failed"
+    return str(message)
+
+
 def record_profile_apply(*, profile, previous=None, results=(),
                          before_max_fans=None, after_max_fans=None, path=None):
     """Record a `profiles.apply()` transition.
@@ -443,7 +495,8 @@ def record_profile_apply(*, profile, previous=None, results=(),
     switching = bool(prev_name and prev_name != cur_name)
     ok = bool(results) and all(bool(step_ok) for _, step_ok, _ in results)
     changed = [str(step) for step, step_ok, _ in results if step_ok]
-    steps = [{"step": str(s), "ok": bool(step_ok), "message": str(msg)} for s, step_ok, msg in results]
+    steps = [{"step": str(s), "ok": bool(step_ok),
+              "message": _scrub_step_message(s, step_ok, msg)} for s, step_ok, msg in results]
 
     if switching:
         summary = f"Profile {prev_name} -> {cur_name}"
@@ -754,45 +807,58 @@ def record_steamos_update(*, before_build_id, after_build_id, before=None, after
     if not prev_id or not cur_id or prev_id == cur_id:
         return None
 
+    before_d = {"build_id": prev_id}
+    if isinstance(before, dict):
+        before_d.update(before)
+        before_d["build_id"] = prev_id
+    after_d = {"build_id": cur_id}
+    if isinstance(after, dict):
+        after_d.update(after)
+        after_d["build_id"] = cur_id
+
+    changed_list = [str(x) for x in (changed or [])]
+    if not changed_list:
+        changed_list.append(f"BUILD_ID {prev_id} -> {cur_id}")
+        for key in sorted(set(before_d) | set(after_d)):
+            if key != "build_id" and before_d.get(key) != after_d.get(key):
+                changed_list.append(f"{key}: {before_d.get(key)} -> {after_d.get(key)}")
+
+    entry = {
+        "kind": "steamos_update",
+        "summary": summary or f"SteamOS updated ({prev_id} -> {cur_id})",
+        "ok": True,
+        "before": before_d,
+        "after": after_d,
+        "changed": changed_list,
+        "rollback": None,
+        "no_rollback_reason": (
+            "SteamOS OS updates switch A/B image slots; choose the previous "
+            "slot in the SteamOS boot menu to roll back"
+        ),
+    }
+
+    if not logging_enabled():
+        # "logging": false means no files and no folders: the journal line (not
+        # a file) still goes out, but no lock is taken and nothing touches disk.
+        rec = _normalize_entry(entry)
+        _emit_journal(rec, True, journal_tag, journal_fn)
+        return rec
+
     target = path or TIMELINE_PATH
     with timeline_lock(target):
         if deduplicate:
             for existing in read_entries(target, newest_first=True):
-                if existing.get("kind") == "steamos_update":
-                    if (existing.get("after") or {}).get("build_id") == cur_id:
-                        return existing
-                    break
-
-        before_d = {"build_id": prev_id}
-        if isinstance(before, dict):
-            before_d.update(before)
-            before_d["build_id"] = prev_id
-        after_d = {"build_id": cur_id}
-        if isinstance(after, dict):
-            after_d.update(after)
-            after_d["build_id"] = cur_id
-
-        changed_list = [str(x) for x in (changed or [])]
-        if not changed_list:
-            changed_list.append(f"BUILD_ID {prev_id} -> {cur_id}")
-            for key in sorted(set(before_d) | set(after_d)):
-                if key != "build_id" and before_d.get(key) != after_d.get(key):
-                    changed_list.append(f"{key}: {before_d.get(key)} -> {after_d.get(key)}")
+                if not isinstance(existing, dict) or existing.get("kind") != "steamos_update":
+                    continue
+                # A usable record needs dict `before`/`after`; skip corrupt shapes.
+                if not isinstance(existing.get("before"), dict) or not isinstance(existing.get("after"), dict):
+                    continue
+                if existing["after"].get("build_id") == cur_id:
+                    return existing
+                break
 
         rec = append(
-            {
-                "kind": "steamos_update",
-                "summary": summary or f"SteamOS updated ({prev_id} -> {cur_id})",
-                "ok": True,
-                "before": before_d,
-                "after": after_d,
-                "changed": changed_list,
-                "rollback": None,
-                "no_rollback_reason": (
-                    "SteamOS OS updates switch A/B image slots; choose the previous "
-                    "slot in the SteamOS boot menu to roll back"
-                ),
-            },
+            entry,
             path=target,
             journal=True,
             journal_tag=journal_tag,
