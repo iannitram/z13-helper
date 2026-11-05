@@ -274,6 +274,9 @@ def _append_locked(line, target, max_b, bak_n, owner):
     existing_size = st.st_size if st is not None else 0
     if existing_size > 0 and max_b > 0 and existing_size + len(line) > max_b:
         _rotate_locked(target, bak_n)
+    if max_b > 0 and len(line) > max_b:
+        # Larger than a whole segment: it can never fit, so never write it.
+        return
 
     fd, open_st = _open_regular_nofollow(
         target, os.O_RDWR | os.O_CREAT | os.O_APPEND, mode=0o644, owner=resolved_owner
