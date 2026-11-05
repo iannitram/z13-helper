@@ -11,8 +11,6 @@ import importlib.util
 import json
 import logging
 import os
-import sys
-import types
 from pathlib import Path
 
 import pytest
@@ -21,21 +19,6 @@ import host
 
 REPO = Path(__file__).resolve().parent.parent
 SECRET = "SECRET-TOKEN-123"
-
-
-@pytest.fixture
-def main(monkeypatch):
-    """decky/main.py imported with a stub `decky` module (the loader's is absent)."""
-    stub = types.ModuleType("decky")
-    stub.logger = logging.getLogger("decky.test")
-    stub.DECKY_PLUGIN_SETTINGS_DIR = "/nonexistent-settings-dir"
-    monkeypatch.setitem(sys.modules, "decky", stub)
-    spec = importlib.util.spec_from_file_location("decky_main_under_test",
-                                                  REPO / "decky" / "main.py")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    monkeypatch.setattr(mod, "logging_enabled", lambda: False)   # the user said no logs
-    return mod
 
 
 def _store_with_hook():

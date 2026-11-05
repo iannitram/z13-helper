@@ -553,13 +553,20 @@ def _live_battery_limit():
 
 
 def telemetry():
-    """APU / GPU temps (degC) and both fan RPMs; None where unreadable.
+    """CPU / GPU temps (degC) with their sensor names and both fan RPMs.
 
-    hwmon nodes are found by `name` (acpitz / amdgpu / asus), never by index.
-    Reads only hwmon; never the asus-armoury ppt_* files.
+    A value that cannot be read is None (shown as unavailable), never 0.
+    hwmon nodes are found by `name` (k10temp / acpitz / amdgpu / asus), never
+    by index; the GPU is the integrated one, picked by device. Key `apu` keeps
+    its name for the plugin bundle; `apu_src` / `gpu_src` say where each came
+    from. Reads only hwmon; never the asus-armoury ppt_* files.
     """
     f1, f2 = _sensors.get_fan_speeds()
-    return {"apu": _sensors.get_apu_temp(), "gpu": _sensors.get_gpu_temp(), "fan1": f1, "fan2": f2}
+    cpu = _sensors.get_cpu_temp()
+    gpu = _sensors.get_gpu_temp_labeled()
+    return {"apu": cpu[0] if cpu else None, "apu_src": cpu[1] if cpu else None,
+            "gpu": gpu[0] if gpu else None, "gpu_src": gpu[1] if gpu else None,
+            "fan1": f1, "fan2": f2}
 
 
 def _save_plugin_state(**changes):
@@ -804,6 +811,90 @@ def _lock():
     return _write_lock
 
 
+# A sampled fail-stop threshold, not a kernel-enforced allocation limit. Check
+# independently of the event loop/write lock so a slow hardware call cannot
+# postpone it. Assumes (UNVERIFIED here) that Decky Loader runs each plugin
+# backend as its own process, so os._exit ends only this plugin; no Decky
+# source/version has been checked for that or for any respawn. Needs a device check.
+BACKEND_RSS_LIMIT_KIB = 500 * 1024
+BACKEND_RSS_CHECK_S = 5
+
+
+def backend_rss_kib(path="/proc/self/status"):
+    """Current resident memory, not peak RSS or virtual address space."""
+    with open(path, encoding="ascii") as stream:
+        for line in stream:
+            fields = line.split()
+            if fields[:1] == ["VmRSS:"]:
+                if len(fields) != 3 or fields[2] != "kB" or int(fields[1]) < 0:
+                    raise ValueError("invalid VmRSS")
+                return int(fields[1])
+    raise ValueError("missing VmRSS")
+
+
+class BackendMemoryGuard:
+    """One stoppable monitor per backend; no sample history or child processes.
+
+    A trip exits this backend (hard cap) unless Z13_RSS_GUARD_EXIT=0 is set in the
+    plugin_loader environment, which makes it log once instead. Exit rather than
+    restarting plugin_loader (which would disrupt all plugins).
+    Per-plugin process isolation and any respawn are UNVERIFIED assumptions
+    (no Decky version/source cited); reloading this plugin after a trip is a
+    device/operator recovery step.
+    """
+
+    def __init__(self, read_rss=None, terminate=None):
+        self._read_rss = read_rss or backend_rss_kib
+        self._terminate = terminate or self._default_terminate
+        self._tripped = False
+        self._stop = threading.Event()
+        self._read_failed = False
+        self._thread = threading.Thread(target=self._run, name="z13-rss-guard", daemon=True)
+
+    def _default_terminate(self, code):
+        """Exit by default; Z13_RSS_GUARD_EXIT=0 (operator opt-out, see
+        docs/fan-watchdog-memory.md) logs once and keeps the plugin running."""
+        if os.environ.get("Z13_RSS_GUARD_EXIT") != "0":
+            os._exit(code)
+        if not self._tripped:
+            self._tripped = True
+            decky.logger.error("Backend RSS over limit; not exiting (Z13_RSS_GUARD_EXIT=0)")
+
+    def start(self):
+        self._thread.start()
+
+    def close(self):
+        self._stop.set()
+        self._thread.join()
+
+    def check(self):
+        try:
+            rss = self._read_rss()
+        except (OSError, ValueError):
+            if not self._read_failed:
+                decky.logger.warning("Backend RSS unavailable; memory guard will retry")
+            self._read_failed = True
+            return False
+        self._read_failed = False
+        if rss < BACKEND_RSS_LIMIT_KIB:
+            return False
+        # os._exit bypasses cleanup that might hang or allocate more memory.
+        # Report to stderr first; do not depend on a logging handler's lock.
+        try:
+            os.write(2, f"z13-helper backend RSS guard: rss_kib={rss} "
+                     f"limit_kib={BACKEND_RSS_LIMIT_KIB}; exiting plugin process\n".encode())
+        finally:
+            self._terminate(1)
+        return True
+
+    def _run(self):
+        while not self._stop.is_set():
+            if self.check():
+                return
+            if self._stop.wait(BACKEND_RSS_CHECK_S):
+                return
+
+
 def _edit_field(field, value, expected):
     try:
         result = authority.set_field(field, value, expected)
@@ -983,6 +1074,8 @@ class Plugin:
     # ---- Lifecycle ----
     async def _main(self):
         self.loop = asyncio.get_event_loop()
+        self._memory_guard = BackendMemoryGuard()
+        self._memory_guard.start()
         self._crash_reporter = crash_report.install(
             config_path=INSTALL_JSON, logger=decky.logger, loop=self.loop,
             fatal_name="fatal-decky.log",
@@ -1005,6 +1098,8 @@ class Plugin:
                           _load_max_fans().get("enabled"))
 
     async def _unload(self):
+        if getattr(self, "_memory_guard", None):
+            self._memory_guard.close()
         if getattr(self, "_state_stream", None):
             await asyncio.to_thread(self._state_stream.close)
         if getattr(self, "_crash_reporter", None):
