@@ -57,6 +57,23 @@ def test_unhashable_or_missing_kind_in_file_is_dropped_not_the_profile(profiles_
     assert by_name(store, "Other")
 
 
+@pytest.mark.parametrize("goal", [{"kind": []}, {"kind": {}}, {}])
+@pytest.mark.parametrize("max_fans", [False, True])
+def test_bad_goal_kind_falls_back_to_max_fans(goal, max_fans):
+    assert profiles.goal_kind(custom(goal=goal, max_fans=max_fans)) == (
+        "max" if max_fans else None)
+
+
+@pytest.mark.parametrize("goal", [{"kind": []}, {"kind": {}}, {}])
+def test_save_drops_bad_goal_without_dropping_profiles(profiles_env, goal):
+    store = {"version": 1, "active": "Mine",
+             "profiles": [custom("Mine", goal=goal), custom("Other")]}
+    profiles.save_store(store)
+    saved = stored(profiles_env)
+    assert "goal" not in saved["Mine"]
+    assert set(saved) == {"Mine", "Other"}
+
+
 # ---- old files load unchanged; goal key only when set ----------------
 
 def test_old_store_loads_and_saves_without_a_goal_key(profiles_env):
