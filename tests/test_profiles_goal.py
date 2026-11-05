@@ -48,6 +48,14 @@ def test_bad_goals_are_rejected(goal):
         profiles.validate(custom(goal=goal))
 
 
+@pytest.mark.parametrize("kind", [[], {}])
+def test_unhashable_goal_kind_is_a_value_error_not_a_type_error(kind):
+    # Locked for the review finding on #124/#126/#127: a list or dict kind must be
+    # rejected as a bad goal (ValueError), not crash the GOAL_TARGETS lookup.
+    with pytest.raises(ValueError):
+        profiles.validate(custom(goal={"kind": kind}))
+
+
 # ---- old files load unchanged; goal key only when set ----------------
 
 def test_old_store_loads_and_saves_without_a_goal_key(profiles_env):
