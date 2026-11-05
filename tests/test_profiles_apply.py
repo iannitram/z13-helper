@@ -14,6 +14,32 @@ Z = "z13ctl"
 CURVE = [[30, 10], [40, 20], [50, 40], [60, 60], [70, 80], [80, 100], [90, 100], [100, 100]]
 
 
+@pytest.fixture
+def socket_probe(monkeypatch):
+    """apply() sees a legacy daemon; the cleanup's own probe sees the JSON list;
+    the reset write then goes through the CLI again."""
+    import sys
+    import state_authority
+
+    def probe():
+        caller = sys._getframe(1).f_code.co_name
+        return object() if caller == "clear_z13ctl_default_custom_tdp" else None
+    monkeypatch.setattr(state_authority, "named_client", probe)
+
+
+def test_cleanup_requires_socket_probe_not_cli_headers(profiles_env, fake_host):
+    """CLI firmware headers never prove the daemon honours --profile."""
+    fake_host.fail("tdp --help", rc=0, out="Flags: --profile string")
+    fake_host.fail("profile --list", rc=0,
+                   out="Firmware profiles: quiet, balanced, performance\n"
+                       "Custom profiles:\n   custom              fan curve, 20W\n")
+
+    ok, step = profiles.clear_z13ctl_default_custom_tdp(z13ctl=Z)
+
+    assert not ok and step[:2] == ("tdp", False)
+    assert [Z, "tdp", "--reset", "--profile", "custom"] not in fake_host.argvs
+
+
 def full_profile(name="Custom", **over):
     """A profile that exercises every step."""
     p = {
@@ -191,7 +217,21 @@ def test_base_profile_timeout_keeps_max_fans_suspended_for_uncertain_state(
         "z13ctl write timed out after 20 s (kernel asus-wmi hang?)",
     )]
     assert fake_host.argvs == [[Z, "profile", "--set", "performance"]]
-    assert not max_fans_state.is_enabled()
+    # The flag stays as the user had it; the marker tells the watchdog to wait.
+    assert max_fans_state.is_enabled()
+    assert max_fans_state.is_suspended()
+
+
+def test_failed_base_profile_retry_preserves_suspended_marker(
+        profiles_env, fake_host):
+    max_fans_state.save(enabled=True, suspended="z13ctl write timed out", saved_curve=[[40, 255]])
+    fake_host.fail("profile --set", rc=1, out="asus-wmi: error setting profile")
+    results = profiles.apply(full_profile(), z13ctl=Z)
+    assert results == [("profile", False, "asus-wmi: error setting profile")]
+    assert max_fans_state.is_enabled()
+    assert max_fans_state.is_suspended()
+    state = json.loads(profiles_env.max_fans.read_text())
+    assert state["suspended"] == "z13ctl write timed out"
 
 
 def test_null_fields_are_left_alone(profiles_env, fake_host):
@@ -203,7 +243,7 @@ def test_null_fields_are_left_alone(profiles_env, fake_host):
 
 
 def test_curve_without_tdp_clears_only_default_custom_tdp_after_base_profile(
-        profiles_env, fake_host):
+        socket_probe, profiles_env, fake_host):
     """A bare z13ctl curve edit activates `custom`, so old custom TDP must be cleared first."""
     fake_host.fail("tdp --help", rc=0, out="Usage: z13ctl tdp [flags]\nFlags: --profile string")
     fake_host.fail("profile --list", rc=0,
@@ -233,11 +273,10 @@ def test_curve_without_tdp_does_not_clear_custom_tdp_if_base_switch_fails(
     assert [Z, "tdp", "--help"] not in fake_host.argvs
     assert [Z, "tdp", "--reset", "--profile", "custom"] not in fake_host.argvs
     assert [Z, "fancurve", "--set", profiles.curve_spec(CURVE)] not in fake_host.argvs
-    assert ("fans", False,
-            "saved custom TDP could not be safely cleared; fan curve was not applied") in results
+    assert results == [("profile", False, "profile switch failed")]
 
 
-def test_curve_without_tdp_is_skipped_when_custom_tdp_cleanup_fails(profiles_env, fake_host):
+def test_curve_without_tdp_is_skipped_when_custom_tdp_cleanup_fails(socket_probe, profiles_env, fake_host):
     fake_host.fail("tdp --help", rc=0, out="Flags: --profile string")
     fake_host.fail("profile --list", rc=0,
                    out="Firmware profiles: quiet, balanced, performance\n"
@@ -261,11 +300,10 @@ def test_failed_base_switch_restores_initial_max_fans_flag(profiles_env, fake_ho
 
     assert not max_fans_state.is_enabled()
     assert [Z, "fancurve", "--set", profiles.MAX_FANS_SPEC] not in fake_host.argvs
-    assert ("fans", False,
-            "saved custom TDP could not be safely cleared; fan curve was not applied") in results
+    assert results == [("profile", False, "profile switch failed")]
 
 
-def test_failed_cleanup_disables_max_fans_before_watchdog_tick(profiles_env, fake_host):
+def test_failed_cleanup_disables_max_fans_before_watchdog_tick(socket_probe, profiles_env, fake_host):
     max_fans_state.save(enabled=True)
     fake_host.fail("tdp --help", rc=0, out="Flags: --profile string")
     fake_host.fail("profile --list", rc=0,
@@ -320,7 +358,7 @@ def test_failed_cleanup_disables_max_fans_before_watchdog_tick(profiles_env, fak
 
 
 def test_leaving_turbo_disables_watchdog_before_base_profile_write(
-        profiles_env, fake_host, monkeypatch):
+        socket_probe, profiles_env, fake_host, monkeypatch):
     max_fans_state.save(enabled=True, saved_curve=[[40, 128]])
 
     class Sensors:
@@ -381,7 +419,7 @@ def test_leaving_turbo_disables_watchdog_before_base_profile_write(
 
 
 def test_max_fans_reapply_suspends_flag_through_base_and_cleanup(
-        profiles_env, fake_host, monkeypatch):
+        socket_probe, profiles_env, fake_host, monkeypatch):
     max_fans_state.save(enabled=True)
     hardware = {"curve_enabled": False}
 
@@ -446,7 +484,7 @@ def test_max_fans_reapply_suspends_flag_through_base_and_cleanup(
 
 
 def test_entering_turbo_enables_flag_only_after_successful_curve_write(
-        profiles_env, fake_host, monkeypatch):
+        socket_probe, profiles_env, fake_host, monkeypatch):
     real_run = host.run
 
     def inspect_fan_write(argv, **kwargs):
@@ -467,7 +505,7 @@ def test_entering_turbo_enables_flag_only_after_successful_curve_write(
 
 
 def test_failed_max_fans_curve_write_does_not_publish_enabled_flag(
-        profiles_env, fake_host):
+        socket_probe, profiles_env, fake_host):
     fake_host.fail("tdp --help", rc=0, out="Flags: --profile string")
     fake_host.fail("profile --list", rc=0,
                    out="Firmware profiles: quiet, balanced, performance\nCustom profiles:\n")
@@ -480,7 +518,77 @@ def test_failed_max_fans_curve_write_does_not_publish_enabled_flag(
     assert ("fans", False, "curve write failed") in results
 
 
-def test_curveless_max_fans_profile_clears_stale_custom_tdp(profiles_env, fake_host):
+def test_failed_max_fans_curve_write_restores_the_initial_flag(
+    socket_probe, profiles_env, fake_host
+):
+    max_fans_state.save(enabled=True)
+    fake_host.fail("tdp --help", rc=0, out="Flags: --profile string")
+    fake_host.fail(
+        "profile --list",
+        rc=0,
+        out="Firmware profiles: quiet, balanced, performance\nCustom profiles:\n",
+    )
+    fake_host.fail("fancurve --set", rc=1, out="curve write failed")
+    defaults = {p["name"]: p for p in profiles.default_profiles()}
+
+    results = profiles.apply(defaults["Turbo"], previous=defaults["Balanced"], z13ctl=Z)
+
+    assert max_fans_state.is_enabled()
+    assert ("fans", False, "curve write failed") in results
+
+
+def test_timed_out_apply_keeps_max_fans_suspended_with_a_marker(
+    socket_probe, profiles_env, fake_host
+):
+    max_fans_state.save(enabled=True)
+    fake_host.fail("profile --set", rc=124, out="write timed out", timed_out=True)
+
+    profiles.apply(bare_profile(base="performance"), z13ctl=Z)
+
+    state = json.loads(profiles_env.max_fans.read_text())
+    assert state["enabled"] is True      # not guessed off while the hardware is unknown
+    assert state["suspended"] == "z13ctl write timed out"
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("error", [TimeoutError("timed out"), RuntimeError("failed")])
+def test_named_profile_failure_preserves_intent_and_suspends_only_on_timeout(
+    profiles_env, fake_host, monkeypatch, enabled, error
+):
+    class Client:
+        def activate_app_profile(self, profile):
+            raise error
+
+    monkeypatch.setattr(profiles.authority, "named_client", lambda: Client())
+    max_fans_state.save(enabled=enabled)
+
+    results = profiles.apply(bare_profile(base="performance"), z13ctl=Z)
+
+    assert results[0][:2] == ("profile", False)
+    assert max_fans_state.is_enabled() is enabled
+    assert max_fans_state.is_suspended() is isinstance(error, TimeoutError)
+    assert fake_host.argvs == []
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_cleanup_timeout_suspends_watchdog_and_stops_apply(
+    socket_probe, profiles_env, fake_host, enabled
+):
+    max_fans_state.save(enabled=enabled)
+    fake_host.fail("tdp --help", rc=0, out="Flags: --profile string")
+    fake_host.fail("profile --list", rc=0,
+                   out="Custom profiles:\n   custom              20W\n")
+    fake_host.fail("tdp --reset", rc=124, out="timed out", timed_out=True)
+
+    results = profiles.apply(bare_profile(fan_curve=CURVE), z13ctl=Z)
+
+    assert results[-1][:2] == ("tdp", False)
+    assert fake_host.argvs[-1] == [Z, "tdp", "--reset", "--profile", "custom"]
+    assert max_fans_state.is_enabled() is enabled
+    assert max_fans_state.is_suspended()
+
+
+def test_curveless_max_fans_profile_clears_stale_custom_tdp(socket_probe, profiles_env, fake_host):
     fake_host.fail("tdp --help", rc=0, out="Flags: --profile string")
     fake_host.fail("profile --list", rc=0,
                    out="Firmware profiles: quiet, balanced, performance\n"
@@ -494,7 +602,7 @@ def test_curveless_max_fans_profile_clears_stale_custom_tdp(profiles_env, fake_h
     assert ("tdp", True, "cleared saved z13ctl custom TDP") in results
 
 
-def test_default_custom_without_tdp_is_not_created_or_reset(profiles_env, fake_host):
+def test_default_custom_without_tdp_is_not_created_or_reset(socket_probe, profiles_env, fake_host):
     fake_host.fail("tdp --help", rc=0, out="Flags: --profile string")
     fake_host.fail("profile --list", rc=0,
                    out="Firmware profiles: quiet, balanced, performance\n"
@@ -507,7 +615,7 @@ def test_default_custom_without_tdp_is_not_created_or_reset(profiles_env, fake_h
     assert [Z, "fancurve", "--set", profiles.curve_spec(CURVE)] in fake_host.argvs
 
 
-def test_empty_custom_profile_list_allows_curve_for_fresh_user(profiles_env, fake_host):
+def test_empty_custom_profile_list_allows_curve_for_fresh_user(socket_probe, profiles_env, fake_host):
     fake_host.fail("tdp --help", rc=0, out="Flags: --profile string")
     fake_host.fail("profile --list", rc=0,
                    out="Firmware profiles: quiet, balanced, performance\nCustom profiles:\n")
@@ -545,7 +653,7 @@ def test_curve_without_tdp_skips_for_daemon_without_profile_list(profiles_env, f
             "saved custom TDP could not be safely cleared; fan curve was not applied") in results
 
 
-def test_curve_without_tdp_refuses_reset_if_custom_remains_active(profiles_env, fake_host):
+def test_curve_without_tdp_refuses_reset_if_custom_remains_active(socket_probe, profiles_env, fake_host):
     fake_host.fail("tdp --help", rc=0, out="Flags: --profile string")
     fake_host.fail("profile --list", rc=0,
                    out="Firmware profiles: quiet, balanced, performance\n"
@@ -596,7 +704,7 @@ def test_brightness_has_short_timeout(profiles_env, fake_host):
 # independence
 # ----------------------------------------------------------------------
 
-@pytest.mark.parametrize("failing", ["profile", "tdp", "fancurve", "undervolt", "keyboard",
+@pytest.mark.parametrize("failing", ["tdp", "fancurve", "undervolt", "keyboard",
                                      "batterylimit", "enter-cmd"])
 def test_one_failing_step_does_not_stop_the_rest(profiles_env, failing, fake_host):
     fake_host.fail(lambda a: failing in a, rc=1, out=f"{failing} broke")
@@ -608,6 +716,15 @@ def test_one_failing_step_does_not_stop_the_rest(profiles_env, failing, fake_hos
     bad = [(s, msg) for s, ok, msg in results if not ok]
     assert len(bad) == 1
     assert "broke" in bad[0][1]
+
+
+def test_failed_base_write_skips_tdp_and_fan_curve(profiles_env, fake_host):
+    fake_host.fail("profile --set", rc=1, out="profile switch failed")
+
+    results = profiles.apply(full_profile(), z13ctl=Z)
+
+    assert results == [("profile", False, "profile switch failed")]
+    assert all(a[1] not in ("tdp", "fancurve") for a in fake_host.argvs)
 
 
 def test_failure_message_falls_back_to_rc(profiles_env, fake_host):
@@ -897,6 +1014,41 @@ def test_skip_hooks_skips_both(profiles_env, fake_host):
     assert "exit hook" not in names(results) and "enter hook" not in names(results)
 
 
+def test_hook_timeout_does_not_suspend_max_fans(profiles_env, fake_host):
+    max_fans_state.save(enabled=True)
+    fake_host.fail("slow_exit", rc=124, out="timed out after 120 s", timed_out=True)
+    prev = bare_profile("Prev", hooks={"exit": "slow_exit"})
+    results_exit = profiles.apply(bare_profile("Next"), previous=prev, z13ctl=Z)
+    assert ("exit hook", False, "timed out after 120 s") in results_exit
+    state_exit = json.loads(profiles_env.max_fans.read_text())
+    assert state_exit["enabled"] is True
+    assert state_exit.get("suspended") is None
+
+    fake_host.fail("slow_enter", rc=124, out="timed out after 120 s", timed_out=True)
+    p = bare_profile(base="performance", hooks={"enter": "slow_enter"})
+    results = profiles.apply(p, z13ctl=Z)
+
+    assert ("enter hook", False, "timed out after 120 s") in results
+    state = json.loads(profiles_env.max_fans.read_text())
+    assert state["enabled"] is True
+    assert state.get("suspended") is None
+    assert max_fans_state.is_enabled()
+
+    # A z13ctl write that times out still sets the suspended marker and leaves Max Fans off
+    fake_host.fail("profile --set", rc=124, out="timed out after 20 s", timed_out=True)
+    results_z = profiles.apply(bare_profile(base="performance"), z13ctl=Z)
+    assert results_z == [
+        (
+            "profile",
+            False,
+            f"z13ctl write timed out after {profiles.Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)",
+        )
+    ]
+    state_z = json.loads(profiles_env.max_fans.read_text())
+    assert state_z["enabled"] is True
+    assert state_z["suspended"] == "z13ctl write timed out"
+
+
 # ----------------------------------------------------------------------
 # Max Fans
 # ----------------------------------------------------------------------
@@ -979,3 +1131,27 @@ def test_undervolt_other_failure_passes_message_through(profiles_env, fake_host)
     fake_host.fail(lambda a: "undervolt" in a, rc=2, out="value out of range")
     results = profiles.apply(bare_profile(undervolt=-10), z13ctl=Z)
     assert ("undervolt", False, "value out of range") in results
+
+
+def test_failure_after_a_good_fan_step_keeps_the_max_fans_flag_the_fan_step_set(
+    profiles_env, fake_host
+):
+    # Leaving a Max Fans profile: the fan reset worked, the battery write did not.
+    # The flag must stay off; restoring it would make the watchdog pin 100% again.
+    max_fans_state.save(enabled=True, saved_curve=None)
+    prev = bare_profile(name="Loud", base="performance", max_fans=True)
+    cur = bare_profile(name="Quiet", base="quiet", battery_limit=80)
+    fake_host.fail("batterylimit", rc=1, out="boom")
+    results = profiles.apply(cur, previous=prev, z13ctl=Z)
+    assert ("battery limit", False, "boom") in results
+    assert not max_fans_state.is_enabled()
+    assert not max_fans_state.is_suspended()
+
+
+def test_failed_fan_step_restores_the_previous_max_fans_flag(profiles_env, fake_host):
+    max_fans_state.save(enabled=True, saved_curve=None)
+    prev = bare_profile(name="Loud", base="performance", max_fans=True)
+    cur = bare_profile(name="Quiet", base="quiet")
+    fake_host.fail("fancurve --reset", rc=1, out="boom")
+    profiles.apply(cur, previous=prev, z13ctl=Z)
+    assert max_fans_state.is_enabled()

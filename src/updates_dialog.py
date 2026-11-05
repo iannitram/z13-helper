@@ -8,11 +8,12 @@ from PyQt6.QtCore import Qt, QUrl, QThread, pyqtSignal
 from PyQt6.QtGui import QDesktopServices, QColor
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem, QPushButton, QLabel,
-    QAbstractItemView, QHeaderView, QMessageBox, QPlainTextEdit,
+    QAbstractItemView, QHeaderView, QMessageBox, QPlainTextEdit, QTabWidget, QWidget,
 )
 
 import host
 import install_record
+import post_update_view
 import update_watch
 from theme import TURBO, TEXT_DIM
 
@@ -141,6 +142,147 @@ class UpdateCheckThread(QThread):
         self.finished_rows.emit(rows)
 
 
+class PostUpdateThread(QThread):
+    """Runs `python3 -m post_update --tab-json` on the host (checks only; --ack clears the flag)."""
+    done = pyqtSignal(object)
+
+    def __init__(self, repo, ack=False, parent=None):
+        super().__init__(parent)
+        self.repo = repo
+        self.ack = ack
+
+    def run(self):
+        try:
+            res = host.run(post_update_view.tab_argv(self.repo, self.ack), timeout=60)
+            self.done.emit(post_update_view.parse_status(res.out))
+        except Exception:  # noqa: BLE001
+            self.done.emit(None)
+
+
+class RepairThread(QThread):
+    """Runs `python3 -m post_update repair --json` (the plan; no ids) or `--run ids` (confirmed)."""
+    done = pyqtSignal(object)
+
+    def __init__(self, repo, ids=None, parent=None):
+        super().__init__(parent)
+        self.repo = repo
+        self.ids = ids
+
+    def run(self):
+        try:
+            res = host.run(post_update_view.repair_argv(self.repo, self.ids), timeout=900)
+            self.done.emit(post_update_view.parse_json(res.out, "results" if self.ids else "steps"))
+        except Exception:  # noqa: BLE001
+            self.done.emit(None)
+
+
+class PostUpdateTab(QWidget):
+    """The After SteamOS update tab: banner, the attribute check, one row per task."""
+    COLS = ["Task", "State", "What it fixes"]
+    status_changed = pyqtSignal(str)   # the banner text ("" when no update was seen)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        v = QVBoxLayout(self)
+        self.banner = QLabel("")
+        self.banner.setWordWrap(True)
+        v.addWidget(self.banner)
+        self.armoury = QLabel("")
+        self.armoury.setObjectName("dim")
+        v.addWidget(self.armoury)
+        self.table = QTableWidget(0, len(self.COLS))
+        self.table.setHorizontalHeaderLabels(self.COLS)
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        v.addWidget(self.table, 1)
+        h = QHBoxLayout()
+        self.btn_refresh = QPushButton("Re-check")
+        self.btn_refresh.clicked.connect(lambda: self.refresh())
+        self.btn_ack = QPushButton("I re-verified")
+        self.btn_ack.clicked.connect(lambda: self.refresh(ack=True))
+        h.addWidget(self.btn_refresh)
+        h.addWidget(self.btn_ack)
+        self.btn_repair = QPushButton("Repair…")
+        self.btn_repair.setToolTip("Show the repair plan, then run it after you confirm.")
+        self.btn_repair.clicked.connect(self.start_repair)
+        h.addWidget(self.btn_repair)
+        h.addStretch(1)
+        h.addWidget(QLabel("Tasks above: ./install.sh --post-update (SSH or a terminal)."))
+        v.addLayout(h)
+        self._thread = None
+        self.show_status(None, None)
+        self.refresh()
+
+    def refresh(self, ack=False):
+        repo = install_record.repo_path(install_record.load())
+        if not repo:
+            self.show_status(None, "Run ./install.sh once from the repo so the app knows where it is.")
+            return
+        if self._thread and self._thread.isRunning():
+            return
+        self.btn_refresh.setEnabled(False)
+        self._thread = PostUpdateThread(repo, ack, self)
+        self._thread.done.connect(self._done)
+        self._thread.start()
+
+    def start_repair(self):
+        """Step 1: fetch the plan (changes nothing). The user sees it before anything runs."""
+        repo = install_record.repo_path(install_record.load())
+        if not repo or (self._thread and self._thread.isRunning()):
+            return
+        self.btn_repair.setEnabled(False)
+        self._thread = RepairThread(repo, None, self)
+        self._thread.done.connect(lambda plan: self._plan_ready(repo, plan))
+        self._thread.start()
+
+    def _plan_ready(self, repo, plan):
+        self.btn_repair.setEnabled(True)
+        if not plan or not plan["steps"]:
+            QMessageBox.information(self, "Repair", "Nothing to repair." if plan else
+                                    "Could not build the repair plan.")
+            return
+        box = QMessageBox(self)
+        box.setWindowTitle("Repair plan")
+        box.setText("These steps will run. Root steps use sudo -n; each has an undo and a "
+                    "rollback record under ~/.local/state/z13-helper/post-update-backups/.")
+        box.setDetailedText(post_update_view.plan_prompt(plan))
+        box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        box.setDefaultButton(QMessageBox.StandardButton.No)
+        if box.exec() != QMessageBox.StandardButton.Yes:
+            return
+        self.btn_repair.setEnabled(False)
+        self._thread = RepairThread(repo, [s["id"] for s in plan["steps"]], self)
+        self._thread.done.connect(self._repair_done)
+        self._thread.start()
+
+    def _repair_done(self, result):
+        self.btn_repair.setEnabled(True)
+        QMessageBox.information(self, "Repair", post_update_view.run_summary(result) if result
+                                else "The repair did not report back; see the rollback record.")
+        self.refresh()
+
+    def _done(self, status):
+        self.btn_refresh.setEnabled(True)
+        self.show_status(status, None if status else "Could not read the post-update status.")
+
+    def show_status(self, status, problem):
+        status = status or post_update_view.EMPTY
+        self.banner.setText(problem or status["banner"] or "No SteamOS update seen since the last look.")
+        self.banner.setStyleSheet(f"color: {TURBO}; font-weight: bold;" if status["banner"] else "")
+        self.status_changed.emit(post_update_view.tray_text(status) or "")
+        self.armoury.setText(post_update_view.armoury_line(status["armoury"]))
+        self.btn_ack.setEnabled(bool(status["updated"]))
+        rows = status["rows"]
+        self.table.setRowCount(len(rows))
+        for r, row in enumerate(rows):
+            for c, val in enumerate(post_update_view.row_cells(row)):
+                it = QTableWidgetItem(val)
+                if row["state"] in ("needs", "error", "unknown"):
+                    it.setForeground(QColor(TURBO))
+                self.table.setItem(r, c, it)
+
+
 class UpdatesDialog(QDialog):
     COLS = ["Component", "Installed", "Latest", "Date", "What / why it matters"]
 
@@ -148,7 +290,14 @@ class UpdatesDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Updates — upstream watch")
         self.resize(780, 560)
-        v = QVBoxLayout(self)
+        outer = QVBoxLayout(self)
+        tabs = QTabWidget()
+        outer.addWidget(tabs)
+        watch = QWidget()
+        tabs.addTab(watch, "Upstream watch")
+        self.post_update_tab = PostUpdateTab(self)
+        tabs.addTab(self.post_update_tab, "After SteamOS update")
+        v = QVBoxLayout(watch)
         self.info = QLabel("")
         self.info.setObjectName("dim")
         v.addWidget(self.info)

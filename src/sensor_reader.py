@@ -16,7 +16,8 @@ class SensorReader:
     Relevant nodes on this hardware:
       asus           (hwmon5) — fan1_input, fan2_input (main APU fans)
       amdgpu         (hwmon10) — temp1_input "edge" (GPU die temp)
-      acpitz         (hwmon2)  — temp1_input (APU package / ACPI thermal zone)
+      acpitz         (hwmon2)  — temp1_input (ACPI thermal zone, the fallback CPU reading)
+      k10temp                  — temp*_input labeled Tdie / Tctl (preferred CPU reading)
     """
 
     def __init__(self):
@@ -79,6 +80,17 @@ class SensorReader:
         if None in states:
             return None
         return all(s == 1 for s in states)
+
+    def fan_curve_modes(self) -> tuple[int | None, int | None] | None:
+        """(pwm1_enable, pwm2_enable): 1 = manual custom curve, else firmware
+        auto. Per fan, unlike custom_fan_curve_enabled(), which folds both into
+        one value. None if the node is missing."""
+        hwmon = self._find_hwmon("asus_custom_fan_curve")
+        if hwmon is None:
+            return None
+        return tuple(
+            self._read_int(os.path.join(hwmon, f"pwm{n}_enable")) for n in (1, 2)
+        )
 
     def custom_fan_curve_points(self) -> list[list[int]] | None:
         """The 8 (temp_c, pwm) points of fan 1's custom curve, from sysfs.
@@ -150,28 +162,98 @@ class SensorReader:
         return out
 
     def get_apu_temp(self) -> float | None:
-        """Returns the APU package temperature in °C from acpitz."""
+        """The ACPI thermal-zone temperature in °C (acpitz), not the CPU package.
+
+        The fan watchdog's reference reading; the UI uses get_cpu_temp(), which
+        names its source.
+        """
         hwmon = self._find_hwmon("acpitz")
         if hwmon is None:
             return None
         raw = self._read_int(os.path.join(hwmon, "temp1_input"))
         return raw / 1000.0 if raw is not None else None
 
-    def get_gpu_temp(self) -> float | None:
-        """Returns the GPU edge temperature in °C from amdgpu."""
-        hwmon = self._find_hwmon("amdgpu")
+    def _read_str(self, path: str) -> str | None:
+        try:
+            with open(path) as f:
+                return f.read().strip()
+        except OSError:
+            return None
+
+    def _hwmons_named(self, device_name: str) -> list[str]:
+        """Every hwmon directory whose `name` is device_name, sorted."""
+        found = []
+        try:
+            for entry in sorted(os.listdir(HWMON_ROOT)):
+                path = os.path.join(HWMON_ROOT, entry)
+                if self._read_str(os.path.join(path, "name")) == device_name:
+                    found.append(path)
+        except OSError:
+            pass
+        return found
+
+    def get_cpu_temp(self) -> tuple[float, str] | None:
+        """(°C, source label) for the CPU, or None when nothing is readable.
+
+        Prefers k10temp's labeled readings: Tdie (real die temperature) over
+        Tctl (control value, may carry an offset). Falls back to the ACPI
+        thermal zone, labeled "ACPI" so nobody mistakes it for the package.
+        """
+        hwmon = self._find_hwmon("k10temp")
+        if hwmon is not None:
+            labeled = {}
+            for n in range(1, 10):
+                label = self._read_str(os.path.join(hwmon, f"temp{n}_label"))
+                if label in ("Tdie", "Tctl") and label not in labeled:
+                    raw = self._read_int(os.path.join(hwmon, f"temp{n}_input"))
+                    if raw is not None:
+                        labeled[label] = raw / 1000.0
+            for label in ("Tdie", "Tctl"):
+                if label in labeled:
+                    return labeled[label], f"k10temp {label}"
+        raw = None
+        hwmon = self._find_hwmon("acpitz")
+        if hwmon is not None:
+            raw = self._read_int(os.path.join(hwmon, "temp1_input"))
+        return (raw / 1000.0, "ACPI") if raw is not None else None
+
+    def _gpu_hwmon(self) -> str | None:
+        """The amdgpu hwmon of the integrated GPU, chosen by device not index.
+
+        Match the Z13's Strix Halo PCI ID (1002:1586). Its display-controller
+        class has no boot_vga file, and USB4 eGPUs can have lower PCI addresses.
+        If the integrated device cannot be identified, report it unavailable.
+        """
+        for path in self._hwmons_named("amdgpu"):
+            device = os.path.join(path, "device")
+            if (self._read_str(os.path.join(device, "vendor")) == "0x1002"
+                    and self._read_str(os.path.join(device, "device")) == "0x1586"):
+                return path
+        return None
+
+    def get_gpu_temp_labeled(self) -> tuple[float, str] | None:
+        """(°C, "amdgpu <label>") of the integrated GPU, or None."""
+        hwmon = self._gpu_hwmon()
         if hwmon is None:
             return None
         raw = self._read_int(os.path.join(hwmon, "temp1_input"))
-        return raw / 1000.0 if raw is not None else None
+        if raw is None:
+            return None
+        label = self._read_str(os.path.join(hwmon, "temp1_label")) or "edge"
+        return raw / 1000.0, f"amdgpu {label}"
+
+    def get_gpu_temp(self) -> float | None:
+        """Returns the integrated GPU's temperature in °C from amdgpu."""
+        got = self.get_gpu_temp_labeled()
+        return got[0] if got else None
 
 
 if __name__ == "__main__":
     reader = SensorReader()
     fan1, fan2 = reader.get_fan_speeds()
-    apu = reader.get_apu_temp()
-    gpu = reader.get_gpu_temp()
+    cpu = reader.get_cpu_temp()
+    gpu = reader.get_gpu_temp_labeled()
     print(f"Fan 1:    {fan1} RPM")
     print(f"Fan 2:    {fan2} RPM")
-    print(f"APU temp: {apu} °C")
-    print(f"GPU temp: {gpu} °C")
+    print("CPU temp: " + (f"{cpu[0]} °C ({cpu[1]})" if cpu else "unavailable"))
+    print("GPU temp: " + (f"{gpu[0]} °C ({gpu[1]})" if gpu else "unavailable"))
