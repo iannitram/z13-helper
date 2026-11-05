@@ -288,13 +288,13 @@ def _parse_tdp_values(values, allow_one=False):
     if len(parts) == 1 and allow_one:
         value = _as_int(parts[0])
         if value is None:
-            raise CliError("tdp values must be whole watts")
+            raise _InputError("tdp values must be whole watts")
         return [value]
     if len(parts) != 3:
-        raise CliError("tdp needs PL1,PL2,PL3")
+        raise _InputError("tdp needs PL1,PL2,PL3")
     nums = [_as_int(p) for p in parts]
     if any(n is None for n in nums):
-        raise CliError("tdp values must be whole watts")
+        raise _InputError("tdp values must be whole watts")
     return nums
 
 
@@ -305,7 +305,7 @@ def _parse_curve(value):
         try:
             points = json.loads(value)
         except ValueError as exc:
-            raise CliError(f"bad fan curve JSON: {exc}") from None
+            raise _InputError(f"bad fan curve JSON: {exc}") from None
     else:
         points = []
         for part in str(value).split(","):
@@ -316,9 +316,15 @@ def _parse_curve(value):
             try:
                 temp, pct = part.split(sep, 1)
             except ValueError:
-                raise CliError(f"bad fan curve point {part!r}") from None
-            points.append([int(temp.strip()), int(pct.strip().rstrip("%"))])
-    profiles.validate_curve(points)
+                raise _InputError(f"bad fan curve point {part!r}") from None
+            try:
+                points.append([int(temp.strip()), int(pct.strip().rstrip("%"))])
+            except ValueError:
+                raise _InputError(f"bad fan curve point {part!r}") from None
+    try:
+        profiles.validate_curve(points)
+    except ValueError as exc:
+        raise _InputError(str(exc)) from None
     return points
 
 
@@ -530,6 +536,9 @@ def cmd_profile_set(args):
     full = [field for field in updated if field not in hardware_fields]
     for field in full:
         authority.edit(profile, field)
+    if "max_fans" in updated and profile["name"] == profiles.active_name():
+        # profiles.apply only plans Max Fans on a real profile switch.
+        authority.set_max_fans(profile["max_fans"])
     payload = {
         "ok": True,
         "name": profile["name"],
@@ -599,14 +608,23 @@ def cmd_tdp(args):
         raise CliError(f"unknown tdp action {action!r}")
     if args.value is not None:
         values = _parse_tdp_values(args.value, allow_one=True)
+        if args.pl1 is not None or (
+            len(values) > 1 and (args.pl2 is not None or args.pl3 is not None)
+        ):
+            raise _InputError("give tdp as PL1,PL2,PL3 or with --pl1/--pl2/--pl3, not both")
         pl1 = values[0]
-        pl2 = values[1] if len(values) > 1 else None
-        pl3 = values[2] if len(values) > 2 else None
+        pl2 = values[1] if len(values) > 1 else args.pl2
+        pl3 = values[2] if len(values) > 2 else args.pl3
     else:
         if args.pl1 is None:
             raise CliError("tdp set needs PL1,PL2,PL3 or --pl1")
         pl1, pl2, pl3 = args.pl1, args.pl2, args.pl3
     tdp = _clamp_tdp(pl1, pl2, pl3, power_range.detect_ranges())
+    if tdp["force"] and not args.force:
+        raise _InputError(
+            f"PL1 above {PL1_SAFE_MAX} W runs the fans at full speed; "
+            "repeat the command with --force to confirm"
+        )
     authority.set_field("tdp", tdp)
     payload = {"ok": True, "tdp": tdp}
     _emit(args, payload, [f"TDP: {tdp['pl1']}/{tdp['pl2']}/{tdp['pl3']} W"])

@@ -219,7 +219,7 @@ def test_fans_curve_set_validates_and_dispatches(owner, capsys):
 
 
 def test_fans_curve_set_rejects_a_bad_curve(profiles_env, capsys):
-    assert cli.main(["fans", "curve", "set", "20:20,30:10", "--json"]) == 1
+    assert cli.main(["fans", "curve", "set", "20:20,30:10", "--json"]) == 2
     data = json.loads(capsys.readouterr().out)
     assert data["ok"] is False
 
@@ -336,3 +336,70 @@ def test_post_update_dry_run_plans_without_applying(
     assert data["dry_run"] is True and data["ids"] == ["amdgpu"]
     assert not any("update-grub" in line for line in fake_host.lines)
     assert not any("tee" in argv for argv in fake_host.argvs)
+
+
+def _flat_ranges(monkeypatch):
+    monkeypatch.setattr(
+        cli.power_range,
+        "detect_ranges",
+        lambda: {"pl1": (5, 93), "pl2": (5, 93), "pl3": (5, 93)},
+    )
+
+
+def test_tdp_set_positional_keeps_pl2_and_pl3_flags(owner, monkeypatch, capsys):
+    calls, record = owner
+    record("set_field")
+    _flat_ranges(monkeypatch)
+    data = run_json(capsys, ["tdp", "set", "30", "--pl2", "40", "--pl3", "50"])
+    assert data["tdp"] == {"pl1": 30, "pl2": 40, "pl3": 50, "force": False}
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [["tdp", "set", "30", "--pl1", "20"], ["tdp", "set", "30,40,50", "--pl2", "45"]],
+)
+def test_tdp_set_rejects_conflicting_forms(owner, monkeypatch, capsys, argv):
+    calls, record = owner
+    record("set_field")
+    _flat_ranges(monkeypatch)
+    assert cli.main(argv + ["--json"]) == 2
+    assert calls == []
+
+
+def test_tdp_set_above_75_needs_force(owner, monkeypatch, capsys):
+    calls, record = owner
+    record("set_field")
+    _flat_ranges(monkeypatch)
+    assert cli.main(["tdp", "set", "80", "--json"]) == 2
+    capsys.readouterr()
+    assert calls == []
+    data = run_json(capsys, ["tdp", "set", "80", "--force"])
+    assert data["tdp"]["force"] is True
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["tdp", "set", "abc"],
+        ["tdp", "set", "1,2"],
+        ["fans", "curve", "set", "nan:50"],
+        ["fans", "curve", "set", "120:100"],
+        ["fans", "curve", "set", "20:30"],
+    ],
+)
+def test_bad_input_exits_2(owner, capsys, argv):
+    calls, record = owner
+    record("set_field")
+    assert cli.main(argv + ["--json"]) == 2
+    assert calls == []
+
+
+def test_profile_set_max_fans_on_active_profile_goes_live(
+    owner, profiles_env, monkeypatch, capsys
+):
+    calls, record = owner
+    record("edit")
+    record("set_max_fans")
+    monkeypatch.setattr(cli.profiles, "active_name", lambda: "Turbo")
+    run_json(capsys, ["profile", "set", "Turbo", "--max-fans", "on"])
+    assert ("set_max_fans", (True,), {}) in calls
