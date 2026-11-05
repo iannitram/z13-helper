@@ -87,13 +87,13 @@ def test_log_tail_straddling_build_token_is_redacted_whole(isolated, tmp_path):
     assert "test-" not in log
 
 
-def test_huge_log_line_is_held_raw_at_64_kib_and_redacted_in_the_report(isolated, tmp_path, monkeypatch):
-    """A 1 MB line is kept raw at no more than 64 KiB; the report line is redacted and within 2048 bytes."""
+def test_huge_log_line_is_held_raw_at_8_kib_and_redacted_in_the_report(isolated, tmp_path, monkeypatch):
+    """A 1 MB line is kept raw at no more than 8 KiB; the report line is redacted and within 2048 bytes."""
     monkeypatch.setattr(getpass, "getuser", lambda: "qwxzebra")
     reporter = _reporter(tmp_path, "huge")
     reporter.log.info("qwxzebra " + "y" * (1024 * 1024))
     try:
-        assert len(reporter.tail.lines[-1].encode("utf-8")) <= 64 * 1024
+        assert len(reporter.tail.lines[-1].encode("utf-8")) <= 8 * 1024
         _name, data = reporter._report(ValueError("boom"), None, None)
     finally:
         reporter.log.removeHandler(reporter.tail)

@@ -23,7 +23,7 @@ from crash_scrub import scrub
 APP_ID = "z13-helper"
 LOG_LINES = 500
 MAX_LOG_LINE_CHARS = 2048
-RAW_LINE_CAP_BYTES = 64 * 1024
+RAW_LINE_CAP_BYTES = 8 * 1024   # 500 lines x 8 KiB = 4 MiB worst case (see #30)
 MAX_FATAL_BYTES = 256 * 1024
 MAX_FATAL_READ_BYTES = 1024 * 1024
 MESSAGE_CAP = 4096
