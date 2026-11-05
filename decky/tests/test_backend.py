@@ -4,7 +4,6 @@ Run from the repo root:  python3 -m unittest discover -s decky/tests -v
 """
 
 import asyncio
-import contextlib
 import importlib.util
 import io
 import json
@@ -205,22 +204,19 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(result["message"],
                          "z13ctl write timed out after 20 s (kernel asus-wmi hang?) (step: fans)")
 
-    def test_set_profile_takes_the_shared_authority_lock(self):
+    def test_set_profile_rejects_names_that_are_not_bases(self):
         run = fake_host(self)
-        held = []
-        real = state_authority.transaction
+        result = asyncio.run(m.Plugin().set_profile("custom"))
+        self.assertFalse(result["ok"])
+        self.assertIn("unknown profile", result["message"])
+        self.assertEqual(run.calls, [])
 
-        @contextlib.contextmanager
-        def watching():
-            with real():
-                held.append(True)
-                yield
-
-        with mock.patch.object(state_authority, "transaction", watching):
-            result = asyncio.run(m.Plugin().set_profile("balanced"))
+    def test_set_profile_routes_through_the_profile_engine(self):
+        run = fake_host(self)
+        result = asyncio.run(m.Plugin().set_profile("performance"))
         self.assertTrue(result["ok"])
-        self.assertTrue(held)
-        self.assertIn([m.Z13CTL, "profile", "--set", "balanced"], run.argvs)
+        self.assertEqual(run.argvs, [m.Z13_PROFILE + ["apply", "Turbo"]])
+        self.assertTrue(run.calls[0].as_deck)
 
     def test_profile_timeout_without_step_keeps_bare_message(self):
         output = "z13ctl write timed out after 20 s (kernel asus-wmi hang?)\n"
@@ -335,6 +331,12 @@ class TelemetryTest(unittest.TestCase):
                  "hwmon9": ("k10temp", {"temp1_input": "99000"})}
         for d, (name, files) in nodes.items():
             os.makedirs(os.path.join(self.root, d))
+            if name == "amdgpu":
+                device = os.path.join(self.root, d, "device")
+                os.makedirs(device)
+                for fn, value in (("vendor", "0x1002"), ("device", "0x1586")):
+                    with open(os.path.join(device, fn), "w") as f:
+                        f.write(value + "\n")
             with open(os.path.join(self.root, d, "name"), "w") as f:
                 f.write(name + "\n")
             for fn, v in files.items():
@@ -348,12 +350,14 @@ class TelemetryTest(unittest.TestCase):
         sensor_reader.HWMON_ROOT, m._sensors = self._orig
 
     def test_by_name(self):
-        self.assertEqual(m.telemetry(), {"apu": 52.5, "gpu": 48.0, "fan1": 2100, "fan2": 2250})
+        self.assertEqual(m.telemetry(), {"apu": 52.5, "apu_src": "ACPI", "gpu": 48.0, "gpu_src": "amdgpu edge",
+                                         "fan1": 2100, "fan2": 2250})
 
     def test_missing_nodes_are_none(self):
         sensor_reader.HWMON_ROOT = tempfile.mkdtemp(prefix="z13-empty-")
         m._sensors = sensor_reader.SensorReader()
-        self.assertEqual(m.telemetry(), {"apu": None, "gpu": None, "fan1": None, "fan2": None})
+        self.assertEqual(m.telemetry(), {"apu": None, "apu_src": None, "gpu": None, "gpu_src": None,
+                                         "fan1": None, "fan2": None})
 
 
 class StalledSensors:
@@ -666,6 +670,110 @@ class DesktopAppCheckTest(unittest.TestCase):
     def test_paths_match_the_app(self):
         self.assertTrue(REAL["DESKTOP_APP_SOCKET"].endswith("/app/io.github.iannitram.Z13Helper/z13-helper.sock"))
         self.assertTrue(REAL["DESKTOP_APP_USER_QUIT"].endswith("z13-helper.user-quit"))
+
+
+class PostUpdateTest(unittest.TestCase):
+    def test_argv_is_a_list_with_the_repo_on_pythonpath(self):
+        self.assertEqual(m.post_update_argv("/r", True),
+                         ["env", "PYTHONPATH=/r/tooling:/r/src", "python3", "-m", "post_update",
+                          "--tab-json", "--ack"])
+        with self.assertRaises(ValueError):
+            m.post_update_argv("rel")
+
+    def test_parse_skips_noise_and_rejects_junk(self):
+        self.assertEqual(m.parse_post_update('log\n{"rows": []}'), {"rows": []})
+        self.assertIsNone(m.parse_post_update("nope"))
+        self.assertIsNone(m.parse_post_update('{"rows": 1}'))
+
+    def _call(self, repo, result):
+        calls = []
+
+        def run(argv, timeout=30, *, as_deck=False, input=None):
+            calls.append((argv, as_deck))
+            return result
+
+        with mock.patch.object(m, "_repo_path", return_value=repo), \
+                mock.patch.object(host, "run", run):
+            return asyncio.run(m.Plugin().post_update_status(True)), calls
+
+    def test_status_runs_as_deck_and_returns_the_dict(self):
+        out, calls = self._call("/r", host.Result(0, '{"rows": [], "updated": true}', False))
+        self.assertTrue(out["ok"])
+        self.assertTrue(out["status"]["updated"])
+        self.assertEqual(calls[0][0][-2:], ["--tab-json", "--ack"])
+        self.assertTrue(calls[0][1])
+
+    def test_status_without_repo_or_with_bad_output_is_not_ok(self):
+        out, calls = self._call(None, host.Result(0, "{}", False))
+        self.assertFalse(out["ok"])
+        self.assertEqual(calls, [])
+        out, _ = self._call("/r", host.Result(1, "boom", False))
+        self.assertFalse(out["ok"])
+        self.assertIsNone(out["status"])
+
+
+class PostUpdateRepairTest(unittest.TestCase):
+    def test_argv_plan_and_run(self):
+        base = ["env", "PYTHONPATH=/r/tooling:/r/src", "python3", "-m", "post_update", "repair", "--json"]
+        self.assertEqual(m.post_repair_argv("/r"), base)
+        self.assertEqual(m.post_repair_argv("/r", ["kernel_args", "permission:/etc/x"]),
+                         base + ["--run", "kernel_args,permission:/etc/x"])
+        for bad in ([], ["a b"], ["a;b"], [""], "kernel_args"):
+            with self.assertRaises(ValueError):
+                m.post_repair_argv("/r", bad)
+        with self.assertRaises(ValueError):
+            m.post_repair_argv("rel")
+
+    def test_parse_needs_the_key(self):
+        self.assertEqual(m.parse_json_key('log\n{"steps": []}', "steps"), {"steps": []})
+        self.assertIsNone(m.parse_json_key('{"rows": []}', "steps"))
+        self.assertIsNone(m.parse_json_key("nope", "steps"))
+
+    def _call(self, method, repo, result, *args):
+        calls = []
+
+        def run(argv, timeout=30, *, as_deck=False, input=None):
+            calls.append((argv, as_deck, timeout))
+            return result
+
+        with mock.patch.object(m, "_repo_path", return_value=repo), mock.patch.object(host, "run", run):
+            return asyncio.run(getattr(m.Plugin(), method)(*args)), calls
+
+    def test_plan_changes_nothing_and_runs_as_deck(self):
+        out, calls = self._call("post_update_repair_plan", "/r",
+                                host.Result(0, '{"steps": [{"id": "kernel_args"}], "unplanned": []}', False))
+        self.assertTrue(out["ok"])
+        self.assertEqual(out["plan"]["steps"][0]["id"], "kernel_args")
+        argv, as_deck, _ = calls[0]
+        self.assertTrue(as_deck)
+        self.assertNotIn("--run", argv)            # the plan call never runs a repair
+
+    def test_run_passes_only_the_confirmed_ids_through_the_driver(self):
+        out, calls = self._call("post_update_repair_run", "/r",
+                                host.Result(1, '{"results": [["kernel_args", "rolled back"]]}', False),
+                                ["kernel_args"])
+        self.assertTrue(out["ok"])                  # rc 1 still carries the per-step result
+        self.assertEqual(out["result"]["results"], [["kernel_args", "rolled back"]])
+        argv, as_deck, _ = calls[0]
+        self.assertEqual(argv[-2:], ["--run", "kernel_args"])
+        self.assertTrue(as_deck)
+
+    def test_run_refuses_bad_ids_without_calling_the_host(self):
+        for ids in ([], ["a b"], None, "kernel_args"):
+            out, calls = self._call("post_update_repair_run", "/r", host.Result(0, "{}", False), ids)
+            self.assertFalse(out["ok"])
+            self.assertEqual(calls, [])
+        out, calls = self._call("post_update_repair_run", None, host.Result(0, "{}", False), ["x"])
+        self.assertFalse(out["ok"])
+        self.assertEqual(calls, [])
+
+    def test_plan_without_repo_or_with_junk_is_not_ok(self):
+        out, calls = self._call("post_update_repair_plan", None, host.Result(0, "{}", False))
+        self.assertFalse(out["ok"])
+        self.assertEqual(calls, [])
+        out, _ = self._call("post_update_repair_plan", "/r", host.Result(0, "junk", False))
+        self.assertFalse(out["ok"])
+        self.assertIsNone(out["plan"])
 
 
 if __name__ == "__main__":
