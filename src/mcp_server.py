@@ -569,14 +569,18 @@ def _validated(name, arguments):
         _validate_value(key, value, properties[key])
     if name == "tdp_set":
         _validate_tdp_set(arguments)
-    if name == "post_update_run" and not (
-        arguments.get("ids") or arguments.get("dry_run")
-    ):
-        raise ToolError("post_update_run needs ids, or dry_run to plan")
-    if name == "crash_upload":
-        names = arguments.get("names")
-        if not names:
-            raise ToolError("crash_upload needs the report names to upload")
+    if name == "post_update_run":
+        if not (arguments.get("ids") or arguments.get("dry_run")):
+            raise ToolError("post_update_run needs ids, or dry_run to plan")
+        if any(not item or item.startswith("-") for item in arguments.get("ids", [])):
+            raise ToolError("recipe IDs must be nonempty and must not start with '-'")
+    if name in ("crash_queue", "crash_upload"):
+        if name == "crash_queue":
+            names = [arguments["file"]] if _present(arguments, "file") else []
+        else:
+            names = arguments.get("names")
+            if not names:
+                raise ToolError("crash_upload needs the report names to upload")
         for item in names:
             if item != os.path.basename(item) or not item.endswith(".zip"):
                 raise ToolError("crash report names must be plain .zip file names")
@@ -664,7 +668,7 @@ def serve(stdin=None, stdout=None):
             continue
         try:
             message = json.loads(line)
-        except ValueError:
+        except (ValueError, RecursionError):
             response = _error(None, -32700, "Parse error")
         else:
             response = handle_message(message)

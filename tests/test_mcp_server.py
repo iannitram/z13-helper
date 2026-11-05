@@ -359,6 +359,73 @@ def test_cli_errors_come_back_as_tool_errors(profiles_env):
     assert data["ok"] is False and "no profile" in data["error"]
 
 
+@pytest.mark.parametrize(
+    "name, arguments",
+    [
+        ("post_update_run", {"ids": ["--json"]}),
+        ("post_update_run", {"ids": ["--dry-run"]}),
+        ("post_update_run", {"ids": ["--"]}),
+        ("post_update_run", {"ids": ["-h"]}),
+        ("post_update_run", {"ids": [""]}),
+        ("post_update_run", {"ids": ["amdgpu", "--json"]}),
+        ("post_update_run", {"ids": ["--json"], "dry_run": True}),
+        ("post_update_run", {}),
+        ("crash_queue", {"file": "../report.zip"}),
+        ("crash_queue", {"file": "/tmp/report.zip"}),
+        ("crash_queue", {"file": "nested/report.zip"}),
+        ("crash_queue", {"file": "./report.zip"}),
+        ("crash_queue", {"file": "report.txt"}),
+        ("crash_upload", {"names": ["../report.zip"]}),
+        ("crash_upload", {"names": ["/tmp/report.zip"]}),
+    ],
+)
+def test_unsafe_arguments_are_rejected_before_cli_dispatch(monkeypatch, name, arguments):
+    calls = []
+
+    def dispatch(argv):
+        calls.append(argv)
+        return {"ok": True}, 0
+
+    monkeypatch.setattr(mcp_server, "_run_cli", dispatch)
+    result = mcp_server.call_tool(name, arguments)
+    assert result["isError"] is True
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "arguments, ids, dry_run",
+    [
+        ({"ids": ["amdgpu"]}, ["amdgpu"], False),
+        ({"ids": ["amdgpu", "keyring"]}, ["amdgpu", "keyring"], False),
+        ({"ids": ["amdgpu"], "dry_run": True}, ["amdgpu"], True),
+        ({"dry_run": True}, [], True),
+    ],
+)
+def test_post_update_selection_survives_cli_parsing(monkeypatch, arguments, ids, dry_run):
+    calls = []
+
+    def dispatch(argv):
+        calls.append(cli._parser().parse_args([*argv, "--json"]))
+        return {"ok": True}, 0
+
+    monkeypatch.setattr(mcp_server, "_run_cli", dispatch)
+    payload_of(mcp_server.call_tool("post_update_run", arguments))
+    assert len(calls) == 1
+    assert calls[0].ids == ids
+    assert calls[0].dry_run is dry_run
+
+
+def test_crash_queue_accepts_a_plain_zip_name(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "CRASH_DIR", str(tmp_path / "queue"))
+    (tmp_path / "report.zip").write_bytes(b"PK")
+    assert payload_of(mcp_server.call_tool("crash_queue"))["pending"] == []
+    data = payload_of(mcp_server.call_tool("crash_queue", {"file": "report.zip"}))
+    assert data["queued"] == "report.zip"
+    assert data["pending"] == ["report.zip"]
+    assert (tmp_path / "queue" / "report.zip").read_bytes() == b"PK"
+
+
 def test_json_rpc_round_trip_on_fake_stdio(profiles_env):
     messages = [
         {
@@ -395,3 +462,34 @@ def test_parse_error_gets_a_json_rpc_error():
     response = json.loads(stdout.getvalue())
     assert response["error"]["code"] == -32700
     assert response["id"] is None
+
+
+@pytest.mark.parametrize("opening, closing", [("[", "]"), ('{"a":', "}")])
+def test_json_parser_recursion_error_is_reported_and_server_continues(
+    monkeypatch, opening, closing
+):
+    depth = 2000
+    nested = opening * depth + "0" + closing * depth
+    loads = json.loads
+
+    def parse(text):
+        # JSON decoder nesting limits vary between Python versions.
+        if text == nested:
+            raise RecursionError("maximum recursion depth exceeded")
+        return loads(text)
+
+    monkeypatch.setattr(mcp_server.json, "loads", parse)
+    ping = {"jsonrpc": "2.0", "id": 1, "method": "ping"}
+    stdout = io.StringIO()
+    assert mcp_server.serve(
+        io.StringIO(nested + "\n" + json.dumps(ping) + "\n"), stdout
+    ) == 0
+    responses = [json.loads(line) for line in stdout.getvalue().splitlines()]
+    assert responses == [
+        {
+            "jsonrpc": "2.0",
+            "id": None,
+            "error": {"code": -32700, "message": "Parse error"},
+        },
+        {"jsonrpc": "2.0", "id": 1, "result": {}},
+    ]
