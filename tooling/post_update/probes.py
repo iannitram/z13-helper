@@ -94,7 +94,7 @@ def probe_wmi_write_hang(elapsed_ms: "int | float", write_rc: int, read_val: "st
     if write_rc != 0:
         return ProbeResult("wmi_hang", False, "needed",
                            f"asus-nb-wmi write failed with rc={write_rc} (EIO or error)")
-    if read_val is None or not read_val.strip().isdigit():
+    if not isinstance(read_val, str) or not read_val.strip().isdigit():
         return ProbeResult("wmi_hang", False, "unreadable",
                            f"asus-nb-wmi read-back value invalid: {read_val!r}")
     read_w = int(read_val.strip())

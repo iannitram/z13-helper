@@ -234,8 +234,8 @@ def subcommand(argv: Sequence[str], input_fn=input, out=print, io=None, read=Non
 def collect(home: str, escalate: bool = True) -> tuple:
     """(recipes, errors): built-ins 1-7, the optional packs, then the local recipes."""
     io = make_hostio(escalate)
-    recipes = (builtin_recipes(io) + builtin_recipes_4_6(make_sys(home, escalate)) + pack_recipes(io)
-               + [upstream_probes_recipe(io)])
+    recipes = (builtin_recipes(io) + builtin_recipes_4_6(make_sys(home, escalate))
+               + [upstream_probes_recipe(io)] + pack_recipes(io))
     local, errors = load_local_recipes(home, lambda argv: _run(argv, escalate=escalate),
                                        is_root=os.geteuid() == 0, taken=[r.id for r in recipes],
                                        run_check=_run_plain)
