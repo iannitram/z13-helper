@@ -56,6 +56,7 @@ for _name in ("SHARED_CONFIG", "MAX_FANS_STATE", "PROFILES_STORE", "FAN_TRACE",
     if hasattr(m, _name):
         REAL[_name] = getattr(m, _name)
         setattr(m, _name, os.path.join(_HOME, _name.lower()))
+REAL["FAN_TRACE_DIR"] = m.FAN_TRACE_DIR   # read only; never written by the tests
 
 
 def setUpModule():
