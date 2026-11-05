@@ -485,6 +485,10 @@ def _check_tdp_numbers(numbers, pl1_first=True):
 
 
 def _validate_tdp_set(arguments):
+    if _present(arguments, "values") and any(
+        _present(arguments, rail) for rail in ("pl1", "pl2", "pl3")
+    ):
+        raise ToolError("values cannot be combined with pl1, pl2, or pl3")
     if arguments.get("values") is not None:
         try:
             numbers = cli._parse_tdp_values(arguments["values"], allow_one=True)
@@ -502,6 +506,10 @@ def _validate_tdp_set(arguments):
 
 
 def _validate_profile_set(arguments):
+    if _present(arguments, "tdp") and any(
+        _present(arguments, rail) for rail in ("pl1", "pl2", "pl3")
+    ):
+        raise ToolError("tdp cannot be combined with pl1, pl2, or pl3")
     rails = [
         arguments[rail]
         for rail in ("pl1", "pl2", "pl3")

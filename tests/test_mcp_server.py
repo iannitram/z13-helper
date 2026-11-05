@@ -122,6 +122,75 @@ def test_tdp_set_rejects_out_of_range_or_ordered_pls_before_the_owner(owner, arg
     assert calls == []
 
 
+@pytest.mark.parametrize(
+    "name, combined",
+    [("tdp_set", "values"), ("profile_set", "tdp")],
+)
+@pytest.mark.parametrize(
+    "rails",
+    [
+        {"pl1": 40},
+        {"pl2": 50},
+        {"pl3": 60},
+        {"pl1": 40, "pl2": 50},
+        {"pl1": 40, "pl3": 60},
+        {"pl2": 50, "pl3": 60},
+        {"pl1": 40, "pl2": 50, "pl3": 60},
+    ],
+)
+def test_combined_tdp_and_rails_are_rejected_before_cli_dispatch(
+    monkeypatch, name, combined, rails
+):
+    calls = []
+
+    def dispatch(argv):
+        calls.append(argv)
+        return {"ok": True}, 0
+
+    monkeypatch.setattr(mcp_server, "_run_cli", dispatch)
+    arguments = {combined: "40,50,60", **rails}
+    if name == "profile_set":
+        arguments["name"] = "Turbo"
+    result = mcp_server.call_tool(name, arguments)
+    assert result["isError"] is True
+    error = json.loads(result["content"][0]["text"])["error"]
+    assert error == f"{combined} cannot be combined with pl1, pl2, or pl3"
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "name, arguments, argv",
+    [
+        ("tdp_set", {"values": "40,50,60"}, ["tdp", "set", "40,50,60"]),
+        (
+            "tdp_set",
+            {"pl1": 40, "pl2": 50, "pl3": 60},
+            ["tdp", "set", "--pl1", "40", "--pl2", "50", "--pl3", "60"],
+        ),
+        (
+            "profile_set",
+            {"name": "Turbo", "tdp": "40,50,60"},
+            ["profile", "set", "Turbo", "--tdp", "40,50,60"],
+        ),
+        (
+            "profile_set",
+            {"name": "Turbo", "pl1": 40, "pl2": 50, "pl3": 60},
+            ["profile", "set", "Turbo", "--pl1", "40", "--pl2", "50", "--pl3", "60"],
+        ),
+    ],
+)
+def test_each_tdp_argument_form_dispatches_unchanged(monkeypatch, name, arguments, argv):
+    calls = []
+
+    def dispatch(actual):
+        calls.append(actual)
+        return {"ok": True}, 0
+
+    monkeypatch.setattr(mcp_server, "_run_cli", dispatch)
+    payload_of(mcp_server.call_tool(name, arguments))
+    assert calls == [argv]
+
+
 def test_battery_set_rounds_and_clamps_through_the_owner(owner):
     calls, record = owner
     record("set_field")
