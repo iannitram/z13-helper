@@ -4,7 +4,6 @@ Run from the repo root:  python3 -m unittest discover -s decky/tests -v
 """
 
 import asyncio
-import contextlib
 import importlib.util
 import io
 import json
@@ -207,22 +206,19 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(result["message"],
                          "z13ctl write timed out after 20 s (kernel asus-wmi hang?) (step: fans)")
 
-    def test_set_profile_takes_the_shared_authority_lock(self):
+    def test_set_profile_rejects_names_that_are_not_bases(self):
         run = fake_host(self)
-        held = []
-        real = state_authority.transaction
+        result = asyncio.run(m.Plugin().set_profile("custom"))
+        self.assertFalse(result["ok"])
+        self.assertIn("unknown profile", result["message"])
+        self.assertEqual(run.calls, [])
 
-        @contextlib.contextmanager
-        def watching():
-            with real():
-                held.append(True)
-                yield
-
-        with mock.patch.object(state_authority, "transaction", watching):
-            result = asyncio.run(m.Plugin().set_profile("balanced"))
+    def test_set_profile_routes_through_the_profile_engine(self):
+        run = fake_host(self)
+        result = asyncio.run(m.Plugin().set_profile("performance"))
         self.assertTrue(result["ok"])
-        self.assertTrue(held)
-        self.assertIn([m.Z13CTL, "profile", "--set", "balanced"], run.argvs)
+        self.assertEqual(run.argvs, [m.Z13_PROFILE + ["apply", "Turbo"]])
+        self.assertTrue(run.calls[0].as_deck)
 
     def test_profile_timeout_without_step_keeps_bare_message(self):
         output = "z13ctl write timed out after 20 s (kernel asus-wmi hang?)\n"

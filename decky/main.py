@@ -50,6 +50,9 @@ Z13CTL = os.path.expanduser("~/.local/bin/z13ctl")
 # Always run as deck (as_deck=True) so the store stays deck-owned and hooks (boondock)
 # behave as on the desktop.
 Z13_PROFILE = ["/home/deck/.local/bin/z13-profile"]
+# The firmware base profiles the QAM switch accepts (src/profiles.py BASES), and
+# the built-in app profile that carries each one through the profile engine.
+PROFILE_BASES = {"quiet": "Silent", "balanced": "Balanced", "performance": "Turbo"}
 BOONDOCK = os.path.expanduser("~/.local/bin/boondock")
 SHARED_CONFIG = os.path.expanduser("~/.config/z13-helper/config.json")
 # Max Fans state shared with the desktop app (mirror of src/max_fans_state.py):
@@ -307,6 +310,7 @@ def _shared_config():
 # app, z13-profile and this backend can't lose each other's updates. The lock file is
 # kept deck-owned because we run as root and the other writers run as deck.
 _lock_state = threading.local()
+_lock_fallback_warned = False
 LOCK_TIMEOUT = 10.0   # seconds to wait for another writer before giving up
 
 
@@ -381,10 +385,20 @@ def _file_lock(path):
         if fd is not None:
             os.close(fd)
         raise
-    except OSError:
+    except OSError as e:
         if fd is not None:
             os.close(fd)
-        fd = None   # can't lock (read-only dir?): behave as before, unlocked
+        if e.errno != errno.EROFS:
+            # Only a read-only filesystem is safe to write unlocked; EACCES and
+            # the like mean another writer may hold a lock we cannot open.
+            raise
+        global _lock_fallback_warned
+        if not _lock_fallback_warned:
+            _lock_fallback_warned = True
+            decky.logger.warning(
+                "Cannot lock %s (%s); continuing without a lock", lock_path, e
+            )
+        fd = None   # read-only filesystem: nothing else can be writing either
     held[path] = 1
     try:
         yield
@@ -831,6 +845,7 @@ def make_fan_trace(path=None, owner=DECK_IDS):
 def make_fan_watchdog(sensors=None, fans=None, may_act=None, clock=time.monotonic, trace=None):
     return FanWatchdog(sensors or _sensors, fans or DeckyFans(),
                        max_fans_on=lambda: bool(_load_max_fans().get("enabled", False)),
+                       suspended=lambda: _load_max_fans().get("suspended") is not None,
                        may_act=may_act or _in_gamemode,
                        active_tdp=lambda: (active_profile(_read_store()) or {}).get("tdp"),
                        clock=clock, trace=trace)
@@ -1167,12 +1182,34 @@ class Plugin:
         return await asyncio.to_thread(_current_platform_profile)
 
     async def set_profile(self, profile: str) -> dict:
+        """Switch the firmware base through the profile engine.
+
+        The QAM sends a base name. Applying the matching built-in app profile
+        re-applies TDP, curve, undervolt and EPP, so the hardware and the
+        active profile cannot drift apart the way a bare `profile --set` let
+        them. Unknown names never reach z13ctl.
+        """
+        name = PROFILE_BASES.get(profile)
+        if name is None:
+            return {"ok": False, "message": f"unknown profile {profile!r}"}
         async with _lock():
-            rc, out, _ = await asyncio.to_thread(
-                authority.set_platform_profile, profile, z13ctl=Z13CTL,
-                timeout=Z13CTL_WRITE_TIMEOUT_S)
-        return {"ok": rc == 0, "message": out or (f"{profile} applied" if rc == 0 else
-                f"z13ctl profile failed (rc={rc})")}
+            rc, out = await asyncio.to_thread(
+                lambda: _run(
+                    Z13_PROFILE + ["apply", name],
+                    PROFILE_APPLY_TIMEOUT_S,
+                    as_deck=True,
+                )
+            )
+        ok = rc == 0 and "ERR  profile" not in out
+        timeout_message = _extract_z13ctl_timeout(out)
+        message = (
+            f"{profile} applied"
+            if ok
+            else timeout_message
+            or f"{profile}: profile apply failed ({out[-160:] or f'rc={rc}'})"
+        )
+        decky.logger.info("profile apply %s -> rc=%s", profile, rc)
+        return {"ok": ok, "message": message}
 
     # ---- Power limits / battery / lighting / telemetry (Phase 11) ----
     # Blocking work runs in a thread so the fan watchdog keeps ticking meanwhile.
