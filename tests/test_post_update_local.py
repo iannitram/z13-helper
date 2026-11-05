@@ -18,7 +18,7 @@ def test_parse_local_fields_and_flag_defaults():
     assert parse_local(GOOD) == {
         "id": "tailscale-up", "title": "Tailscale up", "fixes": "Tailscale is down after an update",
         "check": "tailscale status", "apply": "tailscale up",
-        "sudo": True, "network": False, "reboot": False, "pacman": False, "default_on": False}
+        "sudo": True, "network": False, "reboot": False, "pacman": False, "default_on": False, "replaces": ()}
 
 
 @pytest.mark.parametrize("field", ["id", "title", "fixes", "check", "apply"])

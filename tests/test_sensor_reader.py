@@ -9,6 +9,16 @@ from sensor_reader import SensorReader
 CURVE = [(40, 50), (50, 80), (60, 120), (70, 160), (75, 200), (80, 230), (85, 255), (90, 255)]
 
 
+def make_amdgpu(root, index, files=None):
+    path = make_hwmon(root, index, "amdgpu", files)
+    device = path / "device"
+    device.mkdir()
+    (device / "vendor").write_text("0x1002\n")
+    (device / "device").write_text("0x1586\n")
+    (device / "class").write_text("0x038000\n")
+    return path
+
+
 @pytest.fixture
 def hwmon(tmp_path, monkeypatch):
     root = tmp_path / "hwmon"
@@ -24,7 +34,7 @@ def machine(hwmon):
     make_hwmon(hwmon, 1, "acpitz", {"temp1_input": 45500})
     make_hwmon(hwmon, 3, "asus", {"fan1_input": 8700, "fan2_input": 8600})
     make_hwmon(hwmon, 7, "asus_custom_fan_curve", curve_files(CURVE))
-    make_hwmon(hwmon, 12, "amdgpu", {"temp1_input": 51000})
+    make_amdgpu(hwmon, 12, {"temp1_input": 51000})
     return hwmon
 
 
@@ -132,3 +142,73 @@ def test_expected_fan_pwm_max_fans_curve(hwmon):
     assert s.expected_fan_pwm(19) == 0
     assert s.expected_fan_pwm(20) == 255
     assert s.expected_fan_pwm(36 - 3) == 255
+
+
+# --- labeled CPU / GPU temperatures (#25) ---
+
+def test_cpu_temp_falls_back_to_labeled_acpi(machine):
+    assert SensorReader().get_cpu_temp() == (45.5, "ACPI")
+
+
+def test_cpu_temp_prefers_k10temp_tdie_over_tctl(machine):
+    make_hwmon(machine, 4, "k10temp", {"temp1_input": 71000, "temp1_label": "Tctl",
+                                       "temp2_input": 62000, "temp2_label": "Tdie"})
+    assert SensorReader().get_cpu_temp() == (62.0, "k10temp Tdie")
+
+
+def test_cpu_temp_uses_tctl_when_no_tdie(machine):
+    make_hwmon(machine, 4, "k10temp", {"temp1_input": 71000, "temp1_label": "Tctl"})
+    assert SensorReader().get_cpu_temp() == (71.0, "k10temp Tctl")
+
+
+def test_cpu_temp_ignores_unlabeled_k10temp(machine):
+    make_hwmon(machine, 4, "k10temp", {"temp1_input": 99000})
+    assert SensorReader().get_cpu_temp() == (45.5, "ACPI")
+
+
+def test_cpu_temp_unavailable_is_none_not_zero(hwmon):
+    make_hwmon(hwmon, 1, "acpitz", {})                 # node present, value unreadable
+    assert SensorReader().get_cpu_temp() is None
+    assert SensorReader().get_apu_temp() is None
+
+
+def test_gpu_temp_labeled_names_the_sensor(machine):
+    assert SensorReader().get_gpu_temp_labeled() == (51.0, "amdgpu edge")
+    make_hwmon(machine, 12, "amdgpu", {"temp1_input": 52000, "temp1_label": "junction"})
+    assert SensorReader().get_gpu_temp_labeled() == (52.0, "amdgpu junction")
+
+
+def test_gpu_unreadable_is_none(hwmon):
+    make_amdgpu(hwmon, 2)
+    assert SensorReader().get_gpu_temp_labeled() is None
+    assert SensorReader().get_gpu_temp() is None
+
+
+@pytest.mark.parametrize("apu_index,egpu_index", [(5, 1), (1, 5)])
+def test_gpu_picks_strix_halo_without_boot_vga(hwmon, tmp_path, apu_index, egpu_index):
+    # USB4 eGPU has the lower PCI address; hwmon order must not matter either.
+    for index, addr, device_id, temp in (
+        (egpu_index, "0000:03:00.0", "0x73bf", 80000),
+        (apu_index, "0000:c4:00.0", "0x1586", 44000),
+    ):
+        path = make_amdgpu(hwmon, index, {"temp1_input": temp})
+        device = path / "device"
+        (device / "device").write_text(device_id + "\n")
+        device.rename(tmp_path / addr)
+        device.symlink_to(tmp_path / addr)
+        assert not (device / "boot_vga").exists()
+    assert SensorReader().get_gpu_temp_labeled() == (44.0, "amdgpu edge")
+
+
+@pytest.mark.parametrize("vendor,device_id", [
+    ("0x1002", "0x73bf"), ("0x1234", "0x1586"), (None, None),
+])
+def test_gpu_unidentified_is_unavailable(hwmon, vendor, device_id):
+    path = make_hwmon(hwmon, 1, "amdgpu", {"temp1_input": 80000})
+    device = path / "device"
+    device.mkdir()
+    for name, value in (("vendor", vendor), ("device", device_id)):
+        if value is not None:
+            (device / name).write_text(value + "\n")
+    (device / "boot_vga").write_text("1\n")
+    assert SensorReader().get_gpu_temp() is None

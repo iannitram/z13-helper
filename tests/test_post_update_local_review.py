@@ -31,7 +31,7 @@ def test_load_dir_non_utf8_file_is_an_error_row(tmp_path):
 
 def test_parse_local_unknown_keys_are_dropped():
     recipe = parse_local(GOOD.replace("\r\n", "\n") + 'extra = 1\n')
-    assert "extra" not in recipe and len(recipe) == 10
+    assert "extra" not in recipe and len(recipe) == 11
 
 
 def test_parse_local_non_string_id_is_missing_field():

@@ -11,6 +11,8 @@ Nothing here touches hardware, the network, sudo, or the real ~/.config:
   into tmp_path.
 """
 
+import importlib.util
+import logging
 import subprocess
 import sys
 import types
@@ -70,6 +72,19 @@ def no_external_calls(monkeypatch):
     monkeypatch.setattr(subprocess, "Popen", _refuse("subprocess.Popen"))
     monkeypatch.setattr(urllib.request, "urlopen", _refuse("urllib.request.urlopen"))
     monkeypatch.setattr(urllib.request.OpenerDirector, "open", _refuse("urllib opener.open"))
+
+
+@pytest.fixture(autouse=True)
+def no_live_state_daemon(tmp_path, monkeypatch):
+    import state_authority
+    import profiles
+    import max_fans_state
+    monkeypatch.setattr(state_authority, "named_client", lambda: None)
+    root = tmp_path / "isolated-state"
+    monkeypatch.setattr(profiles, "STORE_PATH", str(root / "profiles.json"))
+    monkeypatch.setattr(profiles, "MAX_FANS_PATH", str(root / "max-fans.json"))
+    monkeypatch.setattr(profiles, "LEGACY_CURRENT_PATH", str(root / "legacy-current"))
+    monkeypatch.setattr(max_fans_state, "STATE_PATH", str(root / "max-fans.json"))
 
 
 # ----------------------------------------------------------------------
@@ -165,3 +180,22 @@ def curve_files(points, enable=(1, 1)):
             files[f"pwm{fan}_auto_point{i}_temp"] = t
             files[f"pwm{fan}_auto_point{i}_pwm"] = p
     return files
+
+
+# ----------------------------------------------------------------------
+# decky/main.py
+# ----------------------------------------------------------------------
+
+@pytest.fixture
+def main(monkeypatch):
+    """decky/main.py imported with a stub `decky` module (the loader's is absent)."""
+    stub = types.ModuleType("decky")
+    stub.logger = logging.getLogger("decky.test")
+    stub.DECKY_PLUGIN_SETTINGS_DIR = "/nonexistent-settings-dir"
+    monkeypatch.setitem(sys.modules, "decky", stub)
+    spec = importlib.util.spec_from_file_location("decky_main_under_test",
+                                                  REPO / "decky" / "main.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    monkeypatch.setattr(mod, "logging_enabled", lambda: False)   # the user said no logs
+    return mod

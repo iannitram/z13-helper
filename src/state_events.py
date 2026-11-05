@@ -46,3 +46,24 @@ def op_status(saved: bool, applied: Sequence[bool]) -> str:
         return "saved-not-applied" if saved else "failed"
     else:
         return "partial"
+
+
+def dispatch_event(name, gui_toggle_selected, *, refresh, toggle_window):
+    """Dispatch one event to frontend callbacks without importing a UI toolkit."""
+    action = event_action(name, gui_toggle_selected)
+    if action == "refresh":
+        refresh()
+    elif action == "toggle-window":
+        toggle_window()
+    return action
+
+
+def lighting_level(state, device='keyboard'):
+    """Resolve daemon per-device state before its global lighting default."""
+    setting = (state.get('devices') or {}).get(device)
+    if not isinstance(setting, dict):
+        setting = state.get('lighting') or {}
+    if setting.get('enabled') is False:
+        return 0
+    level = setting.get('brightness')
+    return level if isinstance(level, int) and 0 <= level <= 3 else None

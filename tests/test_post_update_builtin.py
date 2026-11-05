@@ -227,7 +227,7 @@ def test_keyring_runs_inside_readonly_off_window_through_the_runner():
               readonly_disable=lambda: log.append("ro-off"),
               readonly_enable=lambda: log.append("ro-on"))
     assert run_plan([recipe(h, "keyring")], env) == [("keyring", "done")]
-    assert log == ["ro-off", "ro-on"]
+    assert log == ["ro-off", "backup:/etc/pacman.d/gnupg", "ro-on"]   # keyring folder backed up first
     # The runner calls the read-only check first (--list-keys), then the two applies.
     assert h.commands == [["pacman-key", "--list-keys"], ["pacman-key", "--init"], ["pacman-key", "--populate"]]
 

@@ -32,6 +32,7 @@ import fan_watchdog
 import host
 import power_range
 import profiles
+import state_authority
 import sensor_reader
 
 _SETTINGS = tempfile.mkdtemp(prefix="z13-helper-settings-")
@@ -99,6 +100,15 @@ FAIL_OUT = "write /dev/hidraw5: connection timed out"
 def fake_host(test, fail_if=(), out=FAIL_OUT):
     """A FakeHost installed as host.run for the rest of `test`; calls whose argv
     contains a fail_if substring answer (1, out)."""
+    for attr, value in (("STORE_PATH", os.path.join(_HOME, "engine-profiles.json")),
+                        ("MAX_FANS_PATH", os.path.join(_HOME, "engine-max-fans.json")),
+                        ("LEGACY_CURRENT_PATH", os.path.join(_HOME, "engine-legacy"))):
+        p = mock.patch.object(profiles, attr, value)
+        p.start()
+        test.addCleanup(p.stop)
+    p = mock.patch.object(state_authority, 'named_client', return_value=None)
+    p.start()
+    test.addCleanup(p.stop)
     fh = FakeHost()
     for sub in fail_if:
         fh.fail(sub, out=out)
@@ -178,74 +188,13 @@ class StoreTest(unittest.TestCase):
         with open(self.path) as f:
             return json.load(f)
 
-    def test_update_active_only(self):
-        s = _store("Balanced")
-        name = m.update_active_profile(s, tdp={"pl1": 25, "pl2": 30, "pl3": 35, "force": False})
-        self.assertEqual(name, "Balanced")
-        by = {p["name"]: p for p in s["profiles"]}
-        self.assertEqual(by["Balanced"]["tdp"]["pl1"], 25)
-        self.assertIsNone(by["Silent"]["tdp"])
-        self.assertEqual(by["Boondock"]["tdp"]["pl1"], 20)
 
-    def test_update_rejects_unknown_fields(self):
-        with self.assertRaises(ValueError):
-            m.update_active_profile(_store(), fan_curve=None)
 
-    def test_update_without_active_raises(self):
-        with self.assertRaises(KeyError):
-            m.update_active_profile(_store("Nope"), battery_limit=60)
 
-    def test_atomic_write_roundtrip(self):
-        s = _store("Silent")
-        m.write_store_atomic(s)
-        self.assertEqual(self._read(), s)
-        self.assertEqual(os.listdir(self.dir), ["profiles.json"])   # no tmp left behind
-        self.assertEqual(os.stat(self.path).st_mode & 0o777, 0o644)
 
-    def test_schema_keys_preserved(self):
-        self._write(_store("Balanced"))
-        name, err = m._set_active_field(battery_limit=60)
-        self.assertEqual((name, err), ("Balanced", None))
-        after = self._read()
-        self.assertEqual(set(after), {"version", "active", "profiles"})
-        for p in after["profiles"]:
-            self.assertEqual(set(p), {"name", "builtin", "base", "tdp", "fan_curve", "undervolt",
-                                      "brightness", "battery_limit", "hooks"})
-        self.assertEqual(m.active_profile(after)["battery_limit"], 60)
 
-    def test_apply_tdp_on_writes_store_then_z13ctl(self):
-        self._write(_store("Balanced"))
-        run = fake_host(self)
-        res = m.apply_tdp(True, 60, 40, 30)
-        self.assertTrue(res["ok"] and res["saved"])
-        self.assertEqual(m.active_profile(self._read())["tdp"],
-                         {"pl1": 60, "pl2": 60, "pl3": 60, "force": False})
-        self.assertEqual(len(run.calls), 1)
-        argv = run.calls[0].argv
-        self.assertEqual(argv[argv.index("tdp"):], ["tdp", "--set", "60", "--pl2", "60", "--pl3", "60"])
-        self.assertTrue(run.calls[0].as_deck)
 
-    def test_apply_tdp_off_clears_and_reapplies_profile(self):
-        self._write(_store("Boondock"))
-        run = fake_host(self)
-        res = m.apply_tdp(False, 20, 30, 40)
-        self.assertTrue(res["ok"])
-        self.assertIsNone(m.active_profile(self._read())["tdp"])
-        argv, timeout, as_deck, _ = run.calls[0]
-        self.assertEqual(argv[:len(m.Z13_PROFILE)], m.Z13_PROFILE)
-        self.assertTrue(as_deck)  # like set_app_profile
-        self.assertTrue(argv[-4].endswith("/z13-profile"))
-        self.assertEqual(argv[-3:], ["apply", "Boondock", "--no-hooks"])
-        self.assertGreaterEqual(timeout, 60)
 
-    def test_apply_tdp_off_preserves_formatted_profile_timeout(self):
-        self._write(_store("Boondock"))
-        run = fake_host(self)
-        output = _formatted_profile_timeout()
-        run.fail("z13-profile", rc=1, out=output)
-        result = m.apply_tdp(False, 20, 30, 40)
-        self.assertEqual(result["message"],
-                         "z13ctl write timed out after 20 s (kernel asus-wmi hang?) (step: fans)")
 
     def test_set_app_profile_preserves_formatted_profile_timeout(self):
         run = fake_host(self)
@@ -255,103 +204,33 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(result["message"],
                          "z13ctl write timed out after 20 s (kernel asus-wmi hang?) (step: fans)")
 
+    def test_set_profile_rejects_names_that_are_not_bases(self):
+        run = fake_host(self)
+        result = asyncio.run(m.Plugin().set_profile("custom"))
+        self.assertFalse(result["ok"])
+        self.assertIn("unknown profile", result["message"])
+        self.assertEqual(run.calls, [])
+
+    def test_set_profile_routes_through_the_profile_engine(self):
+        run = fake_host(self)
+        result = asyncio.run(m.Plugin().set_profile("performance"))
+        self.assertTrue(result["ok"])
+        self.assertEqual(run.argvs, [m.Z13_PROFILE + ["apply", "Turbo"]])
+        self.assertTrue(run.calls[0].as_deck)
+
     def test_profile_timeout_without_step_keeps_bare_message(self):
         output = "z13ctl write timed out after 20 s (kernel asus-wmi hang?)\n"
         self.assertEqual(m._extract_z13ctl_timeout(output),
                          "z13ctl write timed out after 20 s (kernel asus-wmi hang?)")
 
-    def test_apply_tdp_hw_failure_still_saved(self):
-        self._write(_store("Balanced"))
-        fake_host(self, fail_if=("tdp",))
-        res = m.apply_tdp(True, 20, 30, 40)
-        self.assertFalse(res["ok"])
-        self.assertTrue(res["saved"])
 
-    def test_apply_tdp_timeout_is_clear_and_bounded(self):
-        self._write(_store("Balanced"))
-        run = fake_host(self)
-        run.fail("tdp", rc=124, out="timed out after 20 s", timed_out=True)
-        res = m.apply_tdp(True, 20, 30, 40)
-        self.assertFalse(res["ok"])
-        self.assertTrue(res["saved"])
-        self.assertIn("z13ctl write timed out after 20 s (kernel asus-wmi hang?)", res["message"])
-        self.assertEqual(run.calls[0].timeout, m.Z13CTL_WRITE_TIMEOUT_S)
 
-    def test_apply_battery_limit_timeout_is_clear_and_bounded(self):
-        self._write(_store("Balanced"))
-        run = fake_host(self)
-        run.fail("batterylimit", rc=124, out="timed out after 20 s", timed_out=True)
-        res = m.apply_battery_limit(80)
-        self.assertFalse(res["ok"])
-        self.assertIn("z13ctl write timed out after 20 s (kernel asus-wmi hang?)", res["message"])
-        self.assertEqual(run.calls[0].timeout, m.Z13CTL_WRITE_TIMEOUT_S)
 
-    def test_apply_tdp_no_store_touches_nothing(self):
-        run = fake_host(self)
-        orig = m._ensure_store
-        m._ensure_store = lambda: None
-        try:
-            res = m.apply_tdp(True, 20, 30, 40)
-        finally:
-            m._ensure_store = orig
-        self.assertFalse(res["saved"])
-        self.assertEqual(run.calls, [])
 
-    def test_written_profile_passes_engine_validation(self):
-        """What we write must satisfy src/profiles.py's own validate() (the schema owner)."""
-        src = os.path.join(os.path.dirname(os.path.dirname(HERE)), "src", "profiles.py")
-        if not os.path.exists(src):
-            self.skipTest("src/profiles.py not found")
-        spec = importlib.util.spec_from_file_location("z13_profiles_engine", src)
-        engine = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(engine)
-        for args in ((True, 20, 30, 40), (True, 93, 5, 5), (True, 75, 75, 75), (False, 0, 0, 0)):
-            self._write(_store("Balanced"))
-            fake_host(self)
-            m.apply_tdp(*args)
-            m.apply_battery_limit(42)
-            for p in self._read()["profiles"]:
-                engine.validate(p)
 
-    def test_apply_tdp_for_a_stale_profile_is_rejected(self):
-        """A slider edit aimed at A that lands after B became active must not write B."""
-        self._write(_store("Boondock"))
-        run = fake_host(self)
-        before = self._read()
-        res = m.apply_tdp(True, 75, 75, 75, profile="Balanced")
-        self.assertFalse(res["ok"])
-        self.assertFalse(res["saved"])
-        self.assertTrue(res["stale"])
-        self.assertIn("Balanced", res["message"])
-        self.assertEqual(self._read(), before)
-        self.assertEqual(run.calls, [])
 
-    def test_apply_battery_limit_for_a_stale_profile_is_rejected(self):
-        self._write(_store("Silent"))
-        run = fake_host(self)
-        before = self._read()
-        res = m.apply_battery_limit(60, profile="Balanced")
-        self.assertFalse(res["ok"])
-        self.assertTrue(res["stale"])
-        self.assertEqual(self._read(), before)
-        self.assertEqual(run.calls, [])  # no hardware write either
 
-    def test_targeted_request_for_the_active_profile_is_applied(self):
-        self._write(_store("Balanced"))
-        fake_host(self)
-        self.assertTrue(m.apply_tdp(True, 30, 30, 30, profile="Balanced")["saved"])
-        self.assertEqual(m.apply_battery_limit(60, profile="Balanced")["value"], 60)
-        self.assertEqual(m.active_profile(self._read())["battery_limit"], 60)
 
-    def test_apply_battery_limit(self):
-        self._write(_store("Silent"))
-        run = fake_host(self)
-        res = m.apply_battery_limit(63)
-        self.assertTrue(res["ok"] and res["saved"])
-        self.assertEqual(res["value"], 65)
-        self.assertEqual(m.active_profile(self._read())["battery_limit"], 65)
-        self.assertEqual(run.calls[0].argv[-3:], ["batterylimit", "--set", "65"])
-        self.assertTrue(run.calls[0].as_deck)
 
 
 class FileLockSafetyTest(unittest.TestCase):
@@ -436,241 +315,10 @@ class FileLockSafetyTest(unittest.TestCase):
         self.assertTrue(os.path.isfile(self.store + ".lock"))
 
 
-class BrightnessTest(unittest.TestCase):
-    def test_one_call_per_device(self):
-        run = fake_host(self)
-        res = m.set_brightness_per_device("low")
-        self.assertEqual(res, {"ok": True, "failed": [], "message": "Brightness low"})
-        devs = [a[a.index("--device") + 1] for a in run.argvs]
-        self.assertEqual(devs, ["keyboard", "lightbar"])
-
-    def test_wedged_lightbar_does_not_fail_keyboard(self):
-        recovers = []
-        fake_host(self, fail_if=("--device lightbar",))
-        res = m.set_brightness_per_device(
-            "high",
-            recover=lambda: recovers.append(1) or (False, "lightbar reset skipped"))
-        self.assertTrue(res["ok"])
-        self.assertEqual(res["failed"], ["lightbar"])
-        self.assertIn("lightbar not responding", res["message"])
-        self.assertEqual(recovers, [1])
-
-    def test_all_failed(self):
-        fake_host(self, fail_if=("brightness",))
-        res = m.set_brightness_per_device("off",
-                                          recover=lambda: (False, "skipped"))
-        self.assertFalse(res["ok"])
-        self.assertEqual(res["failed"], ["keyboard", "lightbar"])
-
-    def test_bad_level_runs_nothing(self):
-        run = fake_host(self)
-        self.assertFalse(m.set_brightness_per_device("max")["ok"])
-        self.assertEqual(run.calls, [])
-
-    def test_timed_out_lightbar_write_is_reported_without_recovery(self):
-        run = fake_host(self)
-        run.fail("--device lightbar", rc=124, out="timed out after 20 s", timed_out=True)
-        recoveries = []
-        result = m.set_brightness_per_device(
-            "low", recover=lambda: recoveries.append("reset") or (True, "recovered"))
-        self.assertEqual(result["message"],
-                         "z13ctl write timed out after 20 s (kernel asus-wmi hang?)")
-        self.assertEqual(len(run.calls), 2)  # keyboard, then timed out lightbar
-        self.assertEqual(recoveries, [])
 
 
-class LightbarRecoveryTest(unittest.TestCase):
-    """Copy of src/profiles.py recover_lightbar()/recover_lightbar_stale(); same rules, same tests."""
-
-    def setUp(self):
-        d = tempfile.mkdtemp(prefix="z13-stamp-")
-        self.stamp = os.path.join(d, "z13-lightbar-reset.stamp")
-        self.daemon_stamp = os.path.join(d, "z13-lightbar-daemon-restart.stamp")
-        self.slept = []
-
-    def recover(self, now=1000.0):
-        return m.recover_lightbar(sleep=self.slept.append, now=lambda: now, stamp=self.stamp)
-
-    def recover_stale(self, now=1000.0):
-        return m.recover_lightbar_stale(sleep=self.slept.append, now=lambda: now, stamp=self.daemon_stamp)
-
-    def test_timeout_gets_one_reset_daemon_restart_and_one_retry_keyboard_first(self):
-        # The lightbar times out once; the retry after the reset succeeds.
-        run = fake_host(self).fail("--device lightbar", times=1,
-                                   out="init packet 1: write /dev/hidraw5: connection timed out")
-        res = m.set_brightness_per_device("low", recover=self.recover)
-        lines = run.lines
-        self.assertEqual(len(lines), 5)
-        self.assertIn("--device keyboard", lines[0])
-        self.assertIn("--device lightbar", lines[1])
-        # The reset unit runs as this backend's own user; the daemon restart and
-        # the lighting writes as deck (host.run adds the runuser hop under root).
-        self.assertEqual([c.as_deck for c in run.calls], [True, True, False, True, True])
-        self.assertTrue(lines[2].startswith("systemctl start"))
-        self.assertTrue(lines[2].endswith(m.LIGHTBAR_RESET_UNIT))
-        self.assertIn("systemctl --user restart", lines[3])
-        self.assertTrue(lines[3].endswith(m.Z13CTL_SERVICE))
-        self.assertIn("--device lightbar", lines[4])
-        self.assertEqual(res["failed"], [])
-        self.assertIn("lightbar recovered", res["message"])
-        self.assertEqual(self.slept, [m.LIGHTBAR_RESET_SETTLE_S, m.LIGHTBAR_DAEMON_RESTART_WAIT_S])
-
-    def test_stale_gets_one_daemon_restart_and_one_retry_no_usb_reset(self):
-        # ENODEV once; the retry after the daemon restart succeeds.
-        run = fake_host(self).fail("--device lightbar", times=1,
-                                   out="init packet 1: write /dev/hidraw5: no such device")
-        res = m.set_brightness_per_device("low", recover_stale=self.recover_stale)
-        lines = run.lines
-        self.assertEqual(len(lines), 4)
-        self.assertIn("--device keyboard", lines[0])
-        self.assertIn("--device lightbar", lines[1])
-        self.assertIn("systemctl --user restart", lines[2])
-        self.assertTrue(lines[2].endswith(m.Z13CTL_SERVICE))
-        self.assertIn("--device lightbar", lines[3])
-        self.assertFalse(any(line.startswith("systemctl start") for line in lines))
-        self.assertEqual(res["failed"], [])
-        self.assertIn("lightbar recovered", res["message"])
-        self.assertEqual(self.slept, [m.LIGHTBAR_DAEMON_RESTART_WAIT_S])
-
-    def test_unrecognised_failure_no_recovery(self):
-        run = fake_host(self, fail_if=("lightbar",), out="permission denied")
-        res = m.set_brightness_per_device("low")
-        self.assertEqual(len(run.calls), 2)
-        self.assertEqual(res["failed"], ["lightbar"])
-
-    def test_still_wedged_after_reset_retries_only_once(self):
-        run = fake_host(self, fail_if=("--device lightbar",))
-        res = m.set_brightness_per_device(
-            "low", recover=self.recover)
-        lightbar = [a for a in run.argvs if "lightbar" in a]
-        self.assertEqual(len(lightbar), 2)      # first write + exactly one retry
-        self.assertEqual(res["failed"], ["lightbar"])
-        self.assertIn("still wedged", res["message"])
-
-    def test_still_stale_after_daemon_restart_retries_only_once(self):
-        run = fake_host(self, fail_if=("lightbar",), out="write /dev/hidraw5: no such device")
-        res = m.set_brightness_per_device(
-            "low", recover_stale=self.recover_stale)
-        lightbar = [a for a in run.argvs if "lightbar" in a]
-        self.assertEqual(len(lightbar), 2)      # first write + exactly one retry
-        self.assertEqual(res["failed"], ["lightbar"])
-        self.assertIn("still failing after a daemon restart", res["message"])
-
-    def test_rate_limit(self):
-        run = fake_host(self)
-        self.assertEqual(self.recover(now=1000.0)[0], True)
-        os.utime(self.stamp, (1000.0, 1000.0))
-        ok, msg = self.recover(now=1000.0 + m.LIGHTBAR_RESET_MIN_GAP_S - 1)
-        self.assertFalse(ok)
-        self.assertIn("skipped", msg)
-        self.assertEqual(len([a for a in run.argvs if "systemctl start" in " ".join(a)]), 1)
-        self.assertTrue(self.recover(now=1000.0 + m.LIGHTBAR_RESET_MIN_GAP_S + 1)[0])
-        self.assertEqual(len([a for a in run.argvs if "systemctl start" in " ".join(a)]), 2)
-
-    def test_stale_rate_limit(self):
-        run = fake_host(self)
-        self.assertEqual(self.recover_stale(now=1000.0)[0], True)
-        os.utime(self.daemon_stamp, (1000.0, 1000.0))
-        ok, msg = self.recover_stale(now=1000.0 + m.LIGHTBAR_RESET_MIN_GAP_S - 1)
-        self.assertFalse(ok)
-        self.assertIn("skipped", msg)
-        self.assertEqual(len(run.calls), 1)
-        self.assertTrue(self.recover_stale(now=1000.0 + m.LIGHTBAR_RESET_MIN_GAP_S + 1)[0])
-        self.assertEqual(len(run.calls), 2)
-
-    def test_reset_unit_failure_is_reported(self):
-        fake_host(self, fail_if=("systemctl start",))
-        ok, msg = self.recover()
-        self.assertFalse(ok)
-        self.assertIn("reset failed", msg)
-        self.assertEqual(self.slept, [])
-
-    def test_daemon_restart_failure_is_reported_but_reset_still_counts_as_ok(self):
-        fake_host(self, fail_if=("systemctl --user restart",))
-        ok, msg = self.recover()
-        self.assertTrue(ok)      # the USB reset itself succeeded
-        self.assertIn("daemon restart failed", msg)
-
-    def test_stale_daemon_restart_failure_means_not_ok(self):
-        fake_host(self, fail_if=("systemctl --user restart",))
-        ok, msg = self.recover_stale()
-        self.assertFalse(ok)
-        self.assertIn("daemon restart failed", msg)
-
-    def test_matches_engine_constants(self):
-        src = os.path.join(os.path.dirname(os.path.dirname(HERE)), "src", "profiles.py")
-        if not os.path.exists(src):
-            self.skipTest("src/profiles.py not found")
-        spec = importlib.util.spec_from_file_location("z13_profiles_engine2", src)
-        engine = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(engine)
-        for k in ("LIGHTBAR_RESET_UNIT", "LIGHTBAR_RESET_MIN_GAP_S", "LIGHTBAR_RESET_SETTLE_S",
-                  "Z13CTL_SERVICE", "LIGHTBAR_DAEMON_RESTART_WAIT_S"):
-            self.assertEqual(getattr(m, k), getattr(engine, k), k)
-        for out in ("write /dev/hidraw5: connection timed out", "timed out",
-                     "write /dev/hidraw5: no such device", "boom", ""):
-            self.assertEqual(m.lightbar_timed_out(out), engine.lightbar_timed_out(out))
-            self.assertEqual(m.lightbar_failure_kind(out), engine.lightbar_failure_kind(out))
 
 
-class MaxFansOffTest(unittest.TestCase):
-    """OFF must match the desktop app's off(): saved snapshot, else the ACTIVE
-    profile's curve, else firmware auto (saved_curve null = profile had no curve)."""
-
-    def test_saved_snapshot_wins(self):
-        argv = m.max_fans_off_argv({"saved_curve": [[40, 51], [50, 102]]}, _store("Balanced"))
-        self.assertEqual(argv[-3:], ["fancurve", "--set", "40:51,50:102"])
-
-    def test_null_saved_is_firmware_auto_even_with_a_profile_curve(self):
-        argv = m.max_fans_off_argv({"enabled": True, "saved_curve": None}, _store("Balanced"))
-        self.assertEqual(argv[-2:], ["fancurve", "--reset"])
-
-    def test_missing_saved_uses_active_profile_curve_in_percent(self):
-        argv = m.max_fans_off_argv({"enabled": True}, _store("Balanced"))
-        self.assertEqual(argv[-2], "--set")
-        self.assertTrue(argv[-1].startswith("40:20%,50:35%"))
-
-    def test_no_curve_anywhere_resets_to_firmware_auto(self):
-        for store in (_store("Silent"), None):
-            argv = m.max_fans_off_argv({"saved_curve": None}, store)
-            self.assertEqual(argv[-2:], ["fancurve", "--reset"])
-
-    def test_never_falls_back_to_a_made_up_curve(self):
-        self.assertFalse(hasattr(m, "CUSTOM_FALLBACK"))
-
-    def test_off_blocking_writes_state_only_on_success(self):
-        saved = {}
-        orig = (m._load_max_fans, m._update_max_fans, m._read_store)
-        m._load_max_fans = lambda: {"enabled": True, "saved_curve": None}
-        m._update_max_fans = lambda **kw: saved.update(kw)
-        m._read_store = lambda path=None: _store("Silent")
-        try:
-            run = fake_host(self, fail_if=("fancurve",))
-            result = m.set_max_fans_blocking(False)
-            self.assertFalse(result["ok"])
-            self.assertEqual(saved, {})
-            run = fake_host(self)
-            self.assertTrue(m.set_max_fans_blocking(False)["ok"])
-            self.assertEqual(run.calls[0][0][-2:], ["fancurve", "--reset"])
-            self.assertEqual(saved, {"enabled": False})
-        finally:
-            m._load_max_fans, m._update_max_fans, m._read_store = orig
-
-    def test_timed_out_off_returns_exact_error_without_state_change(self):
-        saved = {}
-        orig = (m._load_max_fans, m._update_max_fans, m._read_store)
-        m._load_max_fans = lambda: {"enabled": True, "saved_curve": None}
-        m._update_max_fans = lambda **kw: saved.update(kw)
-        m._read_store = lambda path=None: _store("Silent")
-        try:
-            run = fake_host(self)
-            run.fail("fancurve", rc=124, out="timed out after 20 s", timed_out=True)
-            result = m.set_max_fans_blocking(False)
-            self.assertEqual(result["message"],
-                             "z13ctl write timed out after 20 s (kernel asus-wmi hang?)")
-            self.assertEqual(saved, {})
-        finally:
-            m._load_max_fans, m._update_max_fans, m._read_store = orig
 
 
 class TelemetryTest(unittest.TestCase):
@@ -683,6 +331,12 @@ class TelemetryTest(unittest.TestCase):
                  "hwmon9": ("k10temp", {"temp1_input": "99000"})}
         for d, (name, files) in nodes.items():
             os.makedirs(os.path.join(self.root, d))
+            if name == "amdgpu":
+                device = os.path.join(self.root, d, "device")
+                os.makedirs(device)
+                for fn, value in (("vendor", "0x1002"), ("device", "0x1586")):
+                    with open(os.path.join(device, fn), "w") as f:
+                        f.write(value + "\n")
             with open(os.path.join(self.root, d, "name"), "w") as f:
                 f.write(name + "\n")
             for fn, v in files.items():
@@ -696,12 +350,14 @@ class TelemetryTest(unittest.TestCase):
         sensor_reader.HWMON_ROOT, m._sensors = self._orig
 
     def test_by_name(self):
-        self.assertEqual(m.telemetry(), {"apu": 52.5, "gpu": 48.0, "fan1": 2100, "fan2": 2250})
+        self.assertEqual(m.telemetry(), {"apu": 52.5, "apu_src": "ACPI", "gpu": 48.0, "gpu_src": "amdgpu edge",
+                                         "fan1": 2100, "fan2": 2250})
 
     def test_missing_nodes_are_none(self):
         sensor_reader.HWMON_ROOT = tempfile.mkdtemp(prefix="z13-empty-")
         m._sensors = sensor_reader.SensorReader()
-        self.assertEqual(m.telemetry(), {"apu": None, "gpu": None, "fan1": None, "fan2": None})
+        self.assertEqual(m.telemetry(), {"apu": None, "apu_src": None, "gpu": None, "gpu_src": None,
+                                         "fan1": None, "fan2": None})
 
 
 class StalledSensors:
@@ -1014,6 +670,110 @@ class DesktopAppCheckTest(unittest.TestCase):
     def test_paths_match_the_app(self):
         self.assertTrue(REAL["DESKTOP_APP_SOCKET"].endswith("/app/io.github.iannitram.Z13Helper/z13-helper.sock"))
         self.assertTrue(REAL["DESKTOP_APP_USER_QUIT"].endswith("z13-helper.user-quit"))
+
+
+class PostUpdateTest(unittest.TestCase):
+    def test_argv_is_a_list_with_the_repo_on_pythonpath(self):
+        self.assertEqual(m.post_update_argv("/r", True),
+                         ["env", "PYTHONPATH=/r/tooling:/r/src", "python3", "-m", "post_update",
+                          "--tab-json", "--ack"])
+        with self.assertRaises(ValueError):
+            m.post_update_argv("rel")
+
+    def test_parse_skips_noise_and_rejects_junk(self):
+        self.assertEqual(m.parse_post_update('log\n{"rows": []}'), {"rows": []})
+        self.assertIsNone(m.parse_post_update("nope"))
+        self.assertIsNone(m.parse_post_update('{"rows": 1}'))
+
+    def _call(self, repo, result):
+        calls = []
+
+        def run(argv, timeout=30, *, as_deck=False, input=None):
+            calls.append((argv, as_deck))
+            return result
+
+        with mock.patch.object(m, "_repo_path", return_value=repo), \
+                mock.patch.object(host, "run", run):
+            return asyncio.run(m.Plugin().post_update_status(True)), calls
+
+    def test_status_runs_as_deck_and_returns_the_dict(self):
+        out, calls = self._call("/r", host.Result(0, '{"rows": [], "updated": true}', False))
+        self.assertTrue(out["ok"])
+        self.assertTrue(out["status"]["updated"])
+        self.assertEqual(calls[0][0][-2:], ["--tab-json", "--ack"])
+        self.assertTrue(calls[0][1])
+
+    def test_status_without_repo_or_with_bad_output_is_not_ok(self):
+        out, calls = self._call(None, host.Result(0, "{}", False))
+        self.assertFalse(out["ok"])
+        self.assertEqual(calls, [])
+        out, _ = self._call("/r", host.Result(1, "boom", False))
+        self.assertFalse(out["ok"])
+        self.assertIsNone(out["status"])
+
+
+class PostUpdateRepairTest(unittest.TestCase):
+    def test_argv_plan_and_run(self):
+        base = ["env", "PYTHONPATH=/r/tooling:/r/src", "python3", "-m", "post_update", "repair", "--json"]
+        self.assertEqual(m.post_repair_argv("/r"), base)
+        self.assertEqual(m.post_repair_argv("/r", ["kernel_args", "permission:/etc/x"]),
+                         base + ["--run", "kernel_args,permission:/etc/x"])
+        for bad in ([], ["a b"], ["a;b"], [""], "kernel_args"):
+            with self.assertRaises(ValueError):
+                m.post_repair_argv("/r", bad)
+        with self.assertRaises(ValueError):
+            m.post_repair_argv("rel")
+
+    def test_parse_needs_the_key(self):
+        self.assertEqual(m.parse_json_key('log\n{"steps": []}', "steps"), {"steps": []})
+        self.assertIsNone(m.parse_json_key('{"rows": []}', "steps"))
+        self.assertIsNone(m.parse_json_key("nope", "steps"))
+
+    def _call(self, method, repo, result, *args):
+        calls = []
+
+        def run(argv, timeout=30, *, as_deck=False, input=None):
+            calls.append((argv, as_deck, timeout))
+            return result
+
+        with mock.patch.object(m, "_repo_path", return_value=repo), mock.patch.object(host, "run", run):
+            return asyncio.run(getattr(m.Plugin(), method)(*args)), calls
+
+    def test_plan_changes_nothing_and_runs_as_deck(self):
+        out, calls = self._call("post_update_repair_plan", "/r",
+                                host.Result(0, '{"steps": [{"id": "kernel_args"}], "unplanned": []}', False))
+        self.assertTrue(out["ok"])
+        self.assertEqual(out["plan"]["steps"][0]["id"], "kernel_args")
+        argv, as_deck, _ = calls[0]
+        self.assertTrue(as_deck)
+        self.assertNotIn("--run", argv)            # the plan call never runs a repair
+
+    def test_run_passes_only_the_confirmed_ids_through_the_driver(self):
+        out, calls = self._call("post_update_repair_run", "/r",
+                                host.Result(1, '{"results": [["kernel_args", "rolled back"]]}', False),
+                                ["kernel_args"])
+        self.assertTrue(out["ok"])                  # rc 1 still carries the per-step result
+        self.assertEqual(out["result"]["results"], [["kernel_args", "rolled back"]])
+        argv, as_deck, _ = calls[0]
+        self.assertEqual(argv[-2:], ["--run", "kernel_args"])
+        self.assertTrue(as_deck)
+
+    def test_run_refuses_bad_ids_without_calling_the_host(self):
+        for ids in ([], ["a b"], None, "kernel_args"):
+            out, calls = self._call("post_update_repair_run", "/r", host.Result(0, "{}", False), ids)
+            self.assertFalse(out["ok"])
+            self.assertEqual(calls, [])
+        out, calls = self._call("post_update_repair_run", None, host.Result(0, "{}", False), ["x"])
+        self.assertFalse(out["ok"])
+        self.assertEqual(calls, [])
+
+    def test_plan_without_repo_or_with_junk_is_not_ok(self):
+        out, calls = self._call("post_update_repair_plan", None, host.Result(0, "{}", False))
+        self.assertFalse(out["ok"])
+        self.assertEqual(calls, [])
+        out, _ = self._call("post_update_repair_plan", "/r", host.Result(0, "junk", False))
+        self.assertFalse(out["ok"])
+        self.assertIsNone(out["plan"])
 
 
 if __name__ == "__main__":
