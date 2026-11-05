@@ -21,7 +21,7 @@ GOAL_NOT_MET = "goal_not_met"
 # two signal writes (those reported via `last_write`; this module cannot see profile
 # applies or hardware_controller lighting writes, so the runner (#130) should pass the
 # time of the latest lightbar write of any kind), and the longest a one-shot may show,
-# measured from that same last write.
+# measured separately from its first successful signal write.
 MIN_WRITE_INTERVAL_S = 3.0
 ONE_SHOT_S = 3.0
 
@@ -61,15 +61,15 @@ def signal_for(event: str) -> Optional[Signal]:
     return SIGNALS.get(event)
 
 
-def active_signal(active: Mapping[str, Optional[float]], now: float,
-                  last_write: Optional[float] = None,
-                  shown: Optional[Pattern] = None) -> Optional[Signal]:
-    """Highest-priority signal showing now.
+def active_signal(active: Mapping[str, Optional[float]], now: float, *,
+                  shown_at: Optional[Mapping[str, float]] = None) -> Optional[Signal]:
+    """Highest-priority pending or unexpired signal.
 
-    `active` maps event -> start time (sticky events stay while present; one-shots
-    expire `duration_s` after the latest lightbar write, not the event start, so a
-    write made at the same moment (a profile apply) does not use up the window while
-    it defers the play). Unknown events are ignored.
+    `active` maps event -> start time; sticky events stay while present. `shown_at`
+    maps one-shot event -> first successful play time for that occurrence. Missing
+    entries (or times older than the event start) are pending and do not expire.
+    Callers record a successful play once and retain it until the event is removed
+    or restarted, even while another signal is showing. Unknown events are ignored.
     """
     best = None
     for event, started in active.items():
@@ -77,13 +77,8 @@ def active_signal(active: Mapping[str, Optional[float]], now: float,
         if sig is None or started is None:
             continue
         if sig.duration_s is not None:
-            since = started if last_write is None else max(started, last_write)
-            # A one-shot that has not played yet keeps the first write allowed after
-            # the deferral, even when the rate limit is as long as its window.
-            pending = last_write is not None and shown != sig.pattern
-            expired = (now - since > sig.duration_s if pending
-                       else now - since >= sig.duration_s)
-            if expired:
+            since = shown_at.get(event) if shown_at is not None else None
+            if since is not None and since >= started and now - since >= sig.duration_s:
                 continue
         if best is None or sig.priority > best.priority:
             best = sig
@@ -92,7 +87,8 @@ def active_signal(active: Mapping[str, Optional[float]], now: float,
 
 def next_action(active: Mapping[str, Optional[float]], shown: Optional[Pattern], *,
                 now: float, last_write: Optional[float], enabled: bool = True,
-                restore: Optional[Pattern] = None) -> Tuple[str, Optional[Pattern]]:
+                restore: Optional[Pattern] = None,
+                shown_at: Optional[Mapping[str, float]] = None) -> Tuple[str, Optional[Pattern]]:
     """Decide the next lightbar step: ("none"|"play"|"restore"|"clear", pattern).
 
     - off switch (`enabled` False): never play; restore the owner's lighting once if a
@@ -105,8 +101,10 @@ def next_action(active: Mapping[str, Optional[float]], shown: Optional[Pattern],
       A higher signal ending while a lower one is active plays the lower pattern instead.
     - a different pattern wanted: play it, unless the last write was under
       MIN_WRITE_INTERVAL_S ago (deferred: "none"; the caller asks again later).
+    - pass `shown_at` as documented by active_signal; `last_write` only rate-limits
+      writes and never starts or extends a one-shot's display window.
     """
-    want = active_signal(active, now, last_write, shown) if enabled else None
+    want = active_signal(active, now, shown_at=shown_at) if enabled else None
     if want is None:
         if shown is None or shown == restore:
             return "none", None

@@ -17,8 +17,11 @@ def test_priorities_are_unique_and_throttling_beats_update_beats_limit_beats_pro
 
 
 def test_profile_change_is_one_shot_and_expires():
-    assert hs.active_signal({hs.PROFILE_CHANGED: 0.0}, 1.0).event == hs.PROFILE_CHANGED
-    assert hs.active_signal({hs.PROFILE_CHANGED: 0.0}, hs.ONE_SHOT_S) is None
+    shown_at = {hs.PROFILE_CHANGED: 0.0}
+    assert hs.active_signal({hs.PROFILE_CHANGED: 0.0}, 1.0,
+                            shown_at=shown_at).event == hs.PROFILE_CHANGED
+    assert hs.active_signal({hs.PROFILE_CHANGED: 0.0}, hs.ONE_SHOT_S,
+                            shown_at=shown_at) is None
 
 
 def test_sticky_signals_stay_and_highest_priority_wins():
@@ -44,10 +47,12 @@ def test_rate_limit_defers_writes():
 def test_restore_owner_lighting_when_signal_ends():
     own = hs.Pattern("static", "white", "medium")
     shown = hs.SIGNALS[hs.PROFILE_CHANGED].pattern
+    shown_at = {hs.PROFILE_CHANGED: 0.0}
     assert hs.next_action({hs.PROFILE_CHANGED: 0.0}, shown, now=5.0, last_write=0.0,
-                          restore=own) == ("restore", own)
+                          restore=own, shown_at=shown_at) == ("restore", own)
     # no known lighting to restore: the signal still ends (one-shot never persists)
-    assert hs.next_action({hs.PROFILE_CHANGED: 0.0}, shown, now=5.0, last_write=0.0) == ("clear", None)
+    assert hs.next_action({hs.PROFILE_CHANGED: 0.0}, shown, now=5.0, last_write=0.0,
+                          shown_at=shown_at) == ("clear", None)
     assert hs.next_action({}, shown, now=5.0, last_write=0.0) == ("clear", None)
     assert hs.next_action({}, None, now=5.0, last_write=0.0) == ("none", None)
     # nothing shown, nothing to do
@@ -103,22 +108,44 @@ def test_higher_signal_ending_hands_off_to_lower_not_restore():
     high = hs.SIGNALS[hs.PROFILE_CHANGED].pattern
     active = {hs.CHARGE_LIMIT: 0.0, hs.PROFILE_CHANGED: 10.0}
     assert hs.next_action(active, high, now=10.0 + hs.ONE_SHOT_S, last_write=10.0,
-                          restore=own) == ("play", low)
+                          restore=own, shown_at={hs.PROFILE_CHANGED: 10.0}) == ("play", low)
     # then, once the lower one ends too, the owner's lighting comes back
     assert hs.next_action({}, low, now=30.0, last_write=14.0, restore=own) == ("restore", own)
 
 
-def test_one_shot_expiry_is_measured_from_the_last_lightbar_write():
+def test_one_shot_waits_for_first_show_after_profile_write():
     # A profile apply writes the lightbar as profile_changed fires, so the play waits
     # for the rate limit; that deferral must not consume the one-shot's window.
     active = {hs.PROFILE_CHANGED: 0.0}
-    assert hs.active_signal(active, hs.ONE_SHOT_S,
-                            last_write=0.0).event == hs.PROFILE_CHANGED
     pattern = hs.SIGNALS[hs.PROFILE_CHANGED].pattern
+    assert hs.next_action(active, None, now=hs.MIN_WRITE_INTERVAL_S - 0.1,
+                          last_write=0.0) == ("none", None)
     assert hs.next_action(active, None, now=hs.MIN_WRITE_INTERVAL_S,
                           last_write=0.0) == ("play", pattern)
-    # a later write moves the window too
-    assert hs.active_signal({hs.PROFILE_CHANGED: 0.0}, 4.0,
-                            last_write=1.5).event == hs.PROFILE_CHANGED
-    # and it still ends one full window after the write
-    assert hs.active_signal(active, hs.ONE_SHOT_S + 0.1, last_write=0.0) is None
+    # Polling late, or waiting behind another signal, must not lose the event.
+    assert hs.next_action(active, None, now=10.0,
+                          last_write=0.0) == ("play", pattern)
+
+
+def test_one_shot_expires_from_first_show_independently_of_other_writes():
+    active = {hs.PROFILE_CHANGED: 0.0}
+    pattern = hs.SIGNALS[hs.PROFILE_CHANGED].pattern
+    first_show = hs.MIN_WRITE_INTERVAL_S + 0.5
+    shown_at = {hs.PROFILE_CHANGED: first_show}
+    assert hs.active_signal(active, first_show + hs.ONE_SHOT_S - 0.1,
+                            shown_at=shown_at).event == hs.PROFILE_CHANGED
+    assert hs.active_signal(active, first_show + hs.ONE_SHOT_S,
+                            shown_at=shown_at) is None
+    assert hs.next_action(active, pattern, now=first_show + hs.ONE_SHOT_S - 0.1,
+                          last_write=first_show, shown_at=shown_at) == ("none", None)
+    assert hs.next_action(active, pattern, now=first_show + hs.ONE_SHOT_S,
+                          last_write=first_show, shown_at=shown_at) == ("clear", None)
+    # Another write cannot extend the window or make an expired event pending again.
+    assert hs.next_action(active, None, now=first_show + hs.ONE_SHOT_S + 10.0,
+                          last_write=first_show + 5.0, shown_at=shown_at) == ("none", None)
+
+
+def test_new_one_shot_occurrence_is_pending_despite_old_show_time():
+    pattern = hs.SIGNALS[hs.PROFILE_CHANGED].pattern
+    assert hs.next_action({hs.PROFILE_CHANGED: 10.0}, None, now=20.0,
+                          last_write=10.0, shown_at={hs.PROFILE_CHANGED: 3.0}) == ("play", pattern)
