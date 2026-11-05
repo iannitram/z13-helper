@@ -20,6 +20,7 @@ lets that error through rather than turning it into an rc).
 | `test_backend_memory.py` | Decky RSS threshold, read errors, independent monitor and plugin startup/unload; no real exit or hardware |
 | `test_fan_trace.py` | Trace output, replay and history bounded by both time and entry count |
 | `test_z13_helper_cli.py` | `z13-helper` argparse surface, `--json` on every command, and dispatch through a faked state owner (profile, TDP, fans, battery, brightness, lighting, crash and post-update) |
+| `test_mcp_server.py` | `z13-helper mcp`: tool list/schemas, dispatch through the same CLI and faked state owner, argument validation, and a JSON-RPC round trip on fake stdio |
 | `test_fan_watchdog.py` | recovery rules, throttle, stale queued recovery cancellation, in-flight Max Fans cancellation, and "profile rewrite before curve" |
 | `test_power_range.py` | per-rail bounds from kernel metadata and fallback ranges |
 | `test_telemetry_history.py` | bounded telemetry ring buffer: age and count caps, gaps, no disk writes |
