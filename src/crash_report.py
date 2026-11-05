@@ -22,6 +22,8 @@ from crash_scrub import scrub
 
 APP_ID = "z13-helper"
 LOG_LINES = 500
+MAX_LOG_LINE_CHARS = 2048
+MAX_FATAL_BYTES = 256 * 1024
 SETTING = "send_crash_reports"
 BUILD_CONFIG = Path(__file__).with_name("_crash_build.json")
 UPLOAD_TIMEOUT = 10
@@ -58,12 +60,36 @@ def set_reporting(config_path: str, enabled: bool) -> None:
 
 
 class _LogTail(logging.Handler):
-    def __init__(self):
+    def __init__(self, max_line_len: int = MAX_LOG_LINE_CHARS):
         super().__init__()
         self.lines = collections.deque(maxlen=LOG_LINES)
+        self.max_line_len = max_line_len
 
     def emit(self, record):
-        self.lines.append(self.format(record))
+        line = self.format(record)
+        if self.max_line_len and len(line) > self.max_line_len:
+            line = line[:self.max_line_len] + " ... [cut]"
+        self.lines.append(line)
+
+
+def read_fatal(fatal: Path | str, max_bytes: int = MAX_FATAL_BYTES) -> str:
+    """Read a fatal crash log, capping its size and marking truncation."""
+    p = Path(fatal)
+    try:
+        if p.exists() and p.is_file():
+            size = p.stat().st_size
+            with p.open("rb") as f:
+                data = f.read(max_bytes)
+                text = data.decode("utf-8", errors="replace")
+                if size > max_bytes or f.read(1):
+                    return text + "\n... [cut] ...\n"
+                return text
+    except (OSError, ValueError):
+        pass
+    text = str(fatal)
+    if len(text) > max_bytes:
+        return text[:max_bytes] + "\n... [cut] ...\n"
+    return text
 
 
 class FatalError(RuntimeError):
@@ -271,8 +297,11 @@ class CrashReporter:
             kernel=platform.release(), python=platform.python_version(), now=now,
             install_id=install_file.read_text().strip(),
         )
-        report["traceback"] = (Path(fatal_text).read_text() if fatal_text else
-                               "".join(traceback.format_exception(type(exc), exc, tb)))
+        tb_text = (read_fatal(fatal_text) if fatal_text else
+                   "".join(traceback.format_exception(type(exc), exc, tb)))
+        if len(tb_text) > MAX_FATAL_BYTES:
+            tb_text = tb_text[:MAX_FATAL_BYTES] + "\n... [cut] ...\n"
+        report["traceback"] = tb_text
         # A uid with no passwd entry and no USER/LOGNAME makes this raise; the report
         # must still go out, just without that identifier to scrub.
         try:
@@ -283,10 +312,14 @@ class CrashReporter:
             home = str(Path.home())
         except Exception:  # noqa: BLE001 -- a failed lookup only loses a scrub target
             home = ""
-        identities = {"home": home, "hostname": socket.gethostname(), "user": login}
+        try:
+            host = socket.gethostname()
+        except Exception:  # noqa: BLE001
+            host = None
+        identities = {"home": home, "hostname": host, "user": login}
         try:
             account = pwd.getpwuid(os.getuid())
-        except KeyError:
+        except Exception:  # noqa: BLE001
             account = None
 
         def clean(text):
@@ -396,12 +429,13 @@ def drop_filename(platform: str, now: datetime, rand_hex: str) -> str:
     return f"{APP_ID}-{cleaned_platform}-{stamp}-{rand_hex}.zip"
 
 
-def log_tail(text: str, n: int = LOG_LINES) -> str:
+def log_tail(text: str, n: int = LOG_LINES, max_line_len: int = MAX_LOG_LINE_CHARS) -> str:
     """Get the last n lines of text, each ending with a newline.
 
     Args:
         text: The input text
         n: Number of lines to return (default: LOG_LINES)
+        max_line_len: Maximum characters per line (default: MAX_LOG_LINE_CHARS)
 
     Returns:
         The last n lines, each ending with \n
@@ -410,7 +444,12 @@ def log_tail(text: str, n: int = LOG_LINES) -> str:
         return ""
 
     lines = text.splitlines()
-    return "".join(line + "\n" for line in lines[-n:])
+    out = []
+    for line in lines[-n:]:
+        if max_line_len and len(line) > max_line_len:
+            line = line[:max_line_len] + " ... [cut]"
+        out.append(line + "\n")
+    return "".join(out)
 
 
 def build_report(
