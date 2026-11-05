@@ -30,6 +30,7 @@ REPORT_CAP_BYTES = 512 * 1024
 SETTING = "send_crash_reports"
 BUILD_CONFIG = Path(__file__).with_name("_crash_build.json")
 UPLOAD_TIMEOUT = 10
+TRUNCATION_MARK = "\n... [cut] ...\n"
 
 
 def reporting_enabled(config_path: str) -> bool:
@@ -69,10 +70,9 @@ class _LogTail(logging.Handler):
         self.max_line_len = max_line_len
 
     def emit(self, record):
-        line = self.format(record)
-        if self.max_line_len and len(line.encode("utf-8")) > self.max_line_len:
-            line = _cap_bytes(line, self.max_line_len) + " ... [cut]"
-        self.lines.append(line)
+        # Stored unredacted and uncut: the reporter redacts each line first and the
+        # byte cap (log_tail, via build_zip) runs after, so a cut can't split an identifier.
+        self.lines.append(self.format(record))
 
 
 def _cap_bytes(text: str, limit: int) -> str:
@@ -538,9 +538,10 @@ def build_zip(report: dict, log_text: str) -> bytes:
         lines.pop(0)
     while len(report_json.encode("utf-8")) + log_size > REPORT_CAP_BYTES:
         tb = report.get("traceback") or ""
-        cut = _cap_bytes(tb, len(tb.encode("utf-8")) * 3 // 4)
-        if cut == tb:
+        body = tb.removesuffix(TRUNCATION_MARK)
+        if not body:
             break
+        cut = _cap_bytes(body, len(body.encode("utf-8")) * 3 // 4) + TRUNCATION_MARK
         report["traceback"] = cut
         report_json = json.dumps(report, indent=2, sort_keys=True)
     # Create zip in memory
