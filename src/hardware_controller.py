@@ -3,6 +3,7 @@ import re
 import logging
 
 import host
+import state_authority as authority
 import epp
 import profiles
 
@@ -55,7 +56,7 @@ class HardwareController:
     def _run_command(self, args, quiet: bool = False, timeout: float = Z13CTL_WRITE_TIMEOUT_S):
         """z13ctl's output; RuntimeError when it fails (ProfileControl relies on that)."""
         cmd = [self.z13ctl_path] + args
-        r = host.run(cmd, timeout=timeout)
+        r = authority.run(cmd, timeout=timeout)
         if r.timed_out:
             if not quiet:
                 logger.error(f"Command '{' '.join(cmd)}' timed out after {timeout} s")

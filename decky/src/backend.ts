@@ -102,3 +102,47 @@ export async function safely<T extends ApplyResult>(p: Promise<T>): Promise<T | 
     return { ok: false, saved: false, message: `Backend error: ${String(e)}` };
   }
 }
+
+// ---- After SteamOS update (tooling/post_update --tab-json, checks only) ----
+export interface PostUpdateRow {
+  id: string;
+  title: string;
+  fixes: string;
+  state: string; // needs | fine | info | na | unknown | reboot | error
+  detail: string;
+}
+export interface PostUpdateStatus {
+  updated: boolean;
+  banner: string | null;
+  armoury: { state: string; missing: string[] } | null;
+  rows: PostUpdateRow[];
+}
+export interface RepairStepInfo {
+  id: string;
+  description: string;
+  needs_root: boolean;
+  guided: boolean;
+  commands: string[];
+  undo: string;
+}
+export interface RepairPlanInfo {
+  steps: RepairStepInfo[];
+  unplanned: string[];
+  lines: string[];
+}
+export interface RepairRunResult {
+  results: [string, string][];
+}
+/** The plan only: changes nothing. */
+export const getRepairPlan = callable<[], { ok: boolean; message: string; plan: RepairPlanInfo | null }>(
+  "post_update_repair_plan",
+);
+/** Runs exactly the confirmed step ids (root steps use sudo -n). */
+export const runRepair = callable<
+  [ids: string[]],
+  { ok: boolean; message: string; result: RepairRunResult | null }
+>("post_update_repair_run");
+export const getPostUpdateStatus = callable<
+  [ack: boolean],
+  { ok: boolean; message: string; status: PostUpdateStatus | null }
+>("post_update_status");
