@@ -9,7 +9,7 @@ Profile dropdown); ROADMAP §7 "Phase 11 — Decky parity" added the rest of the
 
 | Section | Controls | Writes |
 |---|---|---|
-| **Z13-Helper** | Temps `APU 52°C · GPU 48°C`, Fans `2100 · 2250 RPM` (2 s poll, only while the QAM is open) · Max Fans · Profile | Max Fans → `max-fans.json` + `fancurve`; Profile → `z13-profile apply` |
+| **Z13-Helper** | CPU `52°C (k10temp Tdie)` · GPU `48°C (amdgpu edge)` · Fans `2100 · 2250 RPM` (2 s poll, only while the QAM is open; an unreadable value says `unavailable` and does not hide the other fan) · Max Fans · Profile | Max Fans → `max-fans.json` + `fancurve`; Profile → `z13-profile apply` |
 | **Power limits · &lt;profile&gt;** | Apply power limits toggle · SPL / sPPT / fPPT use per-rail kernel metadata bounds (sPPT ≥ SPL, fPPT ≥ sPPT) | active profile's `tdp` in `profiles.json`, then `z13ctl tdp --set` (off → `z13-profile apply <active> --no-hooks`) |
 | **Battery** | Charge limit 40…100 % (step 5) | active profile's `battery_limit`, then `z13ctl batterylimit --set` |
 | **Keyboard brightness** | Off / Low / Med / High | `z13ctl --device keyboard …` then `--device lightbar …`; a failed device is shown, not fatal |

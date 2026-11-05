@@ -13,7 +13,9 @@ class Recipe:
     reboot: bool = False
     pacman: bool = False
     default_on: bool = False
-    replaces: tuple = ()            # files apply() overwrites; the runner backs them up first
+    replaces: tuple = ()            # files or folders apply() overwrites; the runner backs them up first
+    creates: "Callable[[], Sequence[str]] | None" = None  # files apply() will add (asked before apply)
+    undo: str = ""                  # one line for the rollback record: what undoes what files cannot
 
 KEYRING_ID = "keyring"
 

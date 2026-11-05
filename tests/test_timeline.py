@@ -292,7 +292,7 @@ def test_post_update_runner_records_phase_12c_rollback_and_journal(tmp_path, fak
         backup=fake_backup,
         readonly_disable=lambda: None,
         readonly_enable=lambda: None,
-        record=make_timeline_recorder(backup_dir=str(bak_dir), path=str(tl)),
+        timeline=make_timeline_recorder(backup_dir=str(bak_dir), path=str(tl)),
     )
     res = run_plan((r_keyring, r_grub), env)
     assert res == [("keyring", "done"), ("amdgpu", "done")]

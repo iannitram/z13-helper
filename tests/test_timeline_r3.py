@@ -178,13 +178,33 @@ def _fake_tdp_store(*_a, **_k):
     }
 
 
+def _stub_field_write(monkeypatch, m, ok):
+    """Main routes TDP, charge limit and brightness through state_authority.set_field
+    (no direct z13ctl call in decky/main.py). Stub that one write; the timeline
+    recording around it is what these tests pin."""
+    calls = []
+
+    def set_field(field, value, expected=None, **_k):
+        calls.append((field, value))
+        return [] if ok else [("write", False, "boom")]
+
+    monkeypatch.setattr(m.authority, "set_field", set_field)
+    monkeypatch.setattr(m, "_save_plugin_state", lambda **_k: None)
+    return calls
+
+
+def _call(coro):
+    import asyncio
+    return asyncio.run(coro)
+
+
 def test_manual_battery_limit_write_is_recorded(decky_main, monkeypatch):
     m = decky_main
-    monkeypatch.setattr(m, "_set_active_field", lambda profile=None, **f: ("Balanced", None))
+    calls = _stub_field_write(monkeypatch, m, ok=True)
     monkeypatch.setattr(m, "_live_battery_limit", lambda: 80)
-    monkeypatch.setattr(m, "_run", _ok_run)
-    res = m.apply_battery_limit(60)
+    res = _call(m.Plugin().set_battery_limit(60))
     assert res["ok"] is True
+    assert calls == [("battery_limit", res["value"])]
     e = _only_entry(m.TIMELINE_PATH)
     assert e["kind"] == "battery_limit"
     assert e["ok"] is True
@@ -194,10 +214,9 @@ def test_manual_battery_limit_write_is_recorded(decky_main, monkeypatch):
 
 def test_failed_battery_limit_write_records_unchanged_after(decky_main, monkeypatch):
     m = decky_main
-    monkeypatch.setattr(m, "_set_active_field", lambda profile=None, **f: ("Balanced", None))
+    _stub_field_write(monkeypatch, m, ok=False)
     monkeypatch.setattr(m, "_live_battery_limit", lambda: 80)
-    monkeypatch.setattr(m, "_run", _failed_run)
-    res = m.apply_battery_limit(60)
+    res = _call(m.Plugin().set_battery_limit(60))
     assert res["ok"] is False
     e = _only_entry(m.TIMELINE_PATH)
     assert e["kind"] == "battery_limit"
@@ -208,12 +227,12 @@ def test_failed_battery_limit_write_records_unchanged_after(decky_main, monkeypa
 
 def test_manual_tdp_write_is_recorded(decky_main, monkeypatch):
     m = decky_main
+    calls = _stub_field_write(monkeypatch, m, ok=True)
     monkeypatch.setattr(m, "_read_store", _fake_tdp_store)
     monkeypatch.setattr(m, "tdp_ranges", lambda: {"pl1": (4, 80), "pl2": (4, 80), "pl3": (4, 80)})
-    monkeypatch.setattr(m, "_set_active_field", lambda profile=None, **f: ("Balanced", None))
-    monkeypatch.setattr(m, "_run", _ok_run)
-    res = m.apply_tdp(True, 45, 55, 55)
+    res = _call(m.Plugin().set_tdp(True, 45, 55, 55))
     assert res["ok"] is True
+    assert [c[0] for c in calls] == ["tdp"]
     e = _only_entry(m.TIMELINE_PATH)
     assert e["kind"] == "tdp"
     assert e["ok"] is True
@@ -223,11 +242,10 @@ def test_manual_tdp_write_is_recorded(decky_main, monkeypatch):
 
 def test_failed_tdp_write_records_unchanged_after(decky_main, monkeypatch):
     m = decky_main
+    _stub_field_write(monkeypatch, m, ok=False)
     monkeypatch.setattr(m, "_read_store", _fake_tdp_store)
     monkeypatch.setattr(m, "tdp_ranges", lambda: {"pl1": (4, 80), "pl2": (4, 80), "pl3": (4, 80)})
-    monkeypatch.setattr(m, "_set_active_field", lambda profile=None, **f: ("Balanced", None))
-    monkeypatch.setattr(m, "_run", _failed_run)
-    res = m.apply_tdp(True, 45, 55, 55)
+    res = _call(m.Plugin().set_tdp(True, 45, 55, 55))
     assert res["ok"] is False
     e = _only_entry(m.TIMELINE_PATH)
     assert e["kind"] == "tdp"
@@ -237,11 +255,11 @@ def test_failed_tdp_write_records_unchanged_after(decky_main, monkeypatch):
 
 def test_manual_brightness_write_is_recorded(decky_main, monkeypatch):
     m = decky_main
+    calls = _stub_field_write(monkeypatch, m, ok=True)
     monkeypatch.setattr(m, "_load_state", lambda: {"brightness": "low"})
-    monkeypatch.setattr(m, "_run", _ok_run)
-    res = m.set_brightness_per_device("high", recover=lambda *a, **k: None,
-                                      recover_stale=lambda *a, **k: None)
+    res = _call(m.Plugin().set_brightness("high"))
     assert res["ok"] is True
+    assert calls == [("brightness", "high")]
     e = _only_entry(m.TIMELINE_PATH)
     assert e["kind"] == "brightness"
     assert e["ok"] is True
@@ -251,10 +269,9 @@ def test_manual_brightness_write_is_recorded(decky_main, monkeypatch):
 
 def test_failed_brightness_write_records_unchanged_after(decky_main, monkeypatch):
     m = decky_main
+    _stub_field_write(monkeypatch, m, ok=False)
     monkeypatch.setattr(m, "_load_state", lambda: {"brightness": "low"})
-    monkeypatch.setattr(m, "_run", _failed_run)
-    res = m.set_brightness_per_device("high", recover=lambda *a, **k: None,
-                                      recover_stale=lambda *a, **k: None)
+    res = _call(m.Plugin().set_brightness("high"))
     assert res["ok"] is False
     e = _only_entry(m.TIMELINE_PATH)
     assert e["kind"] == "brightness"
@@ -273,9 +290,9 @@ def test_timeline_failure_never_breaks_a_battery_limit_write(decky_main, monkeyp
         raise OSError("disk full")
 
     monkeypatch.setattr(timeline, "append", broken_append)
-    monkeypatch.setattr(m, "_set_active_field", lambda profile=None, **f: ("Balanced", None))
+    calls = _stub_field_write(monkeypatch, m, ok=True)
     monkeypatch.setattr(m, "_live_battery_limit", lambda: 80)
-    monkeypatch.setattr(m, "_run", _ok_run)
-    res = m.apply_battery_limit(60)
+    res = _call(m.Plugin().set_battery_limit(60))
     assert res["ok"] is True
+    assert calls, "the hardware write must still be made"
     assert attempts, "the battery write must reach the timeline recorder"
