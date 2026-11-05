@@ -12,7 +12,7 @@ const rpm = (v: number | null) => (v == null ? "unavailable" : `${v}`);
 const fans = (fan1: number | null, fan2: number | null) => {
   if (fan1 == null && fan2 == null) return "unavailable";
   if (fan1 == null) return `Fan 1 unavailable · ${rpm(fan2)} RPM`;
-  if (fan2 == null) return `${rpm(fan1)} · Fan 2 unavailable`;
+  if (fan2 == null) return `${rpm(fan1)} RPM · Fan 2 unavailable`;
   return `${rpm(fan1)} · ${rpm(fan2)} RPM`;
 };
 

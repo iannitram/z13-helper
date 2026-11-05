@@ -209,24 +209,16 @@ class SensorReader:
     def _gpu_hwmon(self) -> str | None:
         """The amdgpu hwmon of the integrated GPU, chosen by device not index.
 
-        With an eGPU attached there are several amdgpu nodes whose order is
-        arbitrary. The APU's GPU is the PCI device the firmware booted on
-        (`device/boot_vga` == 1); failing that, the lowest PCI address.
+        Match the Z13's Strix Halo PCI ID (1002:1586). Its display-controller
+        class has no boot_vga file, and USB4 eGPUs can have lower PCI addresses.
+        If the integrated device cannot be identified, report it unavailable.
         """
-        candidates = self._hwmons_named("amdgpu")
-        if not candidates:
-            return None
-        for path in candidates:
-            if self._read_str(os.path.join(path, "device", "boot_vga")) == "1":
+        for path in self._hwmons_named("amdgpu"):
+            device = os.path.join(path, "device")
+            if (self._read_str(os.path.join(device, "vendor")) == "0x1002"
+                    and self._read_str(os.path.join(device, "device")) == "0x1586"):
                 return path
-
-        def pci_addr(path):
-            try:
-                return os.path.basename(os.path.realpath(os.path.join(path, "device")))
-            except OSError:
-                return path
-
-        return min(candidates, key=pci_addr)
+        return None
 
     def get_gpu_temp_labeled(self) -> tuple[float, str] | None:
         """(°C, "amdgpu <label>") of the integrated GPU, or None."""

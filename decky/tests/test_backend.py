@@ -683,6 +683,12 @@ class TelemetryTest(unittest.TestCase):
                  "hwmon9": ("k10temp", {"temp1_input": "99000"})}
         for d, (name, files) in nodes.items():
             os.makedirs(os.path.join(self.root, d))
+            if name == "amdgpu":
+                device = os.path.join(self.root, d, "device")
+                os.makedirs(device)
+                for fn, value in (("vendor", "0x1002"), ("device", "0x1586")):
+                    with open(os.path.join(device, fn), "w") as f:
+                        f.write(value + "\n")
             with open(os.path.join(self.root, d, "name"), "w") as f:
                 f.write(name + "\n")
             for fn, v in files.items():
