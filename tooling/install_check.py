@@ -103,6 +103,7 @@ MANIFEST = [
     ("tooling/post_update/health.py", f"{LIB}/post_update/health.py", "644", False),
     ("tooling/post_update/local.py", f"{LIB}/post_update/local.py", "644", False),
     ("tooling/post_update/bluetooth.py", f"{LIB}/post_update/bluetooth.py", "644", False),
+    ("tooling/post_update/probes.py", f"{LIB}/post_update/probes.py", "644", False),
     ("tooling/post_update/recipe.py", f"{LIB}/post_update/recipe.py", "644", False),
     ("tooling/post_update/registry.py", f"{LIB}/post_update/registry.py", "644", False),
     ("tooling/post_update/runner.py", f"{LIB}/post_update/runner.py", "644", False),

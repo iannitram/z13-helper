@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from post_update import driver
+from post_update import driver, registry
 from post_update.probes import (
     probe_kernel_version,
     probe_mes_firmware,
@@ -67,8 +67,11 @@ def _recipe(rid):
 def test_upstream_probes_come_before_every_pack_in_collect(monkeypatch, tmp_path):
     monkeypatch.setattr(driver, "make_hostio", lambda escalate=True: None)
     monkeypatch.setattr(driver, "make_sys", lambda home, escalate=True: None)
-    monkeypatch.setattr(driver, "builtin_recipes", lambda io: [_recipe("builtin-1")])
-    monkeypatch.setattr(driver, "builtin_recipes_4_6", lambda sys_: [_recipe("builtin-4")])
+    # The built-in order lives in the shared registry; stub its recipes 1-6, keep the real probes.
+    monkeypatch.setattr(registry, "builtin_recipes", lambda io: [_recipe("builtin-1")])
+    monkeypatch.setattr(registry, "etc_snapshot_recipe", lambda sys_: _recipe("builtin-4"))
+    monkeypatch.setattr(registry, "bluetooth_recipe", lambda io, src_root=None: _recipe("builtin-5"))
+    monkeypatch.setattr(registry, "rocm_recipe", lambda sys_: _recipe("builtin-6"))
     monkeypatch.setattr(driver, "pack_recipes", lambda io: [_recipe("pack-8"), _recipe("pack-9")])
     monkeypatch.setattr(driver, "load_local_recipes", lambda *a, **k: ([], []))
 
