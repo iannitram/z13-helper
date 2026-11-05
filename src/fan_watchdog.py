@@ -444,6 +444,12 @@ class FanWatchdog:
         then can have turned Max Fans on or put a fan in manual mode, so re-read
         Max Fans and each fan's mode (`modes`: the pair seen when the stall
         began) and skip rather than overwrite a newer state."""
+        if self._suspended():
+            self._stall_ticks = 0
+            self._zero_since = [None, None]
+            self._auto_zero_since = None
+            self._holding = False
+            return "Auto fan recovery skipped; fan watchdog is suspended"
         now_modes = self._fan_modes() if max_on is not None else None
         if max_on is not None and (
             self._max_fans_on() != max_on
@@ -476,6 +482,12 @@ class FanWatchdog:
         the undervolt (z13ctl: a firmware profile resets undervolt and hands the
         power limits back to firmware). A failed restore is reported, and does
         not stop the curve."""
+        if self._suspended():
+            self._stall_ticks = 0
+            self._zero_since = [None, None]
+            self._auto_zero_since = None
+            self._holding = False
+            return "Fan recovery skipped; fan watchdog is suspended"
         named = authority.recover_performance()
         if named is not None:
             return named

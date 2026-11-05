@@ -222,6 +222,18 @@ def test_base_profile_timeout_keeps_max_fans_suspended_for_uncertain_state(
     assert max_fans_state.is_suspended()
 
 
+def test_failed_base_profile_retry_preserves_suspended_marker(
+        profiles_env, fake_host):
+    max_fans_state.save(enabled=True, suspended="z13ctl write timed out", saved_curve=[[40, 255]])
+    fake_host.fail("profile --set", rc=1, out="asus-wmi: error setting profile")
+    results = profiles.apply(full_profile(), z13ctl=Z)
+    assert results == [("profile", False, "asus-wmi: error setting profile")]
+    assert max_fans_state.is_enabled()
+    assert max_fans_state.is_suspended()
+    state = json.loads(profiles_env.max_fans.read_text())
+    assert state["suspended"] == "z13ctl write timed out"
+
+
 def test_null_fields_are_left_alone(profiles_env, fake_host):
     results = profiles.apply(bare_profile(), z13ctl=Z)
     # Only the platform profile is written; fans report firmware auto without a call.

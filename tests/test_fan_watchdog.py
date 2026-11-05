@@ -895,3 +895,36 @@ def test_queued_auto_recovery_skips_if_state_changed(env, change):
 
     assert "skipped" in msg
     assert ns.ctl.calls == []
+
+
+def test_queued_auto_recovery_skips_when_suspended(env):
+    ns = auto(env, tdp=BOONDOCK_TDP)
+    jobs = []
+    runner = FanWatchdogRunner(ns.wd, lambda label, fn: jobs.append(fn))
+    for _ in range(AUTO_TICKS):
+        ns.clock.advance(TICK)
+        runner.tick()
+    assert len(jobs) == 1
+
+    ns.suspended = True
+    msg = runner.on_done(FAN_RECOVERY_LABEL, jobs[0]())
+
+    assert "skipped" in msg
+    assert ns.ctl.calls == []
+
+
+def test_queued_stalled_recovery_skips_when_suspended(env):
+    ns = env.make(max_fans=False, enabled=True, temp=60.0, fans=(0, 0))
+    jobs = []
+    runner = FanWatchdogRunner(ns.wd, lambda label, fn: jobs.append(fn))
+    for _ in range(STALL_TICKS):
+        ns.clock.advance(TICK)
+        runner.tick()
+    assert len(jobs) == 1
+
+    ns.suspended = True
+    msg = runner.on_done(FAN_RECOVERY_LABEL, jobs[0]())
+
+    assert "skipped" in msg
+    assert ns.ctl.calls == []
+

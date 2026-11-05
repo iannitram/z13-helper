@@ -1116,6 +1116,9 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
     timed_out = False
     flag_pinned = False
     fan_ok = None   # None until the fan step has run, then whether it worked
+    initial_state = _max_fans_state()
+    initial_max_fans_on = bool(initial_state.get("enabled"))
+    initial_suspended = initial_state.get("suspended")
 
     def finish(out):
         """Settle the shared Max Fans flag before apply() returns.
@@ -1134,7 +1137,7 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
         elif not (flag_pinned or fan_ok) and (
             fan_ok is False or any(not ok for _, ok, _ in out)
         ):
-            _save_max_fans(enabled=initial_max_fans_on, suspended=None)
+            _save_max_fans(enabled=initial_max_fans_on, suspended=initial_suspended)
         elif (
             flag_pinned
             or initial_max_fans_on
@@ -1169,7 +1172,6 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
     curve = profile.get("fan_curve")
     tdp = profile.get("tdp")
     switching = previous is None or previous.get("name") != profile["name"]
-    initial_max_fans_on = bool(_max_fans_state().get("enabled"))
     planned_max_fans_on = initial_max_fans_on
     released = False
     if switching and profile.get("max_fans"):
