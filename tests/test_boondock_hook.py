@@ -134,15 +134,16 @@ def test_manual_on_off_still_does_hardware(real_subprocess, env):
     assert "z13ctl profile --set balanced" not in log
 
 
-def test_off_reports_a_failed_restore_and_keeps_the_snapshot(real_subprocess, env):
+@pytest.mark.parametrize("command", ["hardware-off", "off"])
+def test_off_reports_a_failed_restore_and_keeps_the_snapshot(real_subprocess, env, command):
     state = Path(env["BOONDOCK_STATE"])
-    state.write_text("profile=Balanced\npl1=30\npl2=30\npl3=30\n")
+    state.write_text("profile=Balanced\npl1=30\npl2=30\npl3=30\nbrightness=800\n")
     profile = state.parent / "z13-profile"
     profile.write_text("#!/bin/sh\nexit 1\n")
     profile.chmod(0o755)
     env = {**env, "BOONDOCK_Z13_PROFILE": str(profile)}
     p = real_subprocess(
-        ["bash", str(SCRIPT), "hardware-off"],
+        ["bash", str(SCRIPT), command],
         env=env, capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL,
     )
     assert p.returncode != 0

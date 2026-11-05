@@ -538,6 +538,44 @@ def test_timed_out_apply_keeps_max_fans_suspended_with_a_marker(
     assert state["suspended"] == "z13ctl write timed out"
 
 
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("error", [TimeoutError("timed out"), RuntimeError("failed")])
+def test_named_profile_failure_preserves_intent_and_suspends_only_on_timeout(
+    profiles_env, fake_host, monkeypatch, enabled, error
+):
+    class Client:
+        def activate_app_profile(self, profile):
+            raise error
+
+    monkeypatch.setattr(profiles.authority, "named_client", lambda: Client())
+    max_fans_state.save(enabled=enabled)
+
+    results = profiles.apply(bare_profile(base="performance"), z13ctl=Z)
+
+    assert results[0][:2] == ("profile", False)
+    assert max_fans_state.is_enabled() is enabled
+    assert max_fans_state.is_suspended() is isinstance(error, TimeoutError)
+    assert fake_host.argvs == []
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_cleanup_timeout_suspends_watchdog_and_stops_apply(
+    socket_probe, profiles_env, fake_host, enabled
+):
+    max_fans_state.save(enabled=enabled)
+    fake_host.fail("tdp --help", rc=0, out="Flags: --profile string")
+    fake_host.fail("profile --list", rc=0,
+                   out="Custom profiles:\n   custom              20W\n")
+    fake_host.fail("tdp --reset", rc=124, out="timed out", timed_out=True)
+
+    results = profiles.apply(bare_profile(fan_curve=CURVE), z13ctl=Z)
+
+    assert results[-1][:2] == ("tdp", False)
+    assert fake_host.argvs[-1] == [Z, "tdp", "--reset", "--profile", "custom"]
+    assert max_fans_state.is_enabled() is enabled
+    assert max_fans_state.is_suspended()
+
+
 def test_curveless_max_fans_profile_clears_stale_custom_tdp(socket_probe, profiles_env, fake_host):
     fake_host.fail("tdp --help", rc=0, out="Flags: --profile string")
     fake_host.fail("profile --list", rc=0,

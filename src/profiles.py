@@ -1188,6 +1188,12 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
             backend_profile["fan_curve"] = [[t, 100] for t in MAX_FAN_TEMPS]
         try:
             mapped_name = named_client.activate_app_profile(backend_profile)
+        except TimeoutError:
+            timed_out = True
+            return finish(results + [(
+                "profile", False,
+                f"z13ctl write timed out after {Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)",
+            )])
         except (OSError, RuntimeError, ValueError) as exc:
             return finish(results + [("profile", False, str(exc))])
         base_ok = True
@@ -1240,6 +1246,7 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
             if cleanup_result:
                 results.append(cleanup_result)
                 if cleanup_result[2].startswith("z13ctl write timed out after "):
+                    timed_out = True
                     return finish(results)
     if named_client is not None:
         pass

@@ -249,6 +249,7 @@ def _shared_config():
 # app, z13-profile and this backend can't lose each other's updates. The lock file is
 # kept deck-owned because we run as root and the other writers run as deck.
 _lock_state = threading.local()
+_lock_fallback_warned = False
 LOCK_TIMEOUT = 10.0   # seconds to wait for another writer before giving up
 
 
@@ -330,6 +331,12 @@ def _file_lock(path):
             # Only a read-only filesystem is safe to write unlocked; EACCES and
             # the like mean another writer may hold a lock we cannot open.
             raise
+        global _lock_fallback_warned
+        if not _lock_fallback_warned:
+            _lock_fallback_warned = True
+            decky.logger.warning(
+                "Cannot lock %s (%s); continuing without a lock", lock_path, e
+            )
         fd = None   # read-only filesystem: nothing else can be writing either
     held[path] = 1
     try:
@@ -722,6 +729,7 @@ def make_fan_trace(path=None, owner=DECK_IDS):
 def make_fan_watchdog(sensors=None, fans=None, may_act=None, clock=time.monotonic, trace=None):
     return FanWatchdog(sensors or _sensors, fans or DeckyFans(),
                        max_fans_on=lambda: bool(_load_max_fans().get("enabled", False)),
+                       suspended=lambda: _load_max_fans().get("suspended") is not None,
                        may_act=may_act or _in_gamemode,
                        active_tdp=lambda: (active_profile(_read_store()) or {}).get("tdp"),
                        clock=clock, trace=trace)

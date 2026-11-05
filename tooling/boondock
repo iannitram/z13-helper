@@ -97,7 +97,8 @@ do_session_off() {
     # An older `boondock on` wrote hardware keys into the same snapshot. A profile hook
     # must not write power, so leave the hardware as is and clear the stale keys
     # (otherwise status reports ON forever and a later `off` restores old values).
-    if grep -Eq "^($HW_KEYS)=" "$STATE" 2>/dev/null; then
+    # A nonzero restore status from `off` keeps hardware keys for a retry.
+    if [ "${1:-0}" -eq 0 ] && grep -Eq "^($HW_KEYS)=" "$STATE" 2>/dev/null; then
       state_drop "$HW_KEYS"; say "hardware snapshot found: power left as is, snapshot cleared"
     fi
   else
@@ -190,7 +191,7 @@ do_hw_off() {
 
 # `on` / `off` (by hand): both halves, as before.
 do_on()  { local rc=0; do_hw_on || rc=1; do_session_on "$@"; echo "  → run 'boondock off' when you're back on power."; return "$rc"; }
-do_off() { local rc=0; do_hw_off || rc=1; do_session_off; echo "  → beast mode restored."; return "$rc"; }
+do_off() { local rc=0; do_hw_off || rc=1; do_session_off "$rc"; echo "  → beast mode restored."; return "$rc"; }
 
 do_status() {
   local max cur pct; max=$(bright_max); cur=$(cat "$BL/brightness"); pct=$(( cur * 100 / max ))

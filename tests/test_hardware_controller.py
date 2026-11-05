@@ -218,6 +218,8 @@ def test_set_tdp_passes_ordered_rails(fake_host):
     (20, 30, 200),
     (4, 30, 40),
     (20, 94, 94),
+    (20, "invalid", 40),
+    (20, 30, "invalid"),
 ])
 def test_set_tdp_rejects_bad_rails_without_writing(fake_host, given):
     with pytest.raises(ValueError):
