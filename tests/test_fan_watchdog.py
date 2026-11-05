@@ -32,6 +32,11 @@ class FakeSensors(SensorReader):
     def custom_fan_curve_enabled(self):
         return self.enabled
 
+    def fan_curve_modes(self):
+        if getattr(self, "modes", None) is not None:
+            return self.modes
+        return None if self.enabled is None else ((1, 1) if self.enabled else (2, 2))
+
     def custom_fan_curve_points(self):
         return [list(p) for p in self.curve] if self.curve else None
 
@@ -76,7 +81,8 @@ def env(clock):
     """Fake clock, Max Fans flag and may_act gate; build the watchdog with env.make().
     Set ns.allowed = False to have may_act() refuse; ns.asked counts its calls."""
     ns = types.SimpleNamespace(clock=clock, sensors=None, ctl=None, wd=None,
-                               max_on=False, allowed=True, asked=0, tdp=None)
+                               max_on=False, allowed=True, asked=0, tdp=None,
+                               suspended=False)
 
     def may_act():
         ns.asked += 1
@@ -87,7 +93,7 @@ def env(clock):
         ns.sensors = FakeSensors(**sensor_kw)
         ns.ctl = FakeController(fail_on)
         ns.wd = FanWatchdog(ns.sensors, ns.ctl, max_fans_on=lambda: ns.max_on,
-                            may_act=may_act, active_tdp=lambda: ns.tdp, clock=clock)
+                            suspended=lambda: ns.suspended, may_act=may_act, active_tdp=lambda: ns.tdp, clock=clock)
         return ns
 
     def set_max(v):
@@ -705,6 +711,33 @@ BOONDOCK_TDP = {"pl1": 20, "pl2": 30, "pl3": 40, "force": False}
 AUTO_TICKS = math.ceil(AUTO_STALL_S / TICK) + 1
 
 
+def test_suspended_marker_stops_all_recovery(env):
+    # A timed-out apply left the hardware state unknown: no guess, no write.
+    ns = env.make(max_fans=True, enabled=False)
+    ns.suspended = True
+    assert run(ns, 10) == [None] * 10
+    assert call_names(ns.ctl) == []
+
+
+def test_auto_recovery_skipped_when_one_fan_is_still_manual(env):
+    # custom_fan_curve_enabled() reads False for a mixed pair; the rewrite
+    # would still drop the manual fan's curve, so it must not run.
+    ns = auto(env, tdp=BOONDOCK_TDP)
+    ns.sensors.modes = (1, 2)
+    msgs = run(ns, AUTO_TICKS)
+    assert "skipped" in (msgs[-1] or "")
+    assert call_names(ns.ctl) == []
+
+
+def test_auto_recovery_skipped_when_fan_mode_changed_since_stall_began(env):
+    ns = auto(env, tdp=BOONDOCK_TDP)
+    run(ns, 1)
+    ns.sensors.modes = (2, 3)
+    msgs = run(ns, AUTO_TICKS - 1)
+    assert "skipped" in (msgs[-1] or "")
+    assert call_names(ns.ctl) == []
+
+
 def auto(env, **kw):
     kw.setdefault("temp", 70.0)
     kw.setdefault("fans", (0, 0))
@@ -839,3 +872,59 @@ def test_rule5_auto_stall_runs_on_the_worker_when_deferred(env):
     msg = runner.on_done(FAN_RECOVERY_LABEL, jobs[0][1]())
     assert ns.ctl.calls == [("rewrite_profile",), ("apply_tdp", BOONDOCK_TDP), ("reset_fancurve",)]
     assert msg.startswith("Fans stopped in auto mode") and not runner.pending
+
+
+@pytest.mark.parametrize("change", ["max_fans", "curve"])
+def test_queued_auto_recovery_skips_if_state_changed(env, change):
+    # The auto-mode decision is made on an earlier tick. A profile apply queued
+    # since then may turn Max Fans on or enable a curve; the worker must not
+    # rewrite the profile and reset that newer state.
+    ns = auto(env, tdp=BOONDOCK_TDP)
+    jobs = []
+    runner = FanWatchdogRunner(ns.wd, lambda label, fn: jobs.append(fn))
+    for _ in range(AUTO_TICKS):
+        ns.clock.advance(TICK)
+        runner.tick()
+    assert len(jobs) == 1
+
+    if change == "max_fans":
+        ns.set_max(True)
+    else:
+        ns.sensors.enabled = True
+    msg = runner.on_done(FAN_RECOVERY_LABEL, jobs[0]())
+
+    assert "skipped" in msg
+    assert ns.ctl.calls == []
+
+
+def test_queued_auto_recovery_skips_when_suspended(env):
+    ns = auto(env, tdp=BOONDOCK_TDP)
+    jobs = []
+    runner = FanWatchdogRunner(ns.wd, lambda label, fn: jobs.append(fn))
+    for _ in range(AUTO_TICKS):
+        ns.clock.advance(TICK)
+        runner.tick()
+    assert len(jobs) == 1
+
+    ns.suspended = True
+    msg = runner.on_done(FAN_RECOVERY_LABEL, jobs[0]())
+
+    assert "skipped" in msg
+    assert ns.ctl.calls == []
+
+
+def test_queued_stalled_recovery_skips_when_suspended(env):
+    ns = env.make(max_fans=False, enabled=True, temp=60.0, fans=(0, 0))
+    jobs = []
+    runner = FanWatchdogRunner(ns.wd, lambda label, fn: jobs.append(fn))
+    for _ in range(STALL_TICKS):
+        ns.clock.advance(TICK)
+        runner.tick()
+    assert len(jobs) == 1
+
+    ns.suspended = True
+    msg = runner.on_done(FAN_RECOVERY_LABEL, jobs[0]())
+
+    assert "skipped" in msg
+    assert ns.ctl.calls == []
+
