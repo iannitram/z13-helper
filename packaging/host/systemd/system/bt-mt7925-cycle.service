@@ -1,0 +1,11 @@
+[Unit]
+Description=Power-cycle MT7925 BT controller at boot to clear firmware stale state
+After=bluetooth.service
+Wants=bluetooth.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'sleep 10; bluetoothctl power off || true; sleep 3; bluetoothctl power on'
+
+[Install]
+WantedBy=multi-user.target
