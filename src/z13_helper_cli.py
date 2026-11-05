@@ -124,6 +124,7 @@ def _parser():
     s.add_argument("--tdp", help="PL1,PL2,PL3 in watts")
     for rail in ("pl1", "pl2", "pl3"):
         s.add_argument("--" + rail, type=int)
+    s.add_argument("--force", action="store_true")
     s.add_argument("--curve", help="eight temp:pct points, comma separated")
     s.add_argument("--battery-limit", type=int)
     s.add_argument("--brightness", choices=profiles.BRIGHTNESS_LEVELS)
@@ -263,14 +264,18 @@ def _clamp_battery(value):
         raise _InputError(
             f"battery limit must be a finite number, got {value!r}"
         ) from None
+    if not (BATTERY_MIN <= number <= BATTERY_MAX):
+        raise _InputError(f"battery limit is out of range, got {value!r}")
     try:
         v = int(round(number / BATTERY_STEP) * BATTERY_STEP)
     except (ValueError, OverflowError):
         raise _InputError(f"battery limit is out of range, got {value!r}") from None
-    return _clamp(v, BATTERY_MIN, BATTERY_MAX)
+    if not (BATTERY_MIN <= v <= BATTERY_MAX):
+        raise _InputError(f"battery limit is out of range, got {value!r}")
+    return v
 
 
-def _clamp_tdp(pl1, pl2=None, pl3=None, ranges=None):
+def _clamp_tdp(pl1, pl2=None, pl3=None, ranges=None, force=False):
     r = ranges or {}
 
     def one(value, rail):
@@ -280,7 +285,7 @@ def _clamp_tdp(pl1, pl2=None, pl3=None, ranges=None):
     a = one(pl1, "pl1")
     b = max(one(pl2 if pl2 is not None else a, "pl2"), a)
     c = max(one(pl3 if pl3 is not None else b, "pl3"), b)
-    return {"pl1": a, "pl2": b, "pl3": c, "force": a > PL1_SAFE_MAX}
+    return {"pl1": a, "pl2": b, "pl3": c, "force": bool(force and a > PL1_SAFE_MAX)}
 
 
 def _parse_tdp_values(values, allow_one=False):
@@ -325,6 +330,8 @@ def _parse_curve(value):
         profiles.validate_curve(points)
     except ValueError as exc:
         raise _InputError(str(exc)) from None
+    if all(int(pct) == 0 for _, pct in points):
+        raise _InputError("all-zero fan curves are not allowed")
     for temp, pct in points:
         floor = profiles.fan_curve_floor_pct(int(temp))
         if int(pct) < floor:
@@ -509,7 +516,13 @@ def cmd_profile_set(args):
             pl3 = args.pl3
             if pl1 is None:
                 raise _InputError("tdp needs --pl1 (or --tdp PL1,PL2,PL3)")
-        change("tdp", _clamp_tdp(pl1, pl2, pl3, power_range.detect_ranges()))
+        tdp = _clamp_tdp(pl1, pl2, pl3, power_range.detect_ranges(), force=args.force)
+        if tdp["pl1"] > PL1_SAFE_MAX and not args.force:
+            raise _InputError(
+                f"PL1 above {PL1_SAFE_MAX} W runs the fans at full speed; "
+                "repeat the command with --force to confirm"
+            )
+        change("tdp", tdp)
     if args.curve is not None:
         change("fan_curve", _parse_curve(args.curve))
     if args.battery_limit is not None:
@@ -617,7 +630,11 @@ def cmd_tdp(args):
             v is not None for v in (args.pl1, args.pl2, args.pl3)
         ) or args.force:
             raise _InputError("tdp reset does not accept limits or --force")
-        authority.set_field("tdp", None)
+        results = authority.set_field("tdp", None)
+        if isinstance(results, list):
+            failed = [f"{step}: {message}" for step, ok, message in results if not ok]
+            if failed:
+                raise CliError("; ".join(failed))
         _emit(args, {"ok": True, "tdp": None}, ["TDP reset to firmware control"])
         return 0
     if action != "set":
@@ -635,8 +652,8 @@ def cmd_tdp(args):
         if args.pl1 is None:
             raise _InputError("tdp set needs PL1,PL2,PL3 or --pl1")
         pl1, pl2, pl3 = args.pl1, args.pl2, args.pl3
-    tdp = _clamp_tdp(pl1, pl2, pl3, power_range.detect_ranges())
-    if tdp["force"] and not args.force:
+    tdp = _clamp_tdp(pl1, pl2, pl3, power_range.detect_ranges(), force=args.force)
+    if tdp["pl1"] > PL1_SAFE_MAX and not args.force:
         raise _InputError(
             f"PL1 above {PL1_SAFE_MAX} W runs the fans at full speed; "
             "repeat the command with --force to confirm"

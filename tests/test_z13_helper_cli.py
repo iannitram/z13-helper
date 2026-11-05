@@ -131,12 +131,31 @@ def test_tdp_set_clamps_with_the_gui_ranges(owner, monkeypatch, capsys):
     assert calls == [("set_field", ("tdp", data["tdp"]), {})]
 
 
-def test_battery_set_rounds_and_clamps(owner, capsys):
+def test_battery_set_rounds_step(owner, capsys):
     calls, record = owner
     record("set_field")
     data = run_json(capsys, ["battery", "set", "87"])
     assert data["limit"] == 85
     assert calls == [("set_field", ("battery_limit", 85), {})]
+
+
+@pytest.mark.parametrize("value", ["30", "39", "101", "120", "-10"])
+def test_battery_set_rejects_out_of_range(owner, capsys, value):
+    calls, record = owner
+    record("set_field")
+    assert cli.main(["battery", "set", value, "--json"]) == 2
+    data = json.loads(capsys.readouterr().out)
+    assert data["ok"] is False and "out of range" in data["error"]
+    assert calls == []
+
+
+def test_profile_set_rejects_out_of_range_battery(owner, profiles_env, capsys):
+    calls, record = owner
+    record("edit")
+    assert cli.main(["profile", "set", "Turbo", "--battery-limit", "30", "--json"]) == 2
+    data = json.loads(capsys.readouterr().out)
+    assert data["ok"] is False and "out of range" in data["error"]
+    assert calls == []
 
 
 @pytest.mark.parametrize("value", ["inf", "nan", "1e309"])
@@ -378,6 +397,20 @@ def test_tdp_set_above_75_needs_force(owner, monkeypatch, capsys):
     assert data["tdp"]["force"] is True
 
 
+def test_profile_set_above_75_needs_force(owner, profiles_env, monkeypatch, capsys):
+    calls, record = owner
+    record("edit")
+    _flat_ranges(monkeypatch)
+    assert cli.main(["profile", "set", "Turbo", "--pl1", "80", "--json"]) == 2
+    capsys.readouterr()
+    assert calls == []
+    data = run_json(capsys, ["profile", "set", "Turbo", "--pl1", "80", "--force"])
+    assert data["profile"]["tdp"]["force"] is True
+    # Verify profile set does not turn force on when pl1 <= 75
+    data_low = run_json(capsys, ["profile", "set", "Turbo", "--pl1", "40"])
+    assert data_low["profile"]["tdp"]["force"] is False
+
+
 @pytest.mark.parametrize(
     "argv",
     [
@@ -426,10 +459,20 @@ def test_curve_safety_floor(owner, profiles_env, capsys, command, temp, minimum)
     assert calls
 
 
-def test_curve_allows_zero_at_or_below_70c(owner, capsys):
+def test_all_zero_fan_curve_is_rejected(owner, capsys):
     calls, record = owner
     record("set_field")
     curve = [[t, 0] for t in (20, 30, 40, 50, 55, 60, 65, 70)]
+    assert cli.main(["fans", "curve", "set", json.dumps(curve), "--json"]) == 2
+    data = json.loads(capsys.readouterr().out)
+    assert data["ok"] is False and "all-zero" in data["error"]
+    assert calls == []
+
+
+def test_curve_allows_zero_at_or_below_70c_when_not_all_zero(owner, capsys):
+    calls, record = owner
+    record("set_field")
+    curve = [[20, 0], [30, 0], [40, 0], [50, 0], [55, 0], [60, 0], [65, 0], [75, 10]]
     assert run_json(capsys, ["fans", "curve", "set", json.dumps(curve)])["curve"] == curve
     assert calls == [("set_field", ("fan_curve", curve), {})]
 
@@ -521,6 +564,14 @@ def test_tdp_reset_without_limits(owner, capsys):
     record("set_field")
     assert run_json(capsys, ["tdp", "reset"])["tdp"] is None
     assert calls == [("set_field", ("tdp", None), {})]
+
+
+def test_tdp_reset_reports_failure_on_failed_apply_step(owner, capsys):
+    calls, record = owner
+    record("set_field", [("profile", True, "balanced"), ("fans", False, "curve write failed")])
+    assert cli.main(["tdp", "reset", "--json"]) == 1
+    data = json.loads(capsys.readouterr().out)
+    assert data["ok"] is False and "fans: curve write failed" in data["error"]
 
 
 @pytest.mark.parametrize("as_json", [False, True])
