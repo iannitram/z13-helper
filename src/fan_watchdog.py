@@ -538,13 +538,16 @@ class FanTrace:
     SAMPLE_S = 30
     SUSPECT_S = 30
     HISTORY_S = 120
+    # Also bounded by count against bursts or a stalled clock. Over the cap the oldest
+    # unwritten context entries are dropped, so an event may replay fewer than HISTORY_S.
+    HISTORY_MAX_ENTRIES = 256
     AFTER_S = 60
 
     def __init__(self, logger, sensors=None, wall=time.time):
         self.log = logger
         self.sensors = sensors      # for the extra reads (ACPI fan, profile)
         self._wall = wall
-        self._history = collections.deque()   # [mono, line, written], last HISTORY_S
+        self._history = collections.deque(maxlen=self.HISTORY_MAX_ENTRIES)  # [mono, line, written]
         self._last_sample = float("-inf")
         self._after_until = float("-inf")
 
