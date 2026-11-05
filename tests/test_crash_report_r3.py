@@ -87,6 +87,23 @@ def test_log_tail_straddling_build_token_is_redacted_whole(isolated, tmp_path):
     assert "test-" not in log
 
 
+def test_huge_log_line_is_held_raw_at_64_kib_and_redacted_in_the_report(isolated, tmp_path, monkeypatch):
+    """A 1 MB line is kept raw at no more than 64 KiB; the report line is redacted and within 2048 bytes."""
+    monkeypatch.setattr(getpass, "getuser", lambda: "qwxzebra")
+    reporter = _reporter(tmp_path, "huge")
+    reporter.log.info("qwxzebra " + "y" * (1024 * 1024))
+    try:
+        assert len(reporter.tail.lines[-1].encode("utf-8")) <= 64 * 1024
+        _name, data = reporter._report(ValueError("boom"), None, None)
+    finally:
+        reporter.log.removeHandler(reporter.tail)
+    _report, log, _ = _zip_parts(data)
+    (line,) = [ln for ln in log.splitlines() if "yyy" in ln]
+    assert line.endswith(" ... [cut]")
+    assert "qwx" not in log
+    assert len(line.encode("utf-8")) <= cr.MAX_LOG_LINE_CHARS + len(" ... [cut]")
+
+
 def test_build_zip_marks_a_cut_traceback_and_stays_under_cap():
     """A traceback cut to fit REPORT_CAP_BYTES carries the cut marker, like the other cut paths."""
     report = {"traceback": "t" * (900 * 1024), "message": "m"}

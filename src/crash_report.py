@@ -23,6 +23,7 @@ from crash_scrub import scrub
 APP_ID = "z13-helper"
 LOG_LINES = 500
 MAX_LOG_LINE_CHARS = 2048
+RAW_LINE_CAP_BYTES = 64 * 1024
 MAX_FATAL_BYTES = 256 * 1024
 MAX_FATAL_READ_BYTES = 1024 * 1024
 MESSAGE_CAP = 4096
@@ -70,9 +71,9 @@ class _LogTail(logging.Handler):
         self.max_line_len = max_line_len
 
     def emit(self, record):
-        # Stored unredacted and uncut: the reporter redacts each line first and the
-        # byte cap (log_tail, via build_zip) runs after, so a cut can't split an identifier.
-        self.lines.append(self.format(record))
+        # Kept unredacted, so the reporter redacts before the 2048-byte cap. This raw cap
+        # only bounds memory (#30) and sits far past that final window.
+        self.lines.append(_cap_bytes(self.format(record), RAW_LINE_CAP_BYTES))
 
 
 def _cap_bytes(text: str, limit: int) -> str:
