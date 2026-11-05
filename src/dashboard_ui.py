@@ -890,7 +890,8 @@ class DashboardUI(QMainWindow):
             cpu = self.sensors.get_cpu_temp()
             gpu = self.sensors.get_gpu_temp_labeled()
             fan1, fan2 = self.sensors.get_fan_speeds()
-            self.history.add(time.monotonic(), apu, gpu, fan1, fan2)
+            self.history.add(time.monotonic(), cpu[0] if cpu else None,
+                             gpu[0] if gpu else None, fan1, fan2)
             fw = self._fans_window
             if fw is not None and fw.isVisible() and hasattr(fw, "history_chart"):
                 fw.history_chart.update()
