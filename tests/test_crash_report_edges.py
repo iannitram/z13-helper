@@ -55,6 +55,7 @@ def test_no_user_name_available_queues_redacted_report(tmp_path, monkeypatch):
 
     assert "crash for unknown user" in rep["message"]
     assert "worker run for unknown user completed" in log
+    assert BUILD["token"] not in (rep["traceback"] + rep["message"] + log)
 
 
 def test_log_tail_caps_oversized_single_line_with_cut_marker():

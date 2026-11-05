@@ -24,6 +24,9 @@ APP_ID = "z13-helper"
 LOG_LINES = 500
 MAX_LOG_LINE_CHARS = 2048
 MAX_FATAL_BYTES = 256 * 1024
+MAX_FATAL_READ_BYTES = 1024 * 1024
+MESSAGE_CAP = 4096
+REPORT_CAP_BYTES = 512 * 1024
 SETTING = "send_crash_reports"
 BUILD_CONFIG = Path(__file__).with_name("_crash_build.json")
 UPLOAD_TIMEOUT = 10
@@ -67,28 +70,36 @@ class _LogTail(logging.Handler):
 
     def emit(self, record):
         line = self.format(record)
-        if self.max_line_len and len(line) > self.max_line_len:
-            line = line[:self.max_line_len] + " ... [cut]"
+        if self.max_line_len and len(line.encode("utf-8")) > self.max_line_len:
+            line = _cap_bytes(line, self.max_line_len) + " ... [cut]"
         self.lines.append(line)
 
 
+def _cap_bytes(text: str, limit: int) -> str:
+    """Limit text to limit UTF-8 bytes without splitting a multi-byte character."""
+    data = text.encode("utf-8")
+    if len(data) <= limit:
+        return text
+    return data[:limit].decode("utf-8", errors="ignore")
+
+
 def read_fatal(fatal: Path | str, max_bytes: int = MAX_FATAL_BYTES) -> str:
-    """Read a fatal crash log, capping its size and marking truncation."""
+    """Read a fatal crash log, capping its size in UTF-8 bytes and marking truncation."""
     p = Path(fatal)
     try:
         if p.exists() and p.is_file():
             size = p.stat().st_size
             with p.open("rb") as f:
                 data = f.read(max_bytes)
-                text = data.decode("utf-8", errors="replace")
+                text = data.decode("utf-8", errors="ignore")
                 if size > max_bytes or f.read(1):
                     return text + "\n... [cut] ...\n"
                 return text
     except (OSError, ValueError):
         pass
     text = str(fatal)
-    if len(text) > max_bytes:
-        return text[:max_bytes] + "\n... [cut] ...\n"
+    if len(text.encode("utf-8")) > max_bytes:
+        return _cap_bytes(text, max_bytes) + "\n... [cut] ...\n"
     return text
 
 
@@ -297,11 +308,8 @@ class CrashReporter:
             kernel=platform.release(), python=platform.python_version(), now=now,
             install_id=install_file.read_text().strip(),
         )
-        tb_text = (read_fatal(fatal_text) if fatal_text else
+        tb_text = (read_fatal(fatal_text, max_bytes=MAX_FATAL_READ_BYTES) if fatal_text else
                    "".join(traceback.format_exception(type(exc), exc, tb)))
-        if len(tb_text) > MAX_FATAL_BYTES:
-            tb_text = tb_text[:MAX_FATAL_BYTES] + "\n... [cut] ...\n"
-        report["traceback"] = tb_text
         # A uid with no passwd entry and no USER/LOGNAME makes this raise; the report
         # must still go out, just without that identifier to scrub.
         try:
@@ -332,10 +340,19 @@ class CrashReporter:
                 text = scrub(text, home="", user=account.pw_gecos.split(",")[0] or None)
             return text
 
+        # Redact before the size caps: a cut landing inside an identifier would
+        # otherwise leave a partial one that clean() no longer matches.
+        tb_text = clean(tb_text)
+        if len(tb_text.encode("utf-8")) > MAX_FATAL_BYTES:
+            tb_text = _cap_bytes(tb_text, MAX_FATAL_BYTES) + "\n... [cut] ...\n"
+        report["traceback"] = tb_text
         report = {key: clean(value) for key, value in report.items()}
+        if len(report["message"].encode("utf-8")) > MESSAGE_CAP:
+            marker = " ... [cut]"
+            report["message"] = _cap_bytes(report["message"], MESSAGE_CAP - len(marker)) + marker
         logs = self.log_text() if self.log_text else "\n".join(list(self.tail.lines))
         return (drop_filename(sys.platform, now, secrets.token_hex(4)),
-                build_zip(report, clean(log_tail(logs))))
+                build_zip(report, clean(logs)))
 
 
 def upload_report(build, name, data):
@@ -435,7 +452,7 @@ def log_tail(text: str, n: int = LOG_LINES, max_line_len: int = MAX_LOG_LINE_CHA
     Args:
         text: The input text
         n: Number of lines to return (default: LOG_LINES)
-        max_line_len: Maximum characters per line (default: MAX_LOG_LINE_CHARS)
+        max_line_len: Maximum UTF-8 bytes per line (default: MAX_LOG_LINE_CHARS)
 
     Returns:
         The last n lines, each ending with \n
@@ -446,8 +463,8 @@ def log_tail(text: str, n: int = LOG_LINES, max_line_len: int = MAX_LOG_LINE_CHA
     lines = text.splitlines()
     out = []
     for line in lines[-n:]:
-        if max_line_len and len(line) > max_line_len:
-            line = line[:max_line_len] + " ... [cut]"
+        if max_line_len and len(line.encode("utf-8")) > max_line_len:
+            line = _cap_bytes(line, max_line_len) + " ... [cut]"
         out.append(line + "\n")
     return "".join(out)
 
@@ -502,6 +519,9 @@ def build_report(
 def build_zip(report: dict, log_text: str) -> bytes:
     """Build a zip file containing report.json and app.log.
 
+    The uncompressed entries stay under REPORT_CAP_BYTES: the oldest log lines
+    are dropped first (one line kept), then the traceback is cut.
+
     Args:
         report: The crash report dictionary
         log_text: The log text
@@ -509,18 +529,26 @@ def build_zip(report: dict, log_text: str) -> bytes:
     Returns:
         Bytes of the zip file
     """
+    lines = [line + "\n" for line in log_tail(log_text).splitlines()]
+    line_sizes = [len(line.encode("utf-8")) for line in lines]
+    log_size = sum(line_sizes)
+    report_json = json.dumps(report, indent=2, sort_keys=True)
+    while len(lines) > 1 and len(report_json.encode("utf-8")) + log_size > REPORT_CAP_BYTES:
+        log_size -= line_sizes.pop(0)
+        lines.pop(0)
+    while len(report_json.encode("utf-8")) + log_size > REPORT_CAP_BYTES:
+        tb = report.get("traceback") or ""
+        cut = _cap_bytes(tb, len(tb.encode("utf-8")) * 3 // 4)
+        if cut == tb:
+            break
+        report["traceback"] = cut
+        report_json = json.dumps(report, indent=2, sort_keys=True)
     # Create zip in memory
     zip_buffer = io.BytesIO()
 
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-        # Add report.json
-        report_json = json.dumps(report, indent=2, sort_keys=True)
         zip_file.writestr("report.json", report_json)
+        zip_file.writestr("app.log", "".join(lines))
 
-        # Add app.log with tail
-        log_tail_content = log_tail(log_text)
-        zip_file.writestr("app.log", log_tail_content)
-
-    # Return the zip bytes
     zip_buffer.seek(0)
     return zip_buffer.read()
