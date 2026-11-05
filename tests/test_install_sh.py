@@ -569,3 +569,45 @@ def test_decky_plugin_dry_run_only_prints_loader_lifecycle(tmp_path, real_subpro
     assert "(dry run) sudo systemctl stop/kill plugin_loader.service" in p.stdout
     assert "(dry run) sudo systemctl start plugin_loader.service" in p.stdout
     assert "Decky frontend: not checked — dry run" in p.stdout
+
+
+def _run_flags(tmp_path, real_subprocess, *args):
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    env = {"HOME": str(home), "PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"}
+    return real_subprocess(["bash", str(SCRIPT), *args], env=env, stdin=open(os.devnull),
+                           capture_output=True, text=True, timeout=60)
+
+
+@needs_bash[0]
+@needs_bash[1]
+@pytest.mark.parametrize("args, message", [
+    (("--only", "x"), "--only needs --post-update"),
+    (("--post-update", "--only"), "--only needs a value"),
+    (("--post-update", "--only", "--dry-run"), "--only needs a value"),
+    (("--post-update", "--only", "nope-task", "--dry-run"), "unknown task: nope-task"),
+])
+def test_post_update_flag_errors_exit_2_before_any_install_step(tmp_path, real_subprocess, args, message):
+    p = _run_flags(tmp_path, real_subprocess, *args)
+    assert p.returncode == 2, p.stdout + p.stderr
+    assert message in p.stdout + p.stderr
+    assert "preflight" not in p.stdout.lower()
+
+
+@needs_bash[0]
+@needs_bash[1]
+def test_post_update_only_runs_just_the_runner_in_a_dry_run(tmp_path, real_subprocess):
+    p = _run_flags(tmp_path, real_subprocess, "--post-update", "--only", "etc-snapshot", "--dry-run")
+    out = p.stdout + p.stderr
+    assert p.returncode == 0, out
+    assert "Plan: 1 task" in out and "etc-snapshot" in out
+    assert "preflight" not in out.lower() and "Summary" not in out
+
+
+@needs_bash[0]
+@needs_bash[1]
+def test_repair_ends_with_the_pending_post_update_list(tmp_path, real_subprocess):
+    out = dry_run(tmp_path, real_subprocess, "--repair")
+    tail = out[out.rindex("Post-update tasks"):]
+    assert "Post-update tasks pending:" in tail
+    assert tail.index("Post-update tasks pending") < tail.index("log:")

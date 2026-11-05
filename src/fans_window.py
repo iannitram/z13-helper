@@ -20,6 +20,7 @@ import power_range
 import profiles
 from theme import ModeTile, Panel, tip, STANDARD, CUSTOM, ACCENT_FOR_BASE, TEXT_DIM
 from fan_curve_widget import FanCurveWidget, DEFAULT_CURVE
+from history_chart import HistoryChartWidget
 from profile_control import ProfileControl
 
 PL_MIN, PL_MAX = 5, 93           # IsZ1325 cap in G-Helper: the outer envelope; the live per-rail range
@@ -73,13 +74,14 @@ class _SliderRow(QWidget):
 
 
 class FansWindow(QWidget):
-    def __init__(self, control: ProfileControl, controller, sensors, parent=None):
+    def __init__(self, control: ProfileControl, controller, sensors, parent=None, history=None):
         super().__init__(parent, Qt.WindowType.Window)
         self.setObjectName("root")
         self.setWindowTitle("Fans and Power — ROG Flow Z13")
         self.control = control
         self.controller = controller
         self.sensors = sensors
+        self._history = history
         self._uv_available = controller.is_undervolt_available()
         self._selected = control.active_name()
         self._loading = False
@@ -158,6 +160,11 @@ class FansWindow(QWidget):
         self.chart = FanCurveWidget(title="CPU Fan Profile, RPM/°C  (both fans share one curve on the Z13)")
         self.chart.curveChanged.connect(self._on_curve_dragged)
         rv.addWidget(self.chart, 1)
+
+        if self._history is not None:
+            # The last hour, kept in memory only (telemetry_history.py).
+            self.history_chart = HistoryChartWidget(self._history)
+            rv.addWidget(self.history_chart)
 
         bottom = QHBoxLayout()
         self.btn_defaults = QPushButton("Factory Defaults")

@@ -22,13 +22,29 @@ as_deck() {
 # Give the EC a moment after wake; a write into a stalled EC can hard-lock (z13ctl 1.3.3 notes).
 sleep 3
 
-if [ -x "$PROFILE" ] && [ -f "$DECK_HOME/.config/z13-helper/profiles.json" ] \
-   && as_deck "$PROFILE" restore >/dev/null 2>&1; then
-    logger -t z13-fan-resume "re-applied active profile after resume (z13-profile restore)"
-    exit 0
+restore_rc=127
+if [ -x "$PROFILE" ] && [ -f "$DECK_HOME/.config/z13-helper/profiles.json" ]; then
+    as_deck "$PROFILE" restore >/dev/null 2>&1
+    restore_rc=$?
+    if [ "$restore_rc" -eq 0 ]; then
+        logger -t z13-fan-resume "re-applied active profile after resume (z13-profile restore)"
+        exit 0
+    fi
+    if [ "$restore_rc" -ne 127 ]; then
+        # restore ran but one step failed (e.g. a wedged lightbar). Do not
+        # overwrite the profile curve it did apply; report the live fan state.
+        fan_state="unavailable"
+        if [ -x "$Z13CTL" ]; then
+            fan_state=$(as_deck "$Z13CTL" fancurve --get 2>/dev/null | sed -n '1p')
+            [ -n "$fan_state" ] || fan_state="unavailable"
+        fi
+        logger -t z13-fan-resume "profile restore ran with a failed step (rc=$restore_rc); fan state: $fan_state"
+        exit 0
+    fi
 fi
 
-# Fallback: the old behaviour. Still runs z13ctl as deck, never as root (#5).
+# Fallback: the old behaviour, only when restore did not run at all.
+# Still runs z13ctl as deck, never as root (#5).
 if grep -q '"enabled": *true' "$MAXF" 2>/dev/null; then
     CURVE="20:100%,30:100%,40:100%,50:100%,60:100%,70:100%,80:100%,90:100%"
 fi
@@ -36,9 +52,5 @@ if [ -x "$Z13CTL" ] && as_deck "$Z13CTL" fancurve --set "$CURVE" >/dev/null 2>&1
     logger -t z13-fan-resume "profile restore unavailable; re-applied curve after resume ($CURVE)"
 else
     [ -x "$Z13CTL" ] && as_deck "$Z13CTL" fancurve --reset >/dev/null 2>&1
-    for h in /sys/class/hwmon/hwmon*; do
-        [ "$(cat "$h/name" 2>/dev/null)" = "asus_custom_fan_curve" ] || continue
-        for e in "$h"/pwm*_enable; do echo 2 > "$e" 2>/dev/null || true; done
-    done
-    logger -t z13-fan-resume "WARN curve re-apply FAILED; forced firmware-auto fallback after resume"
+    logger -t z13-fan-resume "WARN curve re-apply FAILED; firmware-auto reset after resume"
 fi

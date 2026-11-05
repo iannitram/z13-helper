@@ -100,6 +100,28 @@ def test_profile_restore_runs_as_deck_not_root(env):
     assert "re-applied active profile" in env.logger_log.read_text()
 
 
+def test_fallback_never_writes_pwm_enable_sysfs():
+    # Principle 1: the last-resort fallback goes through z13ctl, never sysfs.
+    text = SCRIPT.read_text()
+    assert "pwm*_enable" not in text
+    assert "echo 2 >" not in text
+
+
+def test_failed_restore_does_not_write_a_curve(env):
+    # restore ran (rc=1, e.g. a wedged lightbar) but one step failed: the profile
+    # curve it applied must stand. Only a non-running restore uses the fallback.
+    env.write_profile(rc=1)
+    env.write_ctl(rc=0)
+    p = env()
+    assert p.returncode == 0, p.stderr
+    log = env.ctl_log.read_text()
+    assert "fancurve --set" not in log
+    assert "fancurve --reset" not in log
+    assert "fancurve --get" in log
+    assert "ran DIRECTLY" not in log
+    assert "profile restore ran with a failed step" in env.logger_log.read_text()
+
+
 def test_fallback_curve_set_runs_as_deck_not_root(env):
     # No z13-profile at all: forces the fallback path (the one issue #5 found unsafe).
     env.write_ctl(rc=0)
