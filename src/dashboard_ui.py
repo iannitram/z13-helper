@@ -37,6 +37,7 @@ import post_update_view
 import profiles
 import update_watch
 from fan_watchdog import FanTrace, FanWatchdog, FanWatchdogRunner
+from display_modes import RefreshControl
 from screen_brightness import ScreenBrightness, MIN_PERCENT
 from apply_worker import ApplyWorker
 import state_authority as authority
@@ -93,6 +94,8 @@ class DashboardUI(QMainWindow):
     # From app_log listeners, which run on whatever thread logged / crashed.
     _errorLogged = pyqtSignal()
     _crashReported = pyqtSignal(str, str)
+    _refreshChoices = pyqtSignal(object)  # [(Hz, Mode)] from the panel
+    _refreshDone = pyqtSignal(bool, str)
 
     def __init__(self, controller: HardwareController, sensors: SensorReader, config: ConfigManager):
         super().__init__()
@@ -437,6 +440,25 @@ class DashboardUI(QMainWindow):
         col.addWidget(self.screen_panel)
         col.addWidget(self._sep())
 
+        # 3b. Screen refresh: only the rates the panel advertises (display_modes.py)
+        self._refresh_ctl = RefreshControl()
+        self.refresh_panel = Panel("Screen Refresh")
+        rrow = QHBoxLayout()
+        self.refresh_combo = QComboBox()
+        self.refresh_combo.setEnabled(False)
+        self.refresh_combo.activated.connect(self._refresh_picked)
+        self.refresh_back = QPushButton("Back")
+        self.refresh_back.setToolTip("Return to the refresh rate before the last change")
+        self.refresh_back.setEnabled(False)
+        self.refresh_back.clicked.connect(self._refresh_back)
+        rrow.addWidget(self.refresh_combo, 1)
+        rrow.addWidget(self.refresh_back)
+        self.refresh_panel.body.addLayout(rrow)
+        self._refreshChoices.connect(self._fill_refresh_choices)
+        self._refreshDone.connect(self._refresh_finished)
+        col.addWidget(self.refresh_panel)
+        col.addWidget(self._sep())
+
         # 4. Battery Charge Limit
         self.batt = Panel("Battery Charge Limit: --%")
         srow = QHBoxLayout()
@@ -511,6 +533,7 @@ class DashboardUI(QMainWindow):
         self.batt_100.setChecked(self.battery_slider.value() == 100)
         self._highlight_brightness(self.config.get("brightness", "medium"))
         self._sync_screen_brightness(force=True)
+        self._load_refresh_choices()
         rc, out, _ = host.run(["systemctl", "--user", "is-enabled", _SERVICE], timeout=10)
         self.startup.blockSignals(True)
         self.startup.setChecked(rc == 0 and out.strip() == "enabled")
@@ -809,6 +832,47 @@ class DashboardUI(QMainWindow):
             if text and text != self.config.get("post_update_notified", ""):
                 self._tray.showMessage("Z13-Helper", text, QSystemTrayIcon.MessageIcon.Warning, 8000)
                 self.config.set("post_update_notified", text)
+
+    # Screen refresh (Desktop Mode, kscreen-doctor; slow calls run off the GUI thread)
+    def _load_refresh_choices(self):
+        threading.Thread(target=lambda: self._refreshChoices.emit(self._refresh_ctl.choices()),
+                         daemon=True).start()
+
+    def _fill_refresh_choices(self, choices):
+        self.refresh_combo.clear()
+        for hz, mode in choices:
+            self.refresh_combo.addItem(f"{hz} Hz", hz)
+            if mode.current:
+                self.refresh_combo.setCurrentIndex(self.refresh_combo.count() - 1)
+        self.refresh_combo.setEnabled(bool(choices))
+        self.refresh_back.setEnabled(self._refresh_ctl.previous is not None)
+        note = getattr(self, "_refresh_note", "")
+        self.refresh_panel.right.setText(note or ("" if choices else "no modes reported"))
+
+    def _run_refresh(self, fn):
+        self._refresh_note = ""
+        self.refresh_combo.setEnabled(False)
+        self.refresh_back.setEnabled(False)
+
+        def go():
+            ok, msg = fn()
+            self._refreshDone.emit(ok, msg)
+        threading.Thread(target=go, daemon=True).start()
+
+    def _refresh_picked(self, _index):
+        hz = self.refresh_combo.currentData()
+        if hz is not None:
+            self._run_refresh(lambda: self._refresh_ctl.set_refresh(hz))
+
+    def _refresh_back(self):
+        self._run_refresh(self._refresh_ctl.back)
+
+    def _refresh_finished(self, ok, msg):
+        # Kept in a note so the reload below does not clear it; a failure or
+        # rollback is marked, a success shows the message as is.
+        self._refresh_note = msg if ok else f"⚠ {msg}"
+        self.refresh_panel.right.setText(self._refresh_note)
+        self._load_refresh_choices()
 
     def _open_updates(self):
         if self._updates_dialog is None:
