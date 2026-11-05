@@ -31,6 +31,23 @@ def test_normalize_keeps_enabled_as_the_source_of_truth():
     )
 
 
+def test_filling_default_targets_does_not_enable_autoswitch():
+    cfg = autoswitch.default_config()
+    cfg.update(ac="Turbo", battery="Silent")
+    targets = {"Turbo": "z13h-turbo-1", "Silent": "quiet"}
+
+    for state in (cfg, autoswitch.normalize(cfg, NAMES)):
+        assert state == {
+            "ac": "Turbo", "battery": "Silent", "enabled": False, "hold": False
+        }
+        assert autoswitch.decision(state, True) is None
+        assert autoswitch.decision(state, False) is None
+        assert autoswitch.backend_argv(state, targets) == [
+            "autoswitch", "--ac", "z13h-turbo-1", "--battery", "quiet", "--off"
+        ]
+        assert autoswitch.describe(state) == "Autoswitch off"
+
+
 def test_decision_picks_the_source_profile():
     cfg = autoswitch.normalize(
         {"ac": "Turbo", "battery": "Silent", "enabled": True}, NAMES

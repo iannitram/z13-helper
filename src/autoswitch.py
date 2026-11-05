@@ -18,7 +18,7 @@ def default_config():
 
 
 def normalize(config, names):
-    """Keep only known app profiles; hold always pauses the switch."""
+    """Keep known app profiles and explicit enabled intent; hold pauses it."""
     known = set(names)
     out = default_config()
     if not isinstance(config, dict):
@@ -60,8 +60,8 @@ def backend_argv(config, targets):
     """z13ctl autoswitch arguments (without the binary) for `config`.
 
     `targets` maps app profile names to daemon targets. An empty target clears
-    that side. Hold is `--off` with the targets retained; no targets at all
-    clears the configuration.
+    that side. Disabled or held means `--off` with the targets retained;
+    no targets at all clears the configuration.
     """
     ac = targets.get(config.get("ac"))
     battery = targets.get(config.get("battery"))
