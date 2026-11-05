@@ -30,7 +30,7 @@ Decky re-reads shared state when its methods need it rather than holding a long-
 
 | Path | Responsibility |
 |---|---|
-| `decky/main.py` | Decky backend and callable API. Profile reads/switches, Max Fans (records goal transitions to `timeline.jsonl`), direct performance profile, power, battery limit, brightness, telemetry, `get_timeline`, SteamOS `BUILD_ID` transition check, desktop-app check and Game Mode watchdog lifecycle. Each z13ctl write uses `host.Z13CTL_WRITE_TIMEOUT_S` (20 s); a profile apply gets its own 180 s budget (`PROFILE_APPLY_TIMEOUT_S`). Write callables (`set_app_profile`, `set_profile`, `set_max_fans`) return `{ok, message}`, so a timeout reaches the panel as text. |
+| `decky/main.py` | Decky backend and callable API. Profile reads/switches, Max Fans (records goal transitions to `timeline.jsonl`), direct performance profile, power, battery limit, brightness (manual TDP, charge-limit and brightness writes each record a `timeline.jsonl` setting entry via `timeline.record_setting_change`), telemetry, `get_timeline`, SteamOS `BUILD_ID` transition check, desktop-app check and Game Mode watchdog lifecycle. Each z13ctl write uses `host.Z13CTL_WRITE_TIMEOUT_S` (20 s); a profile apply gets its own 180 s budget (`PROFILE_APPLY_TIMEOUT_S`). Write callables (`set_app_profile`, `set_profile`, `set_max_fans`) return `{ok, message}`, so a timeout reaches the panel as text. |
 | `decky/src/index.tsx` | QAM panel composition and profile switch flow. |
 | `decky/src/backend.ts` | Typed Decky callable names, results and shared TDP clamping rule. |
 | `decky/src/profileSwitch.ts` | Pure async flow for profile changes: apply, then re-read profile and Max Fans whether apply succeeds or fails. |

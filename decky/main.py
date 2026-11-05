@@ -692,6 +692,7 @@ def set_brightness_per_device(level, recover=None, recover_stale=None):
     recover_stale = recover_stale or recover_lightbar_stale
     if level not in BRIGHTNESS_LEVELS:
         return {"ok": False, "failed": list(LIGHTING_DEVICES), "message": f"bad level {level!r}"}
+    before_level = _load_state().get("brightness")
     failed = []
     notes = []
     for dev in LIGHTING_DEVICES:
@@ -731,6 +732,14 @@ def set_brightness_per_device(level, recover=None, recover_stale=None):
         msg = "Brightness failed: no lighting device responded"
     if notes:
         msg += f" [{'; '.join(notes)}]"
+    try:
+        timeline.record_setting_change(
+            kind="brightness", summary=f"Brightness {level}",
+            before={"brightness": before_level}, after={"brightness": level},
+            ok=ok, path=TIMELINE_PATH,
+        )
+    except Exception:
+        pass
     return {"ok": ok, "failed": failed, "message": msg}
 
 
@@ -783,6 +792,9 @@ def apply_tdp(enabled, pl1, pl2, pl3, profile=None):
            what hands the limits back to the firmware (desktop does the same).
     """
     tdp = clamp_tdp(pl1, pl2, pl3, tdp_ranges())
+    before_tdp = (active_profile(_read_store()) or {}).get("tdp")
+    if isinstance(before_tdp, dict):
+        before_tdp = dict(before_tdp)
     name, err = _set_active_field(profile, tdp=tdp if enabled else None)
     if err and err.startswith("Not applied:"):
         return {"ok": False, "saved": False, "stale": True, "message": err}
@@ -804,6 +816,17 @@ def apply_tdp(enabled, pl1, pl2, pl3, profile=None):
         msg = (f"{name}: power limits back to the firmware" if ok
                else timeout_message if timeout_message
                else f"{name}: saved, but re-apply failed ({out[-120:] or f'rc={rc}'})")
+    try:
+        timeline.record_setting_change(
+            kind="tdp",
+            summary=(f"{name}: TDP {tdp['pl1']}/{tdp['pl2']}/{tdp['pl3']} W"
+                     if enabled else f"{name}: TDP off"),
+            before={"tdp": before_tdp},
+            after={"tdp": tdp if enabled else None},
+            ok=ok, path=TIMELINE_PATH,
+        )
+    except Exception:
+        pass
     return {"ok": ok, "saved": True, "message": msg, "tdp": tdp}
 
 
@@ -829,6 +852,9 @@ def apply_battery_limit(value, profile=None):
     """Store the active profile's battery_limit, then `z13ctl batterylimit --set` as deck.
     The hardware write still happens if the store can't be written (reported)."""
     v = clamp_battery(value)
+    before_bl = _live_battery_limit()
+    if before_bl is None:
+        before_bl = (active_profile(_read_store()) or {}).get("battery_limit")
     name, err = _set_active_field(profile, battery_limit=v)
     if err and err.startswith("Not applied:"):
         return {"ok": False, "saved": False, "stale": True, "message": err,
@@ -836,6 +862,14 @@ def apply_battery_limit(value, profile=None):
     rc, out = _run([Z13CTL, "batterylimit", "--set", str(v)],
                    timeout=Z13CTL_WRITE_TIMEOUT_S, as_deck=True)
     ok = rc == 0
+    try:
+        timeline.record_setting_change(
+            kind="battery_limit", summary=f"Charge limit {v}%",
+            before={"battery_limit": before_bl}, after={"battery_limit": v},
+            ok=ok, path=TIMELINE_PATH,
+        )
+    except Exception:
+        pass
     msg = (f"Charge limit {v}%" if ok else out if out.startswith("z13ctl write timed out after ")
            else f"Charge limit failed ({out[-120:] or f'rc={rc}'})")
     if err:
@@ -862,7 +896,6 @@ def max_fans_off_argv(state, store):
 def set_max_fans_blocking(enabled):
     """Max Fans ON/OFF (blocking; run it in a thread). Returns status + message."""
     before_mf = dict(_load_max_fans())
-    before_on = bool(before_mf.get("enabled", False))
     store = _read_store()
     prof_name = (active_profile(store) or {}).get("name") or None
     if enabled:
@@ -878,24 +911,13 @@ def set_max_fans_blocking(enabled):
         _update_max_fans(enabled=enabled)
     after_mf = dict(_load_max_fans())
     try:
+        before, after = timeline.max_fans_goal_states(before_mf, after_mf, enabled, ok=ok)
         timeline.record_goal_change(
-            goal="max" if enabled else "custom",
-            previous_goal="max" if before_on else "custom",
-            before={
-                "goal": "max" if before_on else "custom",
-                "max_fans": before_on,
-                "saved_curve": before_mf.get("saved_curve"),
-            },
-            after={
-                "goal": "max" if after_mf.get("enabled") else "custom",
-                "max_fans": bool(after_mf.get("enabled")),
-                "saved_curve": after_mf.get("saved_curve"),
-            },
-            profile=prof_name,
-            ok=ok,
+            goal=after["goal"], previous_goal=before["goal"],
+            before=before, after=after, profile=prof_name, ok=ok,
             path=TIMELINE_PATH,
         )
-    except OSError:
+    except Exception:
         pass
     return {"ok": ok, "message": ("Max Fans ON" if enabled else "Max Fans OFF")
             if ok else out or f"z13ctl fancurve failed (rc={rc})"}

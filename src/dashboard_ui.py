@@ -568,26 +568,14 @@ class DashboardUI(QMainWindow):
         active_name = self.control.active_name()
 
         def _record(before_mf, target_on, ok=True):
-            before_on = bool(before_mf.get("enabled"))
             try:
                 after_mf = max_fans_state.load()
+                before, after = timeline.max_fans_goal_states(before_mf, after_mf, target_on, ok=ok)
                 timeline.record_goal_change(
-                    goal="max" if target_on else "custom",
-                    previous_goal="max" if before_on else "custom",
-                    before={
-                        "goal": "max" if before_on else "custom",
-                        "max_fans": before_on,
-                        "saved_curve": before_mf.get("saved_curve"),
-                    },
-                    after={
-                        "goal": "max" if target_on else "custom",
-                        "max_fans": bool(after_mf.get("enabled")),
-                        "saved_curve": after_mf.get("saved_curve"),
-                    },
-                    profile=active_name,
-                    ok=ok,
+                    goal=after["goal"], previous_goal=before["goal"],
+                    before=before, after=after, profile=active_name, ok=ok,
                 )
-            except OSError:
+            except Exception:
                 pass
 
         def on():
@@ -640,7 +628,23 @@ class DashboardUI(QMainWindow):
         self._highlight_brightness(level)
 
         def go():
-            failed = self.controller.set_brightness(level, devices=devices)
+            before_level = self.config.get("brightness")
+
+            def record(ok):
+                try:
+                    timeline.record_setting_change(
+                        kind="brightness", summary=f"Brightness {label}",
+                        before={"brightness": before_level}, after={"brightness": level}, ok=ok,
+                    )
+                except Exception:
+                    pass
+
+            try:
+                failed = self.controller.set_brightness(level, devices=devices)
+            except Exception:
+                record(ok=False)
+                raise
+            record(ok=True)
             self.config.set("brightness", level)
             return f"Brightness {label}" + (f" ({', '.join(failed)} not responding)" if failed else "")
         self.control._submit("Brightness", go)

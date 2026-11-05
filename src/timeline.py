@@ -44,9 +44,12 @@ LOCK_POLL_S = 0.05
 DECK_UID = 1000
 DECK_GID = 1000
 
-KINDS = ("profile", "goal", "install", "post_update", "steamos_update", "host")
+KINDS = ("profile", "goal", "install", "post_update", "steamos_update", "host",
+         "tdp", "battery_limit", "brightness")
 # Principle 7 applies to host-level changes (/etc, z13ctl, units, OS slot).
 HOST_KINDS = ("install", "post_update", "steamos_update", "host")
+# Manual hardware settings the frontends write on demand (never Principle 7 host changes).
+SETTING_KINDS = ("tdp", "battery_limit", "brightness")
 
 _LOCK_STATE = threading.local()
 
@@ -522,6 +525,73 @@ def record_goal_change(*, goal, previous_goal=None, before=None, after=None,
         path=path,
         journal=False,
     )
+
+
+def record_setting_change(*, kind, summary, before, after, ok=True, path=None):
+    """Record a manual hardware setting write (TDP, battery limit, brightness).
+
+    A failed write (`ok=False`) records the unchanged state as `after`
+    (`before == after`) and a `(failed)` summary. A changed key that `before`
+    does not know at all is not reversible. Writes `journal=False`: hardware
+    settings are not Principle 7 host changes.
+    """
+    if kind not in SETTING_KINDS:
+        raise ValueError(f"unknown setting kind {kind!r}; expected one of: {', '.join(SETTING_KINDS)}")
+    before_d = dict(before) if isinstance(before, dict) else {}
+    after_d = dict(after) if isinstance(after, dict) else {}
+    if not ok:
+        after_d = dict(before_d)   # a failed write leaves the setting as it was
+    changed = sorted(k for k in set(before_d) | set(after_d) if before_d.get(k) != after_d.get(k))
+    if not changed:
+        rb = None
+        reason = "Value unchanged"
+    elif all(k not in before_d for k in changed):
+        rb = None
+        reason = "Previous value not known"
+    else:
+        rb = {"kind": kind, "state": before_d}
+        reason = None
+    if not ok and not summary.endswith("(failed)"):
+        summary += " (failed)"
+    return append(
+        {
+            "kind": kind,
+            "summary": summary,
+            "ok": bool(ok),
+            "before": before_d,
+            "after": after_d,
+            "changed": changed,
+            "rollback": rb,
+            "no_rollback_reason": reason,
+        },
+        path=path,
+        journal=False,
+    )
+
+
+def max_fans_goal_states(before_mf, after_mf, target_on, ok=True):
+    """Max Fans toggle before/after states for `record_goal_change`.
+
+    `before_mf` / `after_mf` are `max-fans.json` state dicts (or None). A failed
+    toggle (`ok=False`) records the state as it was before, so `before == after`
+    even if `saved_curve` drifted on disk before the write failed.
+    """
+    before_mf = dict(before_mf) if isinstance(before_mf, dict) else {}
+    after_mf = dict(after_mf) if isinstance(after_mf, dict) else {}
+    before_on = bool(before_mf.get("enabled"))
+    before_d = {
+        "goal": "max" if before_on else "custom",
+        "max_fans": before_on,
+        "saved_curve": before_mf.get("saved_curve"),
+    }
+    if not ok:
+        return before_d, dict(before_d)
+    after_d = {
+        "goal": "max" if target_on else "custom",
+        "max_fans": bool(after_mf.get("enabled")),
+        "saved_curve": after_mf.get("saved_curve"),
+    }
+    return before_d, after_d
 
 
 def collect_backup_tree(backup_dir):
