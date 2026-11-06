@@ -134,6 +134,12 @@ def test_resume_owner_defers_without_restore_or_sleep(env, version):
     ("foo version 1.4.2", 10),
     ("z13ctl version 0.4.2", 10),
     ("z13ctl version 0.5.2", 10),
+    ("z13ctl version 1.5.0-beta", 10),
+    ("z13ctl version 2.0.0x", 10),
+    ("z13ctl version 1.4.2.", 10),
+    ("z13ctl version .1.4.2", 10),
+    ("z13ctl version 1.4.2 extra", 10),
+    ("z13ctl version", 10),
     ("z13ctl version 1.4.2", 0),
     ("z13ctl version 1.4.2", 2),
     ("z13ctl version 1.4.2", 124),
@@ -147,6 +153,7 @@ def test_unproven_resume_owner_keeps_restore_path(env, version, owner_rc):
         assert "resume-owner" not in env.profile_log.read_text()
     assert "restore" in env.profile_log.read_text()
     assert "re-applied active profile" in env.logger_log.read_text()
+    assert "hook deferred" not in env.logger_log.read_text()
     assert env.sleep_log.read_text().strip() == "3"
 
 
