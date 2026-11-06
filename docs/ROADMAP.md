@@ -299,6 +299,18 @@ suspend/resume cycle on a custom curve with the fans checked after; (7) profiles
 watchdog's curve-drop branch once the daemon is proven to re-apply curves itself; use `subscribe`
 events (not in 1.4.2's CLI — check the socket API) instead of polling.
 
+**#66 retirement gate:** retain curve-drop recovery for now. The issue records z13ctl
+1.4.2 as untested on SteamOS 3.9.5's kernel 7.2 (2026-10-26); a version number or
+custom-curve-enabled bit alone is insufficient evidence to remove recovery.
+Before retiring this branch, record #74 step 3 and #80 results: daemon-only curve
+restoration after platform-profile writes and three suspend/resume cycles in
+Desktop Mode and Game Mode, including Valve's ASUS fan-after-wake workaround.
+Correlate restored curve points with sustained fan response and temperatures
+(§12); keep stall, frozen-tach and auto-stall recovery independent of that decision.
+Until then, both inline and queued dropped-curve recoveries recheck intent and
+curve mode before writing, skipping recovery if the daemon has already restored
+the curve or the mode can no longer be read.
+
 ---
 
 ## 9. Phase 13 — Game Mode polish ⏳
