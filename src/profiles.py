@@ -1125,7 +1125,8 @@ def epp_argv(value):
     nothing assumes policy{n} == cpu{n}). The value is checked against EPP_CHOICES
     and travels as an argv item (never spliced into the script). The script stops
     at the first write that fails and fails when no node matched (e.g. a kernel
-    without amd-pstate), so that never reads as success.
+    without amd-pstate), so that never reads as success. A failed write stops the
+    loop, so policies can end up mixed (some written, some not), and the UI shows "mixed".
     """
     if value not in EPP_CHOICES:
         raise ValueError(f"epp must be one of {EPP_CHOICES}")

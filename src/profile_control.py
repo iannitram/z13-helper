@@ -114,14 +114,9 @@ class ProfileControl(QObject):
     # ---------------- editing ----------------
 
     def save(self, profile, field=None):
-        """Persist `profile`; if it is the active one, push `field` live."""
+        """Persist `profile`; with `field`, store that field through the owner (pushed live if active)."""
         if field:
-            # Save the user's choice immediately so the combo reflects the
-            # selected profile while the serialized owner handles the live push.
-            profiles.upsert_profile(profile)
-            self.changed.emit()
-            if profile["name"] == self.active_name():
-                self._submit(f"{profile['name']}: {field}", self._pusher(profile, field))
+            self._submit(f"{profile['name']}: {field}", self._pusher(profile, field))
         else:
             profiles.upsert_profile(profile)
             self.changed.emit()
@@ -206,9 +201,6 @@ class ProfileControl(QObject):
 
     def _pusher(self, profile, field):
         # Evaluate the target on the worker, after any queued profile switch.
-        if field == "epp":
-            value = profile.get("epp")
-            return lambda: self.controller.set_epp(value) if value else "unchanged"
         return lambda: authority.edit(profile, field)
 
     def _submit(self, label, fn):
