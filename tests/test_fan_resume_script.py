@@ -61,9 +61,11 @@ def env(tmp_path, real_subprocess):
         p.chmod(0o755)
         return p
 
-    def write_profile(rc=0, log=None):
+    def write_profile(rc=0, log=None, old_cli=False, output=""):
         p = home / ".local" / "bin" / "z13-profile"
-        p.write_text(executable_stub("PROFILE_LOG", "z13-profile") + f"exit {rc}\n")
+        old = 'if [ "$*" = "restore --if-needed" ]; then exit 2; fi\n' if old_cli else ""
+        printed = f'printf "%s\\n" {output!r}\n' if output else ""
+        p.write_text(executable_stub("PROFILE_LOG", "z13-profile") + old + printed + f"exit {rc}\n")
         p.chmod(0o755)
         (home / ".config" / "z13-helper" / "profiles.json").write_text("{}")
         return p
@@ -97,7 +99,8 @@ def test_profile_restore_runs_as_deck_not_root(env):
     assert p.returncode == 0, p.stderr
     assert "ran as deck via runuser" in env.profile_log.read_text()
     assert "ran DIRECTLY" not in env.profile_log.read_text()
-    assert "re-applied active profile" in env.logger_log.read_text()
+    assert "hook re-applied the active profile" in env.logger_log.read_text()
+    assert "restore --if-needed" in env.profile_log.read_text()
 
 
 def test_fallback_never_writes_pwm_enable_sysfs():
@@ -153,3 +156,22 @@ def test_missing_z13ctl_fallback_does_not_crash(env):
     p = env()
     assert p.returncode == 0, p.stderr
     assert "WARN curve re-apply FAILED" in env.logger_log.read_text()
+
+
+def test_daemon_skip_is_logged_without_plain_restore(env):
+    env.write_profile(output="already restored by z13ctl; skipped")
+    env.profile_log.write_text("")
+    p = env()
+    assert p.returncode == 0, p.stderr
+    assert "restore --if-needed" in env.profile_log.read_text()
+    assert "z13ctl daemon restored the profile; hook skipped" in env.logger_log.read_text()
+
+
+def test_old_profile_cli_falls_back_to_plain_restore(env):
+    env.write_profile(rc=0, old_cli=True)
+    p = env()
+    assert p.returncode == 0, p.stderr
+    log = env.profile_log.read_text()
+    assert "restore --if-needed" in log
+    assert "restore\n" in log
+    assert "hook re-applied the active profile" in env.logger_log.read_text()

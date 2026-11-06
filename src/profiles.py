@@ -1514,6 +1514,8 @@ def main(argv=None):
     s.add_argument("--no-hooks", action="store_true", help="skip enter/exit hooks")
     s = sub.add_parser("restore", help="re-apply the active profile (login / resume)")
     s.add_argument("--no-hooks", action="store_true")
+    s.add_argument("--if-needed", action="store_true",
+                   help="skip when z13ctl has already restored the active profile and curve")
     sub.add_parser("watch", help="stream z13ctl state changes as JSON lines")
     args = ap.parse_args(argv)
 
@@ -1565,6 +1567,9 @@ def main(argv=None):
             print("no active profile", file=sys.stderr)
             return 1
         try:
+            if args.cmd == "restore" and args.if_needed and _resume_restore_is_current():
+                print("already restored by z13ctl; skipped")
+                return 0
             print(f"Applying profile: {name}")
             # On restore the hooks are intentionally skipped: a login shouldn't
             # re-run `boondock on` (its snapshot is from the previous session).
@@ -1573,8 +1578,49 @@ def main(argv=None):
         except KeyError as e:
             print(e, file=sys.stderr)
             return 1
+        if args.cmd == "restore" and args.if_needed:
+            print("re-applied")
         return _print_results(results)
     return 2
+
+
+def _resume_restore_is_current():
+    """Whether z13ctl has already restored the profile and its live curve.
+
+    Every read is conservative: an unavailable daemon, invalid state or curve
+    means the normal restore must run. This is deliberately only a resume
+    optimization; the apply path remains the safety fallback.
+    """
+    try:
+        from z13ctl_client import Z13CtlClient
+        client = authority.named_client()
+        if client is None:
+            return False
+        state = client.get_state()
+        store = load_store()
+        profile = get_profile(store.get("active"), store)
+        if profile is None:
+            return False
+        if state.get("profile") != Z13CtlClient.mapped_profile_name(profile):
+            return False
+
+        # Reuse the app's established z13ctl curve parser. Import lazily because
+        # hardware_controller imports profiles for its normal UI operations.
+        from hardware_controller import HardwareController
+        curve = HardwareController().get_fancurve()
+        if curve.get("mode") != "manual":
+            return False
+        points = curve.get("points")
+        if not isinstance(points, list) or len(points) != 8:
+            return False
+        max_state = _read_json(MAX_FANS_PATH)
+        if not isinstance(max_state, dict) or not isinstance(max_state.get("enabled"), bool):
+            return False
+        if max_state["enabled"]:
+            return all(pwm == 255 and pct == 100 for _, pwm, pct in points)
+        return True
+    except Exception:  # noqa: BLE001 - unreadable state always restores
+        return False
 
 
 if __name__ == "__main__":
