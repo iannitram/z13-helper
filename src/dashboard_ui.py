@@ -35,6 +35,7 @@ import install_record
 import max_fans_state
 import post_update_view
 import profiles
+import timeline
 import update_watch
 from fan_watchdog import FanTrace, FanWatchdog, FanWatchdogRunner
 from display_modes import RefreshControl
@@ -620,7 +621,43 @@ class DashboardUI(QMainWindow):
     # ------------------------------------------------------------------
 
     def _toggle_max_fans(self, checked):
-        self.control._submit("Max Fans", lambda: authority.set_max_fans(checked))
+        def go():
+            try:
+                active_name = self.control.active_name()
+            except Exception:
+                active_name = None
+
+            # Timeline recording is best-effort and never blocks or reorders the write.
+            try:
+                before_mf = max_fans_state.load()
+            except Exception:
+                before_mf = None
+
+            def record(ok):
+                try:
+                    after_mf = max_fans_state.load()
+                    before, after = timeline.max_fans_goal_states(before_mf or {}, after_mf, checked, ok=ok)
+                    timeline.record_goal_change(
+                        goal=after["goal"], previous_goal=before["goal"],
+                        before=before, after=after, profile=active_name, ok=ok,
+                        defer=True,
+                    )
+                except Exception as exc:  # best-effort: the hardware result stands
+                    logging.getLogger(__name__).warning(
+                        "timeline recording failed for Max Fans: %s: %s", type(exc).__name__, str(exc)[:200])
+
+            try:
+                message = authority.set_max_fans(checked)
+            except Exception:
+                record(False)
+                raise
+            record(True)
+            return message
+
+        self.control._submit("Max Fans", go)
+
+    def read_timeline(self, limit=50):
+        return timeline.read_entries(limit=limit, newest_first=True)
 
     # ------------------------------------------------------------------
     # Lighting

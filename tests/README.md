@@ -15,6 +15,8 @@ lets that error through rather than turning it into an rc).
 | File | Covers |
 |---|---|
 | `test_crash_wiring.py` | exception hooks, scrubbed uploads, consent, shared queue/rate limit, fatal recovery and build configuration; see `docs/crash-reporting.md` |
+| `test_timeline_r5.py` | review fixes for #134: deferred recording off the hardware lock, read-only Decky Max Fans snapshot, watchdog start not waiting on the timeline, folder held by descriptor, no descriptor leak, no rollback for unknown values, logged failures |
+| `test_timeline.py` | append-only `timeline.jsonl`, size-capped rotation, partly written last line handling, Principle 7 journal lines, and the five write paths |
 | `test_profiles_apply.py` | `profiles.apply()`: write order, step independence, hooks, Max Fans state suspension, undervolt |
 | `test_profiles_store.py` | store seeding/CRUD, `validate`, `apply_by_name`, the `z13-profile` CLI |
 | `test_backend_memory.py` | Decky RSS threshold, read errors, independent monitor and plugin startup/unload; no real exit or hardware |

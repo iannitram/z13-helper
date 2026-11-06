@@ -61,6 +61,10 @@ if (__name__ == "__main__" and os.path.basename(__file__) == "z13-profile"
 if __name__ == "__main__":
     sys.modules["profiles"] = sys.modules[__name__]
 import host  # noqa: E402
+try:
+    import timeline  # noqa: E402
+except ImportError:
+    timeline = None
 import state_authority as authority  # noqa: E402
 from state_events import lighting_level  # noqa: E402
 
@@ -648,8 +652,12 @@ def get_profile(name, store=None):
     return None
 
 
-def active_name():
-    return load_store().get("active")
+def active_name(create=True):
+    return load_store(create=create).get("active")
+
+
+def active_name_readonly():
+    return load_store(create=False).get("active")
 
 
 def sync_active_from_backend(state):
@@ -1180,6 +1188,32 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
     Returns a list of (step, ok, message). `previous` is the profile we are
     leaving (its exit hook runs first).
     """
+    before_max_fans = bool(_max_fans_state().get("enabled"))
+    results = _apply_steps(
+        profile,
+        previous=previous,
+        z13ctl=z13ctl,
+        skip_hooks=skip_hooks,
+        login_battery_default=login_battery_default,
+    )
+    if timeline is not None:
+        try:
+            timeline.record_profile_apply(
+                profile=profile,
+                previous=previous,
+                results=results,
+                before_max_fans=before_max_fans,
+                after_max_fans=bool(_max_fans_state().get("enabled")),
+                defer=True,   # queued; never written inside this hardware transaction
+            )
+        except Exception as exc:  # noqa: BLE001 - timeline recording is best-effort
+            logging.getLogger(__name__).warning(
+                "timeline recording failed for profile apply: %s: %s", type(exc).__name__, str(exc)[:200])
+    return results
+
+
+def _apply_steps(profile, *, previous=None, z13ctl=Z13CTL,
+                 skip_hooks=False, login_battery_default=None):
     results = []
     try:
         named_client = authority.named_client()
@@ -1236,7 +1270,7 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
     if not skip_hooks and previous and previous.get("name") != profile["name"]:
         exit_cmd = (previous.get("hooks") or {}).get("exit") or ""
         if exit_cmd.strip():
-            step("exit hook", ["bash", "-lc", exit_cmd], f"ran: {exit_cmd}",
+            step("exit hook", ["bash", "-lc", exit_cmd], "hook ran",
                  timeout=HOOK_TIMEOUT_S)
 
     # Compute the desired state now, but suspend the shared Max Fans flag for
@@ -1438,7 +1472,7 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
     if not skip_hooks:
         enter_cmd = (profile.get("hooks") or {}).get("enter") or ""
         if enter_cmd.strip():
-            step("enter hook", ["bash", "-lc", enter_cmd], f"ran: {enter_cmd}",
+            step("enter hook", ["bash", "-lc", enter_cmd], "hook ran",
                  timeout=HOOK_TIMEOUT_S)
 
     return finish(results)

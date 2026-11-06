@@ -52,7 +52,8 @@ DECKY_FILES = ["plugin.json", "package.json", "main.py", "dist/index.js",
                "py_modules/state_authority.py", "py_modules/state_stream.py", "py_modules/state_events.py",
                "py_modules/z13ctl_client.py", "py_modules/z13ctl_profiles.py", "py_modules/profiles.py",
                "py_modules/hardware_controller.py", "py_modules/max_fans_state.py", "py_modules/epp.py",
-               "py_modules/power_range.py", "py_modules/crash_report.py", "py_modules/crash_queue.py",
+               "py_modules/power_range.py", "py_modules/timeline.py",
+               "py_modules/crash_report.py", "py_modules/crash_queue.py",
                "py_modules/crash_scrub.py", "py_modules/_crash_build.json"]
 
 
@@ -78,6 +79,7 @@ MANIFEST = [
     ("src/mcp_server.py", f"{LIB}/mcp_server.py", "644", False),
     # z13-profile's host seam (profiles.py puts this folder on sys.path).
     ("src/host.py", f"{LIB}/host.py", "644", False),
+    ("src/timeline.py", f"{LIB}/timeline.py", "644", False),
     ("src/state_authority.py", f"{LIB}/state_authority.py", "644", False),
     ("src/state_stream.py", f"{LIB}/state_stream.py", "644", False),
     ("src/state_events.py", f"{LIB}/state_events.py", "644", False),
