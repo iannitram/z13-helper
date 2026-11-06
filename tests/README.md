@@ -14,6 +14,7 @@ lets that error through rather than turning it into an rc).
 
 | File | Covers |
 |---|---|
+| `test_verify_gamescope_vrr.py` | Read-only #73 preflight: exact EDID identity, installed script drift, OS/Game Mode context and pending VRR/limiter matrix; no physical acceptance inferred. |
 | `test_crash_wiring.py` | exception hooks, scrubbed uploads, consent, shared queue/rate limit, fatal recovery and build configuration; see `docs/crash-reporting.md` |
 | `test_timeline_r5.py` | review fixes for #134: deferred recording off the hardware lock, read-only Decky Max Fans snapshot, watchdog start not waiting on the timeline, folder held by descriptor, no descriptor leak, no rollback for unknown values, logged failures |
 | `test_timeline.py` | append-only `timeline.jsonl`, size-capped rotation, partly written last line handling, Principle 7 journal lines, and the five write paths |

@@ -5,19 +5,30 @@ setting to the running machine, so callers must probe the socket ``profile-list`
 and refuse to write when the target is unsupported. Nothing here performs I/O.
 """
 
+import re
 from typing import Optional
 
-# Only names we know z13ctl exposes. Unknown names keep the existing apply path
-# instead of guessing a target.
-NAMED_PROFILES = {
-    "Silent": "Silent",
-    "Balanced": "Balanced",
-    "Turbo": "Turbo",
-}
+# z13ctl 1.4.2 ships no Silent/Balanced/Turbo named profiles and rejects
+# capitalized names, so no app profile maps to a fixed name. Each one gets a
+# generated backend name (Z13CtlClient.backend_profile_name). Only an explicit
+# per-profile z13ctl_profile override (e.g. z13ctl's own "custom") is sent as-is.
+NAMED_PROFILES: dict = {}
+
+# Firmware base names: a backend name equal to one of these would be ambiguous
+# with `profile set=<base>`.
+FIRMWARE_BASES = ("quiet", "balanced", "performance")
+_BACKEND_NAME = re.compile(r"[a-z0-9][a-z0-9-]*")
+
 
 def named_profile_for(app_profile_name: str) -> Optional[str]:
-    """Return the z13ctl named profile for an app profile, or None."""
+    """Return the fixed z13ctl named profile for an app profile, or None."""
     return NAMED_PROFILES.get(app_profile_name)
+
+
+def is_valid_backend_name(name) -> bool:
+    """True for a lowercase name z13ctl accepts that is not a firmware base."""
+    return (isinstance(name, str) and _BACKEND_NAME.fullmatch(name) is not None
+            and name not in FIRMWARE_BASES)
 
 
 def profile_target_supported(list_output: str) -> bool:
