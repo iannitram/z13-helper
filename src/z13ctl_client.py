@@ -14,7 +14,7 @@ import re
 import socket
 
 import host
-from z13ctl_profiles import named_profile_for, profile_target_supported
+from z13ctl_profiles import is_valid_backend_name, profile_target_supported
 
 CONNECT_TIMEOUT_S = 1.0
 REQUEST_TIMEOUT_S = 10.0
@@ -123,8 +123,12 @@ s.close()
 
     @classmethod
     def mapped_profile_name(cls, profile):
-        return (profile.get("z13ctl_profile") or named_profile_for(profile["name"])
-                or cls.backend_profile_name(profile["name"]))
+        # A stored override is used only if z13ctl accepts it: profiles saved by
+        # older builds may carry a capitalized name that the daemon rejects.
+        override = profile.get("z13ctl_profile")
+        if is_valid_backend_name(override):
+            return override
+        return cls.backend_profile_name(profile["name"])
 
     def ensure_named_profile(self, profile):
         """Mirror performance settings to a daemon-owned profile without applying it.
@@ -132,6 +136,8 @@ s.close()
         `profile-list` is the mandatory capability probe. An old daemon rejects it;
         callers must then use their existing compatibility path. All setting writes
         name the target explicitly so an inactive edit cannot change current hardware.
+        Undervolt writes are skipped when the daemon reports undervolt_available false
+        (no ryzen_smu): the daemon would reject them and abort the mirror.
         """
         name = self.mapped_profile_name(profile)
         listed = self.profile_list()
@@ -141,12 +147,13 @@ s.close()
             raise Z13CtlError("z13ctl profile-list returned invalid JSON") from exc
         if not profile_target_supported(listed):
             raise Z13CtlError("z13ctl profile-list did not return a list")
+        state = self.get_state()
         exists = any(isinstance(item, dict) and item.get("name") == name for item in saved)
         if not exists:
             self.request("profile-create", set=name)
         # Clear an inactive target's old limit before replacing its curve:
         # otherwise the old high-TDP floor can reject a new lower-power curve.
-        if exists and self.get_state().get("profile") == name:
+        if exists and state.get("profile") == name:
             raise Z13CtlError("Refusing to rebuild an active named profile; select its base first")
         self.request("tdp-reset", profile=name)
         curve = profile.get("fan_curve")
@@ -158,11 +165,13 @@ s.close()
         if tdp:
             self.request("tdp", set=str(tdp["pl1"]), pl1=str(tdp["pl1"]), pl2=str(tdp["pl2"]),
                          pl3=str(tdp["pl3"]), force=bool(tdp.get("force")), profile=name)
-        uv = profile.get("undervolt")
-        if uv is not None:
-            self.request("undervolt", set=str(uv), profile=name)
-        else:
-            self.request("undervolt-reset", profile=name)
+        # Only an explicit False means no ryzen_smu; an absent key keeps the old writes.
+        if state.get("undervolt_available") is not False:
+            uv = profile.get("undervolt")
+            if uv is not None:
+                self.request("undervolt", set=str(uv), profile=name)
+            else:
+                self.request("undervolt-reset", profile=name)
         return name
 
     def activate_app_profile(self, profile):
