@@ -640,9 +640,11 @@ class DashboardUI(QMainWindow):
                     timeline.record_goal_change(
                         goal=after["goal"], previous_goal=before["goal"],
                         before=before, after=after, profile=active_name, ok=ok,
+                        defer=True,
                     )
-                except Exception:
-                    pass
+                except Exception as exc:  # best-effort: the hardware result stands
+                    logging.getLogger(__name__).warning(
+                        "timeline recording failed for Max Fans: %s: %s", type(exc).__name__, str(exc)[:200])
 
             try:
                 message = authority.set_max_fans(checked)

@@ -14,12 +14,16 @@ host, `install.sh` / `installers.py`, `tooling/post_update`, and Decky's
 """
 
 import argparse
+import atexit
 import contextlib
+import copy
 import errno
 import fcntl
 import json
+import logging
 import os
 import pwd
+import queue
 import secrets
 import stat
 import sys
@@ -52,6 +56,7 @@ HOST_KINDS = ("install", "post_update", "steamos_update", "host")
 SETTING_KINDS = ("tdp", "battery_limit", "brightness")
 
 _LOCK_STATE = threading.local()
+logger = logging.getLogger(__name__)
 
 
 class TimelineError(OSError):
@@ -70,14 +75,16 @@ def _lock_counts():
     return counts
 
 
-def _resolve_owner(dir_path, owner=None):
-    """Target (uid, gid) when running as root so deck and Flatpak can still read/append."""
+def _resolve_owner(dir_path, owner=None, dir_fd=None):
+    """Target (uid, gid) when running as root so deck and Flatpak can still read/append.
+
+    With `dir_fd` the folder is inspected by descriptor, never looked up again by path."""
     if owner is not None:
         return owner
     if os.geteuid() != 0:
         return None
     try:
-        st = os.lstat(dir_path)
+        st = os.fstat(dir_fd) if dir_fd is not None else os.lstat(dir_path)
         if st.st_uid != 0:
             return (st.st_uid, st.st_gid)
     except OSError:
@@ -89,16 +96,18 @@ def _resolve_owner(dir_path, owner=None):
         return (DECK_UID, DECK_GID)
 
 
-def _ensure_dir(dir_path, owner=None):
-    """Create the missing components of `dir_path` (0o755), one at a time.
+def _open_dir_chain(dir_path, owner=None):
+    """Create the missing components of `dir_path` (0o755) and return an open
+    descriptor for the leaf folder; the caller closes it.
 
     Each component is opened from its parent with `O_NOFOLLOW`, so a symlink
     (or any non-directory) anywhere in the path is refused with TimelineError
-    instead of being followed. When running as root, a root-owned leaf folder
-    is handed back to `owner` by descriptor (`fchown`), never by path.
+    instead of being followed. Every later operation (lock, append, rotation)
+    goes through the returned descriptor, so replacing an ancestor folder after
+    this check cannot redirect them. When running as root, a root-owned leaf
+    folder is handed back to `owner` by descriptor (`fchown`), never by path.
+    The parent descriptor is closed as soon as its child is open, on every path.
     """
-    if not dir_path:
-        return
     target = os.path.abspath(dir_path)
     parts = [p for p in target.split(os.sep) if p]
     nofollow = getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
@@ -106,7 +115,7 @@ def _ensure_dir(dir_path, owner=None):
     try:
         for name in parts:
             try:
-                fd = os.open(name, os.O_RDONLY | nofollow, dir_fd=fd)
+                child = os.open(name, os.O_RDONLY | nofollow, dir_fd=fd)
             except OSError as exc:
                 if exc.errno != errno.ENOENT:
                     # ELOOP (symlink), ENOTDIR (file component) or a real
@@ -115,12 +124,18 @@ def _ensure_dir(dir_path, owner=None):
                 try:
                     os.mkdir(name, 0o755, dir_fd=fd)
                 except OSError as mk_exc:
-                    raise TimelineError(mk_exc.errno, f"cannot create timeline directory {target}", target) from mk_exc
-                fd = os.open(name, os.O_RDONLY | nofollow, dir_fd=fd)
-        resolved = _resolve_owner(target, owner)
+                    if mk_exc.errno != errno.EEXIST:
+                        raise TimelineError(mk_exc.errno, f"cannot create timeline directory {target}", target) from mk_exc
+                try:
+                    child = os.open(name, os.O_RDONLY | nofollow, dir_fd=fd)
+                except OSError as exc2:
+                    raise TimelineError(exc2.errno, f"refusing non-directory component {name!r} of {target}", target) from exc2
+            os.close(fd)   # the parent is not needed once the child is open
+            fd = child
+        resolved = _resolve_owner(target, owner, dir_fd=fd)
         if target != os.sep and resolved is not None and os.geteuid() == 0:
             try:
-                st = os.lstat(target)
+                st = os.fstat(fd)
             except OSError:
                 st = None
             if st is not None and st.st_uid == 0:
@@ -128,12 +143,15 @@ def _ensure_dir(dir_path, owner=None):
                     os.fchown(fd, resolved[0], resolved[1])
                 except OSError:
                     pass
-    finally:
+        return fd
+    except BaseException:
         os.close(fd)
+        raise
 
 
-def _open_regular_nofollow(path, flags, mode=0o644, owner=None):
-    fd = os.open(path, flags | getattr(os, "O_NOFOLLOW", 0), mode)
+def _open_regular_nofollow(path, flags, mode=0o644, owner=None, dir_fd=None):
+    fd = os.open(path, flags | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0),
+                 mode, dir_fd=dir_fd)
     try:
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
@@ -149,60 +167,75 @@ def _open_regular_nofollow(path, flags, mode=0o644, owner=None):
 
 @contextlib.contextmanager
 def timeline_lock(path=None, timeout=LOCK_TIMEOUT_S, owner=None):
-    """Inter-process exclusive flock on `<path>.lock` (re-entrant per thread)."""
+    """Inter-process exclusive flock on `<path>.lock` (re-entrant per thread).
+
+    Yields an open descriptor of the timeline folder. Callers do their file
+    work relative to it (`dir_fd=`), so nothing re-resolves the folder's path
+    after it was checked."""
     target = os.path.abspath(path or TIMELINE_PATH)
     lock_path = target + ".lock"
     counts = _lock_counts()
-    depth = counts.get(lock_path, 0)
-    if depth > 0:
-        counts[lock_path] = depth + 1
+    held = counts.get(lock_path)
+    if held is not None:
+        held[0] += 1
         try:
-            yield
+            yield held[1]
         finally:
-            counts[lock_path] -= 1
+            held[0] -= 1
         return
 
     parent = os.path.dirname(target)
-    _ensure_dir(parent, owner=owner)
-    resolved_owner = _resolve_owner(parent, owner)
+    dir_fd = _open_dir_chain(parent, owner=owner)
     try:
-        fd, _ = _open_regular_nofollow(
-            lock_path, os.O_RDWR | os.O_CREAT, mode=0o600, owner=resolved_owner
-        )
-    except OSError as exc:
-        raise TimelineLockError(exc.errno or errno.EIO, f"cannot open lock {lock_path}: {exc}", lock_path) from exc
+        resolved_owner = _resolve_owner(parent, owner, dir_fd=dir_fd)
+        try:
+            fd, _ = _open_regular_nofollow(
+                os.path.basename(lock_path), os.O_RDWR | os.O_CREAT, mode=0o600,
+                owner=resolved_owner, dir_fd=dir_fd,
+            )
+        except OSError as exc:
+            raise TimelineLockError(exc.errno or errno.EIO, f"cannot open lock {lock_path}: {exc}", lock_path) from exc
 
-    deadline = time.monotonic() + max(0.0, float(timeout))
-    acquired = False
-    try:
-        while True:
+        deadline = time.monotonic() + max(0.0, float(timeout))
+        acquired = False
+        try:
+            while True:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    acquired = True
+                    break
+                except OSError as exc:
+                    if exc.errno not in (errno.EACCES, errno.EAGAIN):
+                        raise TimelineLockError(exc.errno, f"flock failed on {lock_path}: {exc}", lock_path) from exc
+                    if time.monotonic() >= deadline:
+                        raise TimelineLockError(errno.ETIMEDOUT, f"timed out locking {lock_path}", lock_path) from exc
+                    time.sleep(LOCK_POLL_S)
+            counts[lock_path] = [1, dir_fd]
             try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                acquired = True
-                break
-            except OSError as exc:
-                if exc.errno not in (errno.EACCES, errno.EAGAIN):
-                    raise TimelineLockError(exc.errno, f"flock failed on {lock_path}: {exc}", lock_path) from exc
-                if time.monotonic() >= deadline:
-                    raise TimelineLockError(errno.ETIMEDOUT, f"timed out locking {lock_path}", lock_path) from exc
-                time.sleep(LOCK_POLL_S)
-        counts[lock_path] = 1
-        try:
-            yield
+                yield dir_fd
+            finally:
+                counts.pop(lock_path, None)
         finally:
-            counts.pop(lock_path, None)
+            try:
+                if acquired:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+            finally:
+                os.close(fd)
     finally:
-        try:
-            if acquired:
-                fcntl.flock(fd, fcntl.LOCK_UN)
-        finally:
-            os.close(fd)
+        os.close(dir_fd)
 
 
-def _check_not_symlink(path):
+def _lstat_name(name, dir_fd):
+    """lstat of `name` inside the open folder `dir_fd` (or by path when None)."""
+    if dir_fd is None:
+        return os.lstat(name)
+    return os.lstat(os.path.basename(name), dir_fd=dir_fd)
+
+
+def _check_not_symlink(path, dir_fd=None):
     """Return lstat result if `path` exists as a single-link regular file, else None."""
     try:
-        st = os.lstat(path)
+        st = _lstat_name(path, dir_fd)
     except FileNotFoundError:
         return None
     if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
@@ -210,29 +243,47 @@ def _check_not_symlink(path):
     return st
 
 
-def _rotate_locked(path, backups):
-    """Rotate `path` -> `path.1` .. `path.<backups>` under `timeline_lock`."""
-    _check_not_symlink(path)
+def _rotate_locked(path, backups, dir_fd=None):
+    """Rotate `path` -> `path.1` .. `path.<backups>` under `timeline_lock`.
+
+    With `dir_fd` every step is relative to that folder descriptor."""
+    def nm(p):
+        return os.path.basename(p) if dir_fd is not None else p
+
+    def exists(p):
+        try:
+            _lstat_name(p, dir_fd)
+            return True
+        except OSError:
+            return False
+
+    def unlink(p):
+        os.unlink(nm(p), dir_fd=dir_fd)
+
+    def replace(src, dst):
+        os.replace(nm(src), nm(dst), src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+
+    _check_not_symlink(path, dir_fd)
     if backups <= 0:
         try:
-            os.unlink(path)
+            unlink(path)
         except FileNotFoundError:
             pass
         return
     for idx in range(1, backups + 1):
-        _check_not_symlink(f"{path}.{idx}")
+        _check_not_symlink(f"{path}.{idx}", dir_fd)
     oldest = f"{path}.{backups}"
     try:
-        os.unlink(oldest)
+        unlink(oldest)
     except FileNotFoundError:
         pass
     for idx in range(backups - 1, 0, -1):
         src = f"{path}.{idx}"
         dst = f"{path}.{idx + 1}"
-        if os.path.exists(src):
-            os.replace(src, dst)
-    if os.path.exists(path):
-        os.replace(path, f"{path}.1")
+        if exists(src):
+            replace(src, dst)
+    if exists(path):
+        replace(path, f"{path}.1")
 
 
 def format_journal_message(entry):
@@ -297,10 +348,12 @@ def _emit_journal(rec, journal, journal_tag, journal_fn):
             host.run(["logger", "-t", journal_tag, msg], timeout=5)
 
 
-def _needs_recovery_newline(target, size):
+def _needs_recovery_newline(target, size, dir_fd=None):
     """True when a non-empty segment's last byte is not the newline of a complete record."""
     try:
-        fd = os.open(target, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        name = os.path.basename(target) if dir_fd is not None else target
+        fd = os.open(name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0),
+                     dir_fd=dir_fd)
     except OSError:
         return False
     try:
@@ -311,23 +364,31 @@ def _needs_recovery_newline(target, size):
         os.close(fd)
 
 
-def _append_locked(line, target, max_b, bak_n, owner):
-    parent = os.path.dirname(os.path.abspath(target))
-    resolved_owner = _resolve_owner(parent, owner)
-    st = _check_not_symlink(target)
+def _append_locked(line, target, max_b, bak_n, owner, dir_fd=None):
+    """Append `line` to `target`; every step is relative to the folder `dir_fd`
+    (opened here, no-follow, when the caller holds none)."""
+    if dir_fd is None:
+        folder = _open_dir_chain(os.path.dirname(os.path.abspath(target)), owner=owner)
+        try:
+            return _append_locked(line, target, max_b, bak_n, owner, dir_fd=folder)
+        finally:
+            os.close(folder)
+    name = os.path.basename(target)
+    resolved_owner = _resolve_owner(os.path.dirname(os.path.abspath(target)), owner, dir_fd=dir_fd)
+    st = _check_not_symlink(name, dir_fd)
     existing_size = st.st_size if st is not None else 0
     # A crashed writer can leave a partial last line; the recovery newline we
     # would prepend must count toward the segment cap, so check before rotating.
-    separator = 1 if existing_size > 0 and _needs_recovery_newline(target, existing_size) else 0
+    separator = 1 if existing_size > 0 and _needs_recovery_newline(name, existing_size, dir_fd) else 0
     if existing_size > 0 and max_b > 0 and existing_size + separator + len(line) > max_b:
-        _rotate_locked(target, bak_n)
+        _rotate_locked(name, bak_n, dir_fd)
         separator = 0
     if max_b > 0 and len(line) > max_b:
         # Larger than a whole segment: it can never fit, so never write it.
         return
 
     fd, open_st = _open_regular_nofollow(
-        target, os.O_RDWR | os.O_CREAT | os.O_APPEND, mode=0o644, owner=resolved_owner
+        name, os.O_RDWR | os.O_CREAT | os.O_APPEND, mode=0o644, owner=resolved_owner, dir_fd=dir_fd
     )
     try:
         payload = line
@@ -358,11 +419,91 @@ def append(entry, *, path=None, max_bytes=MAX_BYTES, backups=BACKUP_COUNT,
     rec = _normalize_entry(entry)
     if logging_enabled():
         line = (json.dumps(rec, separators=(",", ":"), ensure_ascii=False) + "\n").encode("utf-8")
-        with timeline_lock(target, owner=owner):
-            _append_locked(line, target, max(0, int(max_bytes)), max(0, int(backups)), owner)
+        with timeline_lock(target, owner=owner) as dir_fd:
+            _append_locked(line, target, max(0, int(max_bytes)), max(0, int(backups)), owner, dir_fd)
     if _journal_now:
         _emit_journal(rec, journal, journal_tag, journal_fn)
     return rec
+
+
+# ----------------------------------------------------------------------
+# Deferred recording: callers that sit inside a hardware transaction hand the
+# entry to a background writer, so no lock wait, write or fsync of the
+# timeline can ever delay a hardware write or watchdog recovery.
+# ----------------------------------------------------------------------
+
+MAX_PENDING = 256            # entries waiting for the writer; more are dropped (and logged)
+FLUSH_AT_EXIT_S = 5.0
+_PENDING = queue.Queue(maxsize=MAX_PENDING)
+_WRITER_LOCK = threading.Lock()
+_writer = None
+_THREAD_ACK = threading.local()
+
+
+def _log_failure(exc, what):
+    """Bounded warning that never carries entry contents (only the error class and text)."""
+    logger.warning("timeline: %s failed: %s: %s", what, type(exc).__name__, str(exc)[:200])
+
+
+def _writer_loop():
+    while True:
+        job = _PENDING.get()
+        try:
+            rec, target = job
+            append(rec, path=target, journal=False)
+        except Exception as exc:  # noqa: BLE001 - recording is best-effort
+            _log_failure(exc, "background write")
+        finally:
+            _PENDING.task_done()
+
+
+def _ensure_writer():
+    global _writer
+    with _WRITER_LOCK:
+        if _writer is None or not _writer.is_alive():
+            _writer = threading.Thread(target=_writer_loop, name="z13-timeline-writer", daemon=True)
+            _writer.start()
+
+
+def enqueue(entry, *, path=None):
+    """Queue `entry` for the background writer and return at once.
+
+    The entry is normalised and deep-copied here (so the caller may keep
+    mutating its own dicts) and never blocks: a full queue drops the entry
+    with a warning. Returns the normalised record, or None when dropped."""
+    target = path or TIMELINE_PATH
+    rec = copy.deepcopy(_normalize_entry(entry))
+    try:
+        _PENDING.put_nowait((rec, target))
+    except queue.Full:
+        logger.warning("timeline: %d entries already waiting; dropped one %s entry", MAX_PENDING, rec.get("kind"))
+        return None
+    _ensure_writer()
+    _THREAD_ACK.count = getattr(_THREAD_ACK, "count", 0) + 1
+    return rec
+
+
+def accepted_count():
+    """Entries this thread has handed to `enqueue` so far (lets a caller see
+    that a deeper layer already recorded the change, without reading the file)."""
+    return getattr(_THREAD_ACK, "count", 0)
+
+
+def flush(timeout=FLUSH_AT_EXIT_S):
+    """Wait up to `timeout` s for queued entries to reach disk; True when none are left."""
+    deadline = time.monotonic() + max(0.0, float(timeout))
+    while _PENDING.unfinished_tasks:
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.01)
+    return True
+
+
+atexit.register(flush)
+
+
+def _submit(entry, *, path, defer):
+    return enqueue(entry, path=path) if defer else append(entry, path=path, journal=False)
 
 
 def _read_single_file(file_path):
@@ -372,7 +513,9 @@ def _read_single_file(file_path):
     interrupted append) or failing UTF-8 / JSON object parsing is skipped.
     """
     try:
-        fd = os.open(file_path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        # O_NONBLOCK: opening a planted FIFO must not hang the reader; the
+        # fstat below rejects anything that is not a regular file.
+        fd = os.open(file_path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
     except FileNotFoundError:
         return []
     except OSError:
@@ -480,7 +623,7 @@ def _scrub_step_message(step_name, ok, message):
 
 
 def record_profile_apply(*, profile, previous=None, results=(),
-                         before_max_fans=None, after_max_fans=None, path=None):
+                         before_max_fans=None, after_max_fans=None, path=None, defer=False):
     """Record a `profiles.apply()` transition.
 
     Passes `journal=False` on purpose: Principle 7's journal line covers only
@@ -516,7 +659,7 @@ def record_profile_apply(*, profile, previous=None, results=(),
     if not ok:
         summary += " (failed)"
 
-    return append(
+    return _submit(
         {
             "kind": "profile",
             "summary": summary,
@@ -529,12 +672,12 @@ def record_profile_apply(*, profile, previous=None, results=(),
             "no_rollback_reason": reason,
         },
         path=path,
-        journal=False,
+        defer=defer,
     )
 
 
 def record_goal_change(*, goal, previous_goal=None, before=None, after=None,
-                       profile=None, ok=True, summary=None, path=None):
+                       profile=None, ok=True, summary=None, path=None, defer=False):
     """Record a goal change (today's Max Fans toggle, and Phase 15's goal runner)."""
     before_d = dict(before) if isinstance(before, dict) else {"goal": previous_goal}
     after_d = dict(after) if isinstance(after, dict) else {"goal": goal}
@@ -564,7 +707,7 @@ def record_goal_change(*, goal, previous_goal=None, before=None, after=None,
     if not ok:
         default_summary += " (failed)"
 
-    return append(
+    return _submit(
         {
             "kind": "goal",
             "summary": summary or default_summary,
@@ -576,11 +719,11 @@ def record_goal_change(*, goal, previous_goal=None, before=None, after=None,
             "no_rollback_reason": reason,
         },
         path=path,
-        journal=False,
+        defer=defer,
     )
 
 
-def record_setting_change(*, kind, summary, before, after, ok=True, path=None):
+def record_setting_change(*, kind, summary, before, after, ok=True, path=None, defer=False):
     """Record a manual hardware setting write (TDP, battery limit, brightness).
 
     A failed write (`ok=False`) records the unchanged state as `after`
@@ -598,15 +741,22 @@ def record_setting_change(*, kind, summary, before, after, ok=True, path=None):
     if not changed:
         rb = None
         reason = "Value unchanged"
-    elif all(k not in before_d for k in changed):
-        rb = None
-        reason = "Previous value not known"
     else:
-        rb = {"kind": kind, "state": before_d}
-        reason = None
+        # Callers pass None for "could not read the previous value", so a
+        # missing or None previous value cannot be restored, with one
+        # exception: a TDP of None is a real previous state (no override on
+        # the profile), so putting it back is a valid reset.
+        known = [k for k in changed
+                 if before_d.get(k) is not None or (kind == "tdp" and k in before_d)]
+        if known:
+            rb = {"kind": kind, "state": {k: before_d[k] for k in known}}
+            reason = None
+        else:
+            rb = None
+            reason = "Previous value not known"
     if not ok and not summary.endswith("(failed)"):
         summary += " (failed)"
-    return append(
+    return _submit(
         {
             "kind": kind,
             "summary": summary,
@@ -618,7 +768,7 @@ def record_setting_change(*, kind, summary, before, after, ok=True, path=None):
             "no_rollback_reason": reason,
         },
         path=path,
-        journal=False,
+        defer=defer,
     )
 
 

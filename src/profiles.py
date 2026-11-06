@@ -1136,9 +1136,11 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
                 results=results,
                 before_max_fans=before_max_fans,
                 after_max_fans=bool(_max_fans_state().get("enabled")),
+                defer=True,   # queued; never written inside this hardware transaction
             )
-        except Exception:  # noqa: BLE001 - timeline recording is best-effort
-            pass
+        except Exception as exc:  # noqa: BLE001 - timeline recording is best-effort
+            logging.getLogger(__name__).warning(
+                "timeline recording failed for profile apply: %s: %s", type(exc).__name__, str(exc)[:200])
     return results
 
 

@@ -724,6 +724,8 @@ class TimelineTests(unittest.TestCase):
         with mock.patch.object(state_authority, "set_max_fans", fake_authority_set_max_fans):
             res = asyncio.run(m.Plugin().set_max_fans(True))
         self.assertTrue(res["ok"])
+        import timeline
+        self.assertTrue(timeline.flush(10))   # the entry is written by the background writer
         got = asyncio.run(m.Plugin().get_timeline(limit=10))
         self.assertEqual(len(got), 1)
         self.assertEqual(got[0]["kind"], "goal")
