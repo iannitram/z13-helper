@@ -179,6 +179,7 @@ flowchart LR
 | `packaging/host/udev/99-z13ctl.rules`, `packaging/host/asusd/50-rog_flow_z13.yaml` | Reference copies only; `z13ctl setup` owns the udev rule and permissions. |
 | `packaging/host/xdg/io.github.iannitram.Z13Helper.desktop` | Host desktop entry for the Flatpak app. |
 | `packaging/host/gamescope/displays/asus.rogflowz13.lcd.lua` | Gamescope display script for the panel's 48-180 Hz VRR range, installed by `tooling/install_check.py`'s manifest (device acceptance pending). |
+| `tooling/verify_gamescope_vrr.py`, `tests/test_verify_gamescope_vrr.py` | Read-only #73 preflight: installed display script comparison, connected eDP EDID identity and OS/Game Mode context; emits a pending VRR/limiter matrix. Tests use fake files; physical panel acceptance remains pending. |
 | `docs/fan-watchdog-memory.md` | Issue #30 source audit, RSS containment behavior (to-do 3 partly done, respawn unverified), output-cap note and explicit inconclusive evidence boundary; 24-hour device run remains pending. |
 | `tests/test_backend_memory.py`, `tests/test_fan_trace.py`, `tests/test_host.py` (output cap) | Synthetic RSS threshold/read-error/thread/plugin lifecycle tests and trace count/time bounds. |
 | `tests/`, `decky/tests/` | Pytest logic tests, Decky `unittest` tests, and the separate Node test for `profileSwitch.ts`. `tests/conftest.py` blocks subprocess and network calls and `tests/fake_host.py` fakes `host.run`; the per-module test files are listed in `tests/README.md`. |

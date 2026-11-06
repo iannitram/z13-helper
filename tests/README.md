@@ -14,6 +14,7 @@ lets that error through rather than turning it into an rc).
 
 | File | Covers |
 |---|---|
+| `test_verify_gamescope_vrr.py` | Read-only #73 preflight: exact EDID identity, installed script drift, OS/Game Mode context and pending VRR/limiter matrix; no physical acceptance inferred. |
 | `test_crash_wiring.py` | exception hooks, scrubbed uploads, consent, shared queue/rate limit, fatal recovery and build configuration; see `docs/crash-reporting.md` |
 | `test_profiles_apply.py` | `profiles.apply()`: write order, step independence, hooks, Max Fans state suspension, undervolt |
 | `test_profiles_store.py` | store seeding/CRUD, `validate`, `apply_by_name`, the `z13-profile` CLI |
