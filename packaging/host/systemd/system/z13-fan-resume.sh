@@ -19,15 +19,29 @@ as_deck() {
     runuser -u "$DECK_USER" -- env HOME="$DECK_HOME" XDG_RUNTIME_DIR=/run/user/1000 "$@"
 }
 
-# Give the EC a moment after wake; a write into a stalled EC can hard-lock (z13ctl 1.3.3 notes).
-sleep 3
+# The z13ctl daemon restores its custom profile by about +3.7 s after resume.
+# Wait until that has landed before deciding whether this hook must apply it.
+# A write into a stalled EC can hard-lock (z13ctl 1.3.3 notes).
+sleep 4
 
 restore_rc=127
 if [ -x "$PROFILE" ] && [ -f "$DECK_HOME/.config/z13-helper/profiles.json" ]; then
-    as_deck "$PROFILE" restore >/dev/null 2>&1
+    restore_output=$(as_deck "$PROFILE" restore --if-needed 2>/dev/null)
     restore_rc=$?
+    if [ "$restore_rc" -eq 2 ]; then
+        # Older z13-profile CLIs reject the new option with argparse status 2.
+        restore_output=$(as_deck "$PROFILE" restore 2>/dev/null)
+        restore_rc=$?
+    fi
     if [ "$restore_rc" -eq 0 ]; then
-        logger -t z13-fan-resume "re-applied active profile after resume (z13-profile restore)"
+        case "$restore_output" in
+            *"already restored by z13ctl; skipped"*)
+                logger -t z13-fan-resume "z13ctl daemon restored the profile; hook skipped"
+                ;;
+            *)
+                logger -t z13-fan-resume "hook re-applied the active profile"
+                ;;
+        esac
         exit 0
     fi
     if [ "$restore_rc" -ne 127 ]; then

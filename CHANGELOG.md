@@ -18,6 +18,7 @@ the device but not yet verified on the Z13. Plan and status: `docs/ROADMAP.md`.
 
 ## Unreleased
 
+- **Resume hook avoids a duplicate profile switch (#80; on-device check pending).** Wait for z13ctl's measured resume restore, then skip the hook apply only when the active named profile and live custom curve are confirmed (including a full 100% curve while Max Fans is ON). Unknown state safely re-applies the profile; older `z13-profile` versions fall back to plain restore.
 - **Automatic crash reporting (#82; live upload check pending).** Configured builds
   queue scrubbed exception and fatal reports from the desktop app and Decky plugin
   for background upload to the shared bug drop. Help → Error log has a default-on
