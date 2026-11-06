@@ -244,6 +244,8 @@ class FanWatchdog:
         #    profile rewrite + curve, not a bare curve write: after an external
         #    platform-profile write the firmware was seen to ignore bare curve
         #    writes (fans at 0 RPM) until the profile was written again.
+        #    Keep this compatibility branch (#66) until #74 step 3 and #80
+        #    establish daemon curve restoration on the target SteamOS kernel.
         if max_on and enabled is False:
             self._stall_ticks = 0
             if not self._ready("dropped curve"):
@@ -368,19 +370,22 @@ class FanWatchdog:
     def _dispatch(self, max_on: bool, fix=lambda msg: msg, *,
                   cancel_if_max_fans_drop=False) -> str | None:
         """Act on a decided recovery: inline, or handed to tick()'s defer."""
-        if self._defer is None:
-            return fix(self._recover(max_on))
+        deferred = self._defer is not None
+
         def recover():
-            # Re-read Max Fans on the worker: a profile apply queued after this
-            # decision may have changed it, and max_on would be stale. A dropped
-            # curve is only actionable if it is still dropped and Max Fans is
-            # still on; a completed profile apply already handled that change.
-            live_max_on = self._max_fans_on()
+            # Recheck immediately before writing in both frontends. A profile
+            # apply or daemon reconciliation may have restored the curve since
+            # the decision, even inline while may_act checked the host. Queued
+            # recoveries also re-read Max Fans for ordinary stall recovery.
+            live_max_on = self._max_fans_on() if (
+                deferred or cancel_if_max_fans_drop) else max_on
             if cancel_if_max_fans_drop and (not live_max_on or
                                             self.sensors.custom_fan_curve_enabled() is not False):
-                return "Max Fans recovery skipped; state changed before the worker ran"
+                return "Max Fans recovery skipped; state changed before recovery ran"
             return fix(self._recover(live_max_on))
 
+        if self._defer is None:
+            return recover()
         return self._defer_run(recover)
 
     def _defer_run(self, fn) -> None:
