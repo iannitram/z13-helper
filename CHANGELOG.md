@@ -18,6 +18,7 @@ the device but not yet verified on the Z13. Plan and status: `docs/ROADMAP.md`.
 
 ## Unreleased
 
+- **Resume restore defers to z13ctl 1.4.2+ when its saved state matches (Refs #80; on-device five-cycle check pending).** `z13-profile resume-owner` compares the active app profile, Max Fans intent and z13ctl's saved named profile using files only. The system resume hook defers only when the version is at least 1.4.2 and the ownership check succeeds; every uncertain case retains the full restore and protective-curve fallback.
 - **CPU Boost (EPP) per profile (#64; on-device check pending).** The Performance panel and the Fans window share one CPU Boost combo with a live "Now:" readout. Profiles may carry an EPP value, written by the desktop user to every cpufreq policy node (read and write both use `policy*`). `packaging/host/tmpfiles/z13-helper-epp.conf` makes only those nodes group-writable for `users`; why and the scope are in `docs/adr/0002-epp-write-via-tmpfiles-grant.md`.
   - Crash reports read the account record with `getattr`: the new EPP tests run with partial account records, and the scrubber must not raise on a missing field.
   - The installer tests build their tarball with `TarInfo` instead of `tarfile.add`: `tarfile.add` does an ambient passwd lookup, and other tests mock that lookup with a lightweight owner record.

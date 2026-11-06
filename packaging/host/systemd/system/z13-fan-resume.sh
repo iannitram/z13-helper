@@ -1,8 +1,8 @@
 #!/bin/sh
 # Re-apply the active Z13-Helper profile after resume (Z13 GZ302EA).
 # History: 2026-06-24 wrote a hard-coded protective curve; 2026-10-01 pinned Max Fans
-# when ON; 2026-10-09 now restores the *active profile* (platform profile, TDP, curve,
-# Max Fans pinned if ON) through the app's engine, falling back to the old curve.
+# when ON; 2026-10-09 restored the active profile through the app engine. z13ctl 1.4.2+
+# now owns resume restore when its saved named profile matches; the hook defers then.
 # Lives in /etc/systemd/system (atomic-update keep list: /etc/atomic-update.conf.d/z13-bucket1.conf).
 # DECK_HOME/DECK_USER are overridable so the test suite can point this script at a
 # fake tree instead of the real deck account; the device always gets the defaults.
@@ -19,7 +19,49 @@ as_deck() {
     runuser -u "$DECK_USER" -- env HOME="$DECK_HOME" XDG_RUNTIME_DIR=/run/user/1000 "$@"
 }
 
-# Give the EC a moment after wake; a write into a stalled EC can hard-lock (z13ctl 1.3.3 notes).
+# z13ctl 1.4.2+ waits for the EC and reconciles its active named profile after wake.
+# Defer only when both its version and the file-only profile check prove ownership.
+if [ -x "$Z13CTL" ] && [ -x "$PROFILE" ]; then
+    version_output=$(as_deck timeout 3 "$Z13CTL" --version 2>/dev/null)
+    version_rc=$?
+    if [ "$version_rc" -eq 0 ]; then
+        # Accept only the documented three-token form with a plain numeric version.
+        set -f
+        set -- $version_output
+        set +f
+        if [ "$#" -eq 3 ] && [ "$1" = "z13ctl" ] && [ "$2" = "version" ]; then
+            version=$3
+            case "$version" in
+                *[!0-9.]*|.*|*..*|*.) version="" ;;
+            esac
+            case "$version" in
+                *.*.*) ;;
+                *) version="" ;;
+            esac
+            if [ -n "$version" ]; then
+                old_ifs=$IFS
+                IFS=.
+                set -- $version
+                IFS=$old_ifs
+                if [ "$#" -eq 3 ]; then
+                    major=$1 minor=$2 patch=$3
+                    if { [ "$major" -gt 1 ] ||
+                         { [ "$major" -eq 1 ] && [ "$minor" -gt 4 ]; } ||
+                         { [ "$major" -eq 1 ] && [ "$minor" -eq 4 ] && [ "$patch" -ge 2 ]; }; }; then
+                        as_deck timeout 3 "$PROFILE" resume-owner >/dev/null 2>&1
+                        owner_rc=$?
+                        if [ "$owner_rc" -eq 10 ]; then
+                            logger -t z13-fan-resume "z13ctl 1.4.2+ owns the resume restore; hook deferred"
+                            exit 0
+                        fi
+                    fi
+                fi
+            fi
+        fi
+    fi
+fi
+
+# Keep the full restore and protective fallback for every unproven case.
 sleep 3
 
 restore_rc=127
