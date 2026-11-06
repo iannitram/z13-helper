@@ -29,10 +29,3 @@ def test_summarize_all_same_mixed_and_unreadable():
     assert epp.summarize_epp(("power", None)) is None
     assert epp.summarize_epp(("power", "bogus")) is None
     assert epp.summarize_epp(()) is None
-
-
-def test_epp_paths_one_per_cpu():
-    assert epp.epp_paths(0) == []
-    assert epp.epp_paths(2) == [
-        "/sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference",
-        "/sys/devices/system/cpu/cpu1/cpufreq/energy_performance_preference"]

@@ -301,3 +301,26 @@ def test_platform_profile_switch_holds_the_shared_hardware_lock(fake_host, monke
     assert result.rc == 0
     assert held
     assert fake_host.argvs == [['z13ctl', 'profile', '--set', 'balanced']]
+
+
+# ----------------------------------------------------------------------
+# CPU Boost (EPP) through the real _push_field: stubs only host.run and profiles.apply
+# ----------------------------------------------------------------------
+
+def test_epp_none_is_a_noop_and_never_a_full_apply(monkeypatch, fake_host):
+    applied = []
+    monkeypatch.setattr(profiles, 'apply', lambda *a, **k: applied.append(a) or [])
+    result = authority._push_field({'name': 'Balanced', 'epp': None}, 'epp')
+    assert result == 'CPU Boost: unchanged'
+    assert applied == []
+    assert fake_host.calls == []
+
+
+def test_epp_value_writes_only_the_epp_node(monkeypatch, fake_host):
+    applied = []
+    monkeypatch.setattr(profiles, 'apply', lambda *a, **k: applied.append(a) or [])
+    authority._push_field({'name': 'Balanced', 'epp': 'power'}, 'epp')
+    assert applied == []
+    assert fake_host.argvs == [profiles.epp_argv('power')]
+    assert not any('z13ctl' in ' '.join(a) or 'platform_profile' in ' '.join(a)
+                   for a in fake_host.argvs)
