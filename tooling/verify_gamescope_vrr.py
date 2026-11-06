@@ -9,8 +9,15 @@ import argparse
 import json
 import os
 import re
-import subprocess
+import sys
 from pathlib import Path
+
+# Installed as ~/.local/bin/verify-gamescope-vrr or run from repo checkout
+for _d in (os.path.expanduser("~/.local/lib/z13-helper"),
+           os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src")):
+    if os.path.isfile(os.path.join(_d, "host.py")) and _d not in sys.path:
+        sys.path.append(_d)
+import host  # noqa: E402
 
 
 PROFILE = Path("gamescope/scripts/00-gamescope/displays/asus.rogflowz13.lcd.lua")
@@ -52,12 +59,11 @@ def version_tuple(value):
 
 def installed_gamescope_version():
     """Version of the installed gamescope package (pacman), or None."""
-    try:
-        out = subprocess.run(["pacman", "-Q", "gamescope"], capture_output=True,
-                             text=True, timeout=10, check=True).stdout.split()
-    except (OSError, subprocess.SubprocessError):
+    res = host.run(["pacman", "-Q", "gamescope"], timeout=10)
+    if res.rc != 0 or res.timed_out:
         return None
-    return out[1] if len(out) == 2 else None
+    out = res.out.split()
+    return out[1] if len(out) == 2 and out[0] == "gamescope" else None
 
 
 def collect(config_home, drm=Path("/sys/class/drm"),

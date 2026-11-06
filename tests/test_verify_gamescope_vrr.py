@@ -83,10 +83,11 @@ def test_missing_context_and_drift_are_reported(device):
     assert verify.collect(**device)["installed_profile"] == "unreadable or missing"
 
 
-def test_cli_reports_blockers_without_writing(monkeypatch, capsys, device):
+def test_cli_reports_blockers_without_writing(monkeypatch, capsys, device, fake_host):
     home = device["config_home"].parent
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(home / "elsewhere"))
+    fake_host.fail("pacman", rc=0, out=f"gamescope {verify.GAMESCOPE_VERSION}\n")
     collect = verify.collect
     seen = []
     def fake_collect(config, gamescope_version=None):
@@ -95,7 +96,6 @@ def test_cli_reports_blockers_without_writing(monkeypatch, capsys, device):
                           "gamescope_version": gamescope_version})
 
     monkeypatch.setattr(verify, "collect", fake_collect)
-    monkeypatch.setattr(verify, "installed_gamescope_version", lambda: verify.GAMESCOPE_VERSION)
     before = sorted(home.parent.rglob("*"))
     assert verify.main([]) == 0
     assert seen == [(device["config_home"], verify.GAMESCOPE_VERSION)]
@@ -104,6 +104,35 @@ def test_cli_reports_blockers_without_writing(monkeypatch, capsys, device):
     assert verify.main([]) == 1
     assert json.loads(capsys.readouterr().out)["preflight_blockers"]
     assert sorted(home.parent.rglob("*")) == [p for p in before if p.exists()]
+
+
+def test_installed_gamescope_version_normal(fake_host):
+    fake_host.fail("pacman", rc=0, out="gamescope 3.16.30.1-2\n")
+    assert verify.installed_gamescope_version() == "3.16.30.1-2"
+    assert fake_host.calls[-1].argv == ["pacman", "-Q", "gamescope"]
+    assert fake_host.calls[-1].timeout == 10
+
+
+def test_installed_gamescope_version_command_failure(fake_host):
+    fake_host.fail("pacman", rc=1, out="error: package 'gamescope' was not found")
+    assert verify.installed_gamescope_version() is None
+
+
+def test_installed_gamescope_version_timeout(fake_host):
+    fake_host.fail("pacman", rc=124, out="timed out after 10 s", timed_out=True)
+    assert verify.installed_gamescope_version() is None
+
+
+@pytest.mark.parametrize("out", [
+    "",
+    "gamescope",
+    "gamescope 3.16.30.1-2 extra",
+    "notgamescope 3.16.30.1-2",
+    "warning: database is newer\ngamescope 3.16.30.1-2",
+])
+def test_installed_gamescope_version_odd_output(fake_host, out):
+    fake_host.fail("pacman", rc=0, out=out)
+    assert verify.installed_gamescope_version() is None
 
 
 def test_newer_steamos_blocks(device):
