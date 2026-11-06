@@ -94,6 +94,7 @@ EPP_SYSFS = "/sys/devices/system/cpu/cpu{n}/cpufreq/energy_performance_preferenc
 # Max Fans = every point at 100%. Must match the desktop app and the Decky plugin.
 MAX_FAN_TEMPS = (20, 30, 40, 50, 60, 70, 80, 90)   # Low anchor; firmware response still needs verification.
 RESTORE_SKIPPED = 10  # CLI status used by the resume hook when live state is current.
+RESTORE_CHECK_ERROR = 11  # A required resume-check read failed; restore immediately.
 MAX_FANS_SPEC = ",".join(f"{t}:100%" for t in MAX_FAN_TEMPS)
 
 # Curves carried over from the z13-max / z13-balanced host scripts (the
@@ -1519,6 +1520,8 @@ def main(argv=None):
                    help="skip when z13ctl has already restored the active profile and curve")
     s.add_argument("--check-only", action="store_true",
                    help="with --if-needed, check current state without applying the profile")
+    s.add_argument("--since-epoch", type=int,
+                   help="wake epoch; require matching z13ctl resume evidence since this time")
     sub.add_parser("watch", help="stream z13ctl state changes as JSON lines")
     args = ap.parse_args(argv)
     if args.cmd == "restore" and args.check_only and not args.if_needed:
@@ -1572,11 +1575,15 @@ def main(argv=None):
             print("no active profile", file=sys.stderr)
             return 1
         try:
-            if args.cmd == "restore" and args.if_needed and _resume_restore_is_current():
-                # Exit 10 is a stable machine interface for the resume hook; do
-                # not make shell callers parse user-facing output.
-                print("already restored by z13ctl; skipped")
-                return RESTORE_SKIPPED
+            if args.cmd == "restore" and args.if_needed:
+                current = _resume_restore_is_current(args.since_epoch)
+                if current is None and args.check_only:
+                    return RESTORE_CHECK_ERROR
+                if current:
+                    # Exit 10 is a stable machine interface for the resume hook; do
+                    # not make shell callers parse user-facing output.
+                    print("already restored by z13ctl; skipped")
+                    return RESTORE_SKIPPED
             if args.cmd == "restore" and args.check_only:
                 return 0
             print(f"Applying profile: {name}")
@@ -1593,24 +1600,66 @@ def main(argv=None):
     return 2
 
 
-def _resume_restore_is_current():
+def _resume_restore_is_current(since_epoch=None):
     """Whether z13ctl has already restored the profile and its live curve.
 
-    Every read is conservative: an unavailable daemon, invalid state or curve
-    means the normal restore must run. This is deliberately only a resume
-    optimization; the apply path remains the safety fallback.
+    Return True when every guard proves the daemon restored after this wake,
+    False for readable but mismatching state, and None when a required read
+    failed. This is only a resume optimization; restore remains the fallback.
     """
     try:
+        if since_epoch is None:
+            return False
+        journal = host.run(["journalctl", "-t", "z13ctl", "--since", f"@{since_epoch}",
+                            "--no-pager", "-o", "cat"], timeout=2, as_deck=True)
+        if journal.timed_out or journal.rc != 0:
+            return None
         from z13ctl_client import Z13CtlClient
         client = authority.named_client()
         if client is None:
-            return False
+            return None
         state = client.get_state()
+        if not isinstance(state, dict):
+            return False
         store = load_store()
         profile = get_profile(store.get("active"), store)
         if profile is None:
             return False
-        if state.get("profile") != Z13CtlClient.mapped_profile_name(profile):
+        mapped_name = Z13CtlClient.mapped_profile_name(profile)
+        if state.get("profile") != mapped_name:
+            return False
+        lines = journal.out.splitlines()
+        restoring = f"resume: restoring custom profile profile={mapped_name}"
+        restored_at = next((i for i, line in enumerate(lines) if line.endswith(restoring)), None)
+        if restored_at is None:
+            return False
+        later = lines[restored_at + 1:]
+        if any(" WARN " in f" {line} " or " ERROR " in f" {line} " for line in later):
+            return False
+        if not any(line.endswith(f"profile set={mapped_name}") for line in later):
+            return False
+
+        custom_profiles = state.get("custom_profiles")
+        daemon_profile = custom_profiles.get(mapped_name) if isinstance(custom_profiles, dict) else None
+        if not isinstance(daemon_profile, dict):
+            return False
+        daemon_tdp = daemon_profile.get("tdp")
+        tdp = profile.get("tdp")
+        daemon_tdp = daemon_tdp or None
+        if tdp:
+            if not isinstance(daemon_tdp, dict):
+                return False
+            mapped_tdp = {"pl1_spl": tdp.get("pl1"), "pl2_sppt": tdp.get("pl2"),
+                          "fppt": tdp.get("pl3")}
+            if any(daemon_tdp.get(key) != value for key, value in mapped_tdp.items()):
+                return False
+        elif daemon_tdp is not None and daemon_tdp != {}:
+            return False
+
+        wanted_battery = profile.get("battery_limit")
+        if wanted_battery is None:
+            wanted_battery = 80  # restore's login/resume fallback
+        if state.get("battery_limit") != wanted_battery:
             return False
 
         # Reuse the app's established z13ctl curve parser. Import lazily because
@@ -1626,28 +1675,34 @@ def _resume_restore_is_current():
         max_state = _read_json(MAX_FANS_PATH)
         if not isinstance(max_state, dict) or not isinstance(max_state.get("enabled"), bool):
             return False
-        if SensorReader().get_platform_profile() != profile.get("base"):
+        live_base = SensorReader().get_platform_profile()
+        if live_base is None:
+            return None
+        if live_base != profile.get("base"):
             return False
-        tdp = profile.get("tdp")
-        if tdp:
-            live_tdp = HardwareController().get_tdp()
-            if not isinstance(live_tdp, dict) or any(live_tdp.get(k) != tdp[k]
-                                                     for k in ("pl1", "pl2", "pl3")):
+        if profile.get("epp") is not None:
+            live_epp = HardwareController().get_epp()
+            if live_epp is None:
+                return None
+            if live_epp != profile["epp"]:
                 return False
         if max_state["enabled"]:
-            return all(temp in MAX_FAN_TEMPS and pwm == 255 and pct == 100
-                       for temp, pwm, pct in points)
+            return (len(points) == len(MAX_FAN_TEMPS)
+                    and {temp for temp, _, _ in points} == set(MAX_FAN_TEMPS)
+                    and len({temp for temp, _, _ in points}) == len(points)
+                    and all(pwm == 255 and pct == 100 for _, pwm, pct in points))
         stored = profile.get("fan_curve")
         if stored is None:
             return False
         expected = {int(temp): round(int(pct) * 255 / 100) for temp, pct in stored}
-        if len(expected) != 8 or len(points) != 8:
+        actual_temps = [temp for temp, _, _ in points]
+        if len(expected) != 8 or len(stored) != 8 or len(points) != 8 or len(set(actual_temps)) != 8:
             return False
         return (all(temp in expected and abs(pwm - expected[temp]) <= 1
                     for temp, pwm, _pct in points)
                 and set(expected) == {temp for temp, _, _ in points})
-    except Exception:  # noqa: BLE001 - unreadable state always restores
-        return False
+    except Exception:  # noqa: BLE001 - unreadable state always restores immediately
+        return None
 
 
 if __name__ == "__main__":

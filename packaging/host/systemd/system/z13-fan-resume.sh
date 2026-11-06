@@ -6,6 +6,7 @@
 # Lives in /etc/systemd/system (atomic-update keep list: /etc/atomic-update.conf.d/z13-bucket1.conf).
 # DECK_HOME/DECK_USER are overridable so the test suite can point this script at a
 # fake tree instead of the real deck account; the device always gets the defaults.
+wake_ts=$(date +%s)
 DECK_HOME="${Z13_FAN_RESUME_DECK_HOME:-/home/deck}"
 DECK_USER="${Z13_FAN_RESUME_DECK_USER:-deck}"
 Z13CTL="$DECK_HOME/.local/bin/z13ctl"
@@ -19,20 +20,17 @@ as_deck() {
     runuser -u "$DECK_USER" -- env HOME="$DECK_HOME" XDG_RUNTIME_DIR=/run/user/1000 "$@"
 }
 
-# On the Z13 with z13ctl 1.4.2, eight real suspends showed the daemon logging
-# "resume: restoring custom profile" at about +3.0 s and finishing the named
-# profile set and batterylimit by about +3.7 s. No writer other than z13ctl
-# touched platform_profile or pwm (issue #80 comment, 2026-11-06). Keep the
-# existing wait, then poll for verified live state through +8 s after wake.
-# A write into a stalled EC can hard-lock (z13ctl 1.3.3 notes).
+# A write into a stalled EC can hard-lock (z13ctl 1.3.3 notes). Wait for the
+# measured daemon resume window, then poll only until wake + 9 s.
 sleep 4
 
 restore_rc=127
 if [ -x "$PROFILE" ] && [ -f "$DECK_HOME/.config/z13-helper/profiles.json" ]; then
-    elapsed=4
-    while [ "$elapsed" -le 8 ]; do
-        # z13-profile uses exit 10 only when every live-state guard is satisfied.
-        as_deck "$PROFILE" restore --if-needed --check-only >/dev/null 2>&1
+    deadline=$((wake_ts + 9))
+    while [ "$(date +%s)" -lt "$deadline" ]; do
+        # z13-profile uses exit 10 only with post-wake journal and state evidence.
+        timeout 3 runuser -u "$DECK_USER" -- env HOME="$DECK_HOME" XDG_RUNTIME_DIR=/run/user/1000 \
+            "$PROFILE" restore --if-needed --check-only --since-epoch "$wake_ts" >/dev/null 2>&1
         check_rc=$?
         if [ "$check_rc" -eq 10 ]; then
             logger -t z13-fan-resume "z13ctl daemon restored the profile; hook skipped (exit 10)"
@@ -42,11 +40,13 @@ if [ -x "$PROFILE" ] && [ -f "$DECK_HOME/.config/z13-helper/profiles.json" ]; th
             # Older z13-profile CLIs reject the new option with argparse status 2.
             break
         fi
+        if [ "$check_rc" -eq 11 ] || [ "$check_rc" -eq 124 ]; then
+            break
+        fi
         if [ "$check_rc" -ne 0 ]; then
             break
         fi
-        if [ "$elapsed" -lt 8 ]; then sleep 1; fi
-        elapsed=$((elapsed + 1))
+        sleep 1
     done
 
     # The state never proved current (or this is an older CLI): restore now.

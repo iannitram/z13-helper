@@ -49,10 +49,17 @@ def env(tmp_path, real_subprocess):
     stubs.mkdir()
     logger_log = tmp_path / "logger.txt"
     sleep_log = tmp_path / "sleep.txt"
+    date_count = tmp_path / "date-count.txt"
+    timeout_log = tmp_path / "timeout.txt"
     ctl_log = tmp_path / "z13ctl.txt"
     (stubs / "runuser").write_text(RUNUSER_STUB)
     (stubs / "logger").write_text(f'#!/bin/sh\necho "$*" >> "{logger_log}"\n')
     (stubs / "sleep").write_text(f'#!/bin/sh\necho "$1" >> "{sleep_log}"\nexit 0\n')
+    (stubs / "date").write_text(
+        f'#!/bin/sh\nn=0\n[ ! -f "{date_count}" ] || n=$(cat "{date_count}")\n'
+        f'n=$((n + 1))\necho "$n" > "{date_count}"\necho $((1000 + n - 1))\n')
+    (stubs / "timeout").write_text(
+        f'#!/bin/sh\necho "$*" >> "{timeout_log}"\nshift\nexec "$@"\n')
     for f in stubs.iterdir():
         f.chmod(0o755)
 
@@ -62,11 +69,16 @@ def env(tmp_path, real_subprocess):
         p.chmod(0o755)
         return p
 
-    def write_profile(rc=0, log=None, old_cli=False, output="", skip=False):
+    def write_profile(rc=0, log=None, old_cli=False, output="", skip=False, checks=None):
         p = home / ".local" / "bin" / "z13-profile"
         old = 'case "$*" in *--check-only*) exit 2;; esac\n' if old_cli else ""
         printed = f'printf "%s\\n" {output!r}\n' if output else ""
-        check = 'case "$*" in *--check-only*) exit 10;; esac\n' if skip else ""
+        seq = checks if checks is not None else ([10] if skip else [rc])
+        cases = "".join(f'{i}) exit {code};;\n' for i, code in enumerate(seq, 1))
+        check = (f'case "$*" in *--check-only*)\n'
+                 f'  n=0; [ ! -f "$PROFILE_CHECK_COUNT" ] || n=$(cat "$PROFILE_CHECK_COUNT")\n'
+                 f'  n=$((n + 1)); echo "$n" > "$PROFILE_CHECK_COUNT"\n'
+                 f'  case "$n" in\n{cases}*) exit {seq[-1]};;\nesac\nesac\n')
         p.write_text(executable_stub("PROFILE_LOG", "z13-profile") + old + check + printed + f"exit {rc}\n")
         p.chmod(0o755)
         (home / ".config" / "z13-helper" / "profiles.json").write_text("{}")
@@ -80,6 +92,7 @@ def env(tmp_path, real_subprocess):
             "RUNUSER_LOG": str(tmp_path / "runuser.txt"),
             "Z13CTL_LOG": str(ctl_log),
             "PROFILE_LOG": str(tmp_path / "profile.txt"),
+            "PROFILE_CHECK_COUNT": str(tmp_path / "profile-check-count.txt"),
         }
         return real_subprocess(["sh", str(SCRIPT)], env=e, capture_output=True, text=True, timeout=20)
 
@@ -87,6 +100,7 @@ def env(tmp_path, real_subprocess):
     run.write_ctl, run.write_profile = write_ctl, write_profile
     run.logger_log = logger_log
     run.sleep_log = sleep_log
+    run.timeout_log = timeout_log
     run.runuser_log = tmp_path / "runuser.txt"
     run.ctl_log, run.profile_log = ctl_log, tmp_path / "profile.txt"
     return run
@@ -172,12 +186,14 @@ def test_daemon_skip_is_logged_without_plain_restore(env):
     assert "z13ctl daemon restored the profile; hook skipped (exit 10)" in env.logger_log.read_text()
 
 
-def test_poll_is_bounded_to_about_eight_seconds(env):
+def test_poll_stops_at_wall_clock_deadline(env):
     env.write_profile()
     p = env()
     assert p.returncode == 0, p.stderr
-    assert env.profile_log.read_text().count("restore --if-needed --check-only") == 5
-    assert env.sleep_log.read_text().splitlines() == ["4", "1", "1", "1", "1"]
+    assert env.profile_log.read_text().count("restore --if-needed --check-only") == 8
+    assert env.sleep_log.read_text().splitlines() == ["4"] + ["1"] * 8
+    assert "--since-epoch 1000" in env.profile_log.read_text()
+    assert env.timeout_log.read_text().splitlines()[0].startswith("3 runuser ")
 
 
 def test_old_profile_cli_falls_back_to_plain_restore(env):
@@ -188,3 +204,32 @@ def test_old_profile_cli_falls_back_to_plain_restore(env):
     assert "restore --if-needed --check-only" in log
     assert "restore\n" in log
     assert "hook re-applied the active profile" in env.logger_log.read_text()
+
+
+@pytest.mark.parametrize("check_rc", [11, 124])
+def test_check_read_error_or_timeout_restores_immediately(env, check_rc):
+    env.write_profile(checks=[check_rc])
+    p = env()
+    assert p.returncode == 0, p.stderr
+    log = env.profile_log.read_text()
+    assert log.count("restore --if-needed --check-only") == 1
+    assert "restore\n" in log
+
+
+def test_zero_then_ten_skips_on_second_check(env):
+    env.write_profile(checks=[0, 10])
+    p = env()
+    assert p.returncode == 0, p.stderr
+    log = env.profile_log.read_text()
+    assert log.count("restore --if-needed --check-only") == 2
+    assert "restore\n" not in log
+    assert "z13ctl daemon restored the profile; hook skipped (exit 10)" in env.logger_log.read_text()
+
+
+def test_old_cli_exit_two_restores_without_second_check(env):
+    env.write_profile(old_cli=True)
+    p = env()
+    assert p.returncode == 0, p.stderr
+    log = env.profile_log.read_text()
+    assert log.count("restore --if-needed --check-only") == 1
+    assert "restore\n" in log
