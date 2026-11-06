@@ -114,7 +114,7 @@ class ProfileControl(QObject):
     # ---------------- editing ----------------
 
     def save(self, profile, field=None):
-        """Persist `profile`; if it is the active one, push `field` live."""
+        """Persist `profile`; with `field`, store that field through the owner (pushed live if active)."""
         if field:
             self._submit(f"{profile['name']}: {field}", self._pusher(profile, field))
         else:
