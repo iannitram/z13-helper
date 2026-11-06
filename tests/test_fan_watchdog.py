@@ -176,6 +176,52 @@ def test_queued_dropped_curve_skips_when_daemon_restores_curve(env, enabled):
     assert ns.max_on and not runner.pending
     assert ns.ctl.calls == []
 
+    # If the curve drops again later, recovery still fires.
+    ns.sensors.enabled = False
+    ns.clock.advance(RETRY_S)
+    runner.tick()
+    assert len(jobs) == 2 and runner.pending
+
+    msg2 = jobs[1]()
+    runner.on_done(FAN_RECOVERY_LABEL, msg2)
+    assert "Max Fans re-applied" in msg2
+    assert call_names(ns.ctl) == ["rewrite_profile", "set_fans_max"]
+    assert not runner.pending
+
+
+def test_queued_dropped_curve_skips_when_max_fans_turns_off_and_recovers_on_later_stall(env):
+    """Mirror case with Max Fans off: dropped-curve recovery cancels when Max Fans
+    turns off, and subsequent custom-curve recovery re-applies the curve."""
+    ns = env.make(max_fans=True, enabled=False, curve=MAX_CURVE, temp=50.0, fans=(0, 0))
+    jobs = []
+    runner = FanWatchdogRunner(ns.wd, lambda label, fn: jobs.append(fn))
+    runner.tick()
+    assert len(jobs) == 1 and runner.pending
+
+    # Max Fans intent turns off while recovery is queued -> skip.
+    ns.set_max(False)
+    msg = jobs[0]()
+    runner.on_done(FAN_RECOVERY_LABEL, msg)
+
+    assert "skipped" in msg
+    assert not ns.max_on and not runner.pending
+    assert ns.ctl.calls == []
+
+    # Custom curve is active; fans stall at 0 RPM with Max Fans off -> curve re-apply path.
+    ns.sensors.enabled = True
+    ns.clock.advance(RETRY_S)
+    for _ in range(STALL_TICKS):
+        ns.clock.advance(TICK)
+        runner.tick()
+    assert len(jobs) == 2 and runner.pending
+
+    msg2 = jobs[1]()
+    runner.on_done(FAN_RECOVERY_LABEL, msg2)
+
+    assert "profile and curve re-applied" in msg2
+    assert call_names(ns.ctl) == ["rewrite_profile", "set_fancurve_pwm"]
+    assert not runner.pending
+
 
 @pytest.mark.parametrize("clear_during", ["rewrite_profile", "restore_tdp"])
 def test_max_fans_recovery_cancels_if_flag_turns_off_midflight(env, clear_during):
@@ -954,7 +1000,7 @@ def test_queued_auto_recovery_skips_when_suspended(env):
 
 
 def test_queued_stalled_recovery_skips_when_suspended(env):
-    ns = env.make(max_fans=False, enabled=True, temp=60.0, fans=(0, 0))
+    ns = env.make(max_fans=False, enabled=True, curve=MAX_CURVE, temp=60.0, fans=(0, 0))
     jobs = []
     runner = FanWatchdogRunner(ns.wd, lambda label, fn: jobs.append(fn))
     for _ in range(STALL_TICKS):
@@ -967,4 +1013,19 @@ def test_queued_stalled_recovery_skips_when_suspended(env):
 
     assert "skipped" in msg
     assert ns.ctl.calls == []
+    assert not runner.pending
+
+    # Once no longer suspended, advance past retry window and recover on curve re-apply path.
+    ns.suspended = False
+    ns.clock.advance(RETRY_S)
+    for _ in range(STALL_TICKS):
+        ns.clock.advance(TICK)
+        runner.tick()
+    assert len(jobs) == 2 and runner.pending
+
+    msg2 = jobs[1]()
+    runner.on_done(FAN_RECOVERY_LABEL, msg2)
+    assert "profile and curve re-applied" in msg2
+    assert call_names(ns.ctl) == ["rewrite_profile", "set_fancurve_pwm"]
+    assert not runner.pending
 
