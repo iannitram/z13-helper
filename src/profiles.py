@@ -1518,8 +1518,19 @@ def main(argv=None):
     s.add_argument("--no-hooks", action="store_true", help="skip enter/exit hooks")
     s = sub.add_parser("restore", help="re-apply the active profile (login / resume)")
     s.add_argument("--no-hooks", action="store_true")
+    sub.add_parser("resume-owner", help="check whether z13ctl owns resume restore")
     sub.add_parser("watch", help="stream z13ctl state changes as JSON lines")
     args = ap.parse_args(argv)
+
+    if args.cmd == "resume-owner":
+        try:
+            if _z13ctl_owns_resume_restore():
+                print("z13ctl owns it")
+                return 10
+        except Exception:
+            pass
+        print("hook must restore")
+        return 0
 
     if args.cmd == "watch":
         try:
@@ -1579,6 +1590,99 @@ def main(argv=None):
             return 1
         return _print_results(results)
     return 2
+
+
+def _z13ctl_owns_resume_restore():
+    """Return true only when file snapshots prove z13ctl can restore this profile.
+
+    Deliberately file-only: resume must not query the daemon or read live hardware.
+    Any malformed, missing, or incomplete state is an affirmative reason for the
+    system resume hook to perform its existing full restore.
+    """
+    from z13ctl_client import Z13CtlClient
+
+    raw_store = _read_json(STORE_PATH)
+    if (not isinstance(raw_store, dict) or "active" not in raw_store
+            or not isinstance(raw_store.get("profiles"), list)):
+        return False
+    active = raw_store.get("active")
+    raw_profile = next((p for p in raw_store["profiles"]
+                        if isinstance(p, dict) and p.get("name") == active), None)
+    if not isinstance(raw_profile, dict):
+        return False
+
+    store = load_store(create=False)
+    active = store.get("active")
+    profile = get_profile(active, store) if isinstance(active, str) else None
+    if not isinstance(profile, dict):
+        return False
+
+    max_fans = _read_json(MAX_FANS_PATH)
+    if not isinstance(max_fans, dict) or type(max_fans.get("enabled")) is not bool:
+        return False
+
+    state_home = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
+    state = _read_json(os.path.join(state_home, "z13ctl", "state.json"))
+    if not isinstance(state, dict):
+        return False
+    name = Z13CtlClient.mapped_profile_name(profile)
+    if state.get("profile") != name:
+        return False
+    custom_profiles = state.get("custom_profiles")
+    if not isinstance(custom_profiles, dict) or name not in custom_profiles:
+        return False
+    backend = custom_profiles[name]
+    if not isinstance(backend, dict):
+        return False
+
+    app_curve = profile.get("fan_curve")
+    if not isinstance(app_curve, list) or len(app_curve) != 8:
+        return False
+    curve = backend.get("fan_curve")
+    if not isinstance(curve, dict) or type(curve.get("mode")) is not int or curve["mode"] != 1:
+        return False
+    points = curve.get("points")
+    if not isinstance(points, list) or len(points) != 8:
+        return False
+    try:
+        temps = [point["temp"] for point in points]
+        pwms = [point["pwm"] for point in points]
+        if len(set(temps)) != 8:
+            return False
+        if max_fans["enabled"]:
+            if any(type(pwm) is not int or pwm != 255 for pwm in pwms):
+                return False
+        else:
+            if any(not isinstance(point, (list, tuple)) or len(point) != 2 for point in app_curve):
+                return False
+            expected = {temp: round(pct * 255 / 100) for temp, pct in app_curve}
+            if len(expected) != 8 or set(expected) != set(temps):
+                return False
+            if any(type(pwm) is not int or abs(pwm - expected[temp]) > 1
+                   for temp, pwm in zip(temps, pwms)):
+                return False
+    except (KeyError, TypeError, ValueError):
+        return False
+
+    app_tdp = profile.get("tdp")
+    backend_tdp = backend.get("tdp")
+    if app_tdp is not None:
+        if not isinstance(app_tdp, dict) or not isinstance(backend_tdp, dict):
+            return False
+        for source, target in (("pl1", "pl1_spl"), ("pl2", "pl2_sppt"), ("pl3", "fppt")):
+            if source not in app_tdp or backend_tdp.get(target) != app_tdp[source]:
+                return False
+    elif backend_tdp is not None:
+        return False
+
+    if profile.get("epp") is not None:
+        return False
+    if "battery_limit" not in profile:
+        return False
+    battery_limit = profile["battery_limit"]
+    if battery_limit is None:
+        battery_limit = 80
+    return state.get("battery_limit") == battery_limit
 
 
 if __name__ == "__main__":
