@@ -42,6 +42,11 @@ import urllib.request
 import host
 from versions import DECKY_MIN, older_than
 
+try:
+    import timeline
+except ImportError:
+    timeline = None
+
 HOME = os.path.expanduser("~")
 CACHE = os.path.join(HOME, ".cache", "z13-helper", "updates")
 Z13CTL = os.path.join(HOME, ".local", "bin", "z13ctl")
@@ -76,6 +81,9 @@ class Report:
         self.changed = []
         self.rollback = "not-attempted"
         self.daemon_after_rollback = None   # "running" | "not-running" once a restore happened
+        self.before = {}
+        self.after = {}
+        self.backed_up_files = {}
 
     def step(self, what):
         self.changed.append(what)
@@ -315,11 +323,13 @@ def _rollback_binary(bak):
 
 def install_z13ctl():
     old = _z13ctl_installed_version()
+    REPORT.before["z13ctl"] = old
     log(f"Installed z13ctl: {old or 'none'}")
     rel = json.loads(fetch(f"{API}/dahui/z13ctl/releases/latest"))
     ver = rel["tag_name"].lstrip("v")
     log(f"Latest release: {rel['tag_name']} ({rel.get('published_at', '')[:10]})")
     if old == ver:
+        REPORT.after["z13ctl"] = ver
         log("Already up to date.")
         return 0
     if DRY_RUN:
@@ -331,6 +341,7 @@ def install_z13ctl():
     if old and os.path.exists(Z13CTL):
         bak = f"{Z13CTL}.bak-{old}"
         shutil.copy2(Z13CTL, bak)
+        REPORT.backed_up_files[Z13CTL] = bak
         log(f"Backup: {bak}")
     os.makedirs(os.path.dirname(Z13CTL), exist_ok=True)
     shutil.copy2(os.path.join(tmp, "z13ctl"), Z13CTL + ".new")
@@ -350,6 +361,7 @@ def install_z13ctl():
         REPORT.step("daemon started")
     except BaseException:
         _rollback_binary(bak)
+        REPORT.after["z13ctl"] = old if REPORT.rollback == "restored-verified" else ver
         shutil.rmtree(tmp, ignore_errors=True)
         raise
 
@@ -357,6 +369,7 @@ def install_z13ctl():
     # but its version probe and the Updates row are cached).
     run(["systemctl", "--user", "try-restart", "z13-helper.service"], check=False, timeout=60)
     shutil.rmtree(tmp, ignore_errors=True)
+    REPORT.after["z13ctl"] = ver
     log(f"Done: z13ctl {old or '?'} -> {ver}")
     return 0
 
@@ -374,6 +387,8 @@ def repair_z13ctl():
     if not ver:
         log("z13ctl missing or not runnable -> installing the latest release")
         return install_z13ctl()
+    REPORT.before["z13ctl"] = ver
+    REPORT.after["z13ctl"] = ver
     log(f"Installed z13ctl: {ver} (kept; `install.sh` without --repair upgrades)")
 
     # 1. Permissions. Rules + perms unit present -> only re-grant; else full setup.
@@ -383,6 +398,7 @@ def repair_z13ctl():
         log(f"(dry run) the binary is first copied to root-owned {ROOT_DIR} and hash-checked; root runs only that copy")
     else:
         _setup_perms(perms_only=rules_ok)
+        REPORT.step("z13ctl permissions re-granted" if rules_ok else "udev rules + perms service (sudo z13ctl setup)")
 
     # 2. Daemon user units + our --no-button override.
     override = os.path.join(USER_UNITS, "z13ctl.service.d", "override.conf")
@@ -398,6 +414,7 @@ def repair_z13ctl():
             _, tmp = _fetch_release(f"v{ver}")
             _install_daemon_units(os.path.join(tmp, "contrib", "systemd", "user"))
             shutil.rmtree(tmp, ignore_errors=True)
+            REPORT.step("daemon user units + override")
             changed = True
     elif not override_ok:
         log("Daemon override missing/different -> rewriting (--no-button)")
@@ -405,6 +422,7 @@ def repair_z13ctl():
             os.makedirs(os.path.dirname(override), exist_ok=True)
             with open(override, "w") as f:
                 f.write(DAEMON_OVERRIDE)
+            REPORT.step("daemon --no-button override rewritten")
             changed = True
     else:
         log("Daemon units + --no-button override: OK")
@@ -418,8 +436,10 @@ def repair_z13ctl():
             log("(dry run) would enable z13ctl.socket and (re)start z13ctl.service")
         else:
             if _start_daemon(restart=changed) != 0:
+                REPORT.step("daemon enable/start attempted")
                 log("FAILED: z13ctl daemon is not active after repair")
                 return 1
+            REPORT.step("daemon started")
     else:
         log("Daemon: active")
     return 0
@@ -467,6 +487,7 @@ def install_decky():
     if DRY_RUN:
         log(f"(dry run) would run the official Decky installer ({DECKY_INSTALLER})")
         return 0
+    REPORT.before["decky_loader"] = _decky_installed_version()
     # The expected hash is the release asset's published digest (HTTPS API),
     # not anything read back from the downloaded file. No digest -> refuse.
     rel = json.loads(fetch(DECKY_RELEASE_API))
@@ -482,7 +503,9 @@ def install_decky():
     run(["sudo", "-n", "bash", root_script], timeout=900)
     time.sleep(8)
     healthy = _decky_health() == 0
-    log("Decky Loader now: " + (_decky_installed_version() or "?"))
+    now_ver = _decky_installed_version()
+    REPORT.after["decky_loader"] = now_ver
+    log("Decky Loader now: " + (now_ver or "?"))
     if not healthy:
         log("FAILED: plugin_loader.service is not active after the install")
         return 1
@@ -573,6 +596,23 @@ def main(argv):
     except Exception as e:  # noqa: BLE001
         log(f"FAILED: {e}")
         rc = 1
+    if (timeline is not None and not DRY_RUN
+            and not os.environ.get("Z13_INSTALL_PARENT") and REPORT.changed):
+        try:
+            keep_backups = REPORT.backed_up_files
+            timeline.record_install(
+                mode=argv[0],
+                target=argv[1],
+                before=REPORT.before,
+                after=REPORT.after,
+                changed=REPORT.changed,
+                failed=[] if rc == 0 else [f"{argv[0]} {argv[1]} exited {rc}"],
+                backed_up_files=keep_backups,
+                ok=(rc == 0),
+                journal_fn=lambda tag, msg: run(["logger", "-t", tag, msg], check=False),
+            )
+        except OSError:
+            pass
     log("RESULT: " + json.dumps(REPORT.as_dict()))
     return rc
 
