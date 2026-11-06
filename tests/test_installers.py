@@ -556,7 +556,12 @@ def _tarball(tmp_path, body=b"BIN"):
     src = tmp_path / "z13ctl"
     src.write_bytes(body)
     with tarfile.open(tp, "w:gz") as t:
-        t.add(src, arcname="z13ctl")
+        # Avoid tarfile's ambient passwd lookup: other tests deliberately mock
+        # pwd.getpwuid with a lightweight owner record while exercising writers.
+        info = tarfile.TarInfo("z13ctl")
+        info.size = src.stat().st_size
+        with src.open("rb") as payload:
+            t.addfile(info, payload)
     return tp
 
 

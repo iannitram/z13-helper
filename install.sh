@@ -761,6 +761,13 @@ mcp_registration() {
     fi
 }
 
+apply_epp_permissions() {
+    # Only when our EPP rule was (re)installed; boot's systemd-tmpfiles covers the rest.
+    # Use only our EPP rule, never every installed tmpfiles configuration.
+    act sudo systemd-tmpfiles --create /etc/tmpfiles.d/z13-helper-epp.conf \
+        || fail "apply EPP sysfs permissions"
+}
+
 etc_files() {
     say "/etc: resume hook, lightbar reset + polkit rule, atomic-update keep-list"
     local rel dest mode root todo=() keep_missing=() p units_changed=0
@@ -794,6 +801,7 @@ etc_files() {
         CHANGED+=("$dest")
         [[ $dest == *.service ]] && units_changed=1
     done
+    [[ " ${todo[*]} " == *"/etc/tmpfiles.d/z13-helper-epp.conf"* ]] && apply_epp_permissions
     # polkitd picks up rules.d changes by itself; systemd needs a reload for units.
     ((units_changed)) && act sudo systemctl daemon-reload
     if ((!enabled)); then

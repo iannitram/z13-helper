@@ -337,8 +337,10 @@ class CrashReporter:
                 text = text.replace(self.build[key], "<redacted>")
             text = scrub(text, **identities)
             if account:
-                text = scrub(text, home=account.pw_dir, user=account.pw_name)
-                text = scrub(text, home="", user=account.pw_gecos.split(",")[0] or None)
+                text = scrub(text, home=getattr(account, "pw_dir", None),
+                             user=getattr(account, "pw_name", None))
+                gecos = getattr(account, "pw_gecos", "")
+                text = scrub(text, home="", user=gecos.split(",")[0] or None)
             return text
 
         # Redact before the size caps: a cut landing inside an identifier would
