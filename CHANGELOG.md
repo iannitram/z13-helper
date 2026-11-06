@@ -18,6 +18,8 @@ the device but not yet verified on the Z13. Plan and status: `docs/ROADMAP.md`.
 
 ## Unreleased
 
+- **Crash reports sort into the drop's `z13-helper/` folder (Refs #82).** `upload_report` PUTs to `<base>/public.php/dav/files/<token>/z13-helper/<name>` (`DROP_FOLDER`); the drop creates the folder itself. Queued retries go through the same function, so they land there too.
+
 - Fan watchdog: Max Fans' dropped-curve recovery waits 10 s for the z13ctl daemon's own re-apply, and no longer fires right after resume (Refs #66).
 
 - **CPU Boost (EPP) per profile (#64; on-device check pending).** The Performance panel and the Fans window share one CPU Boost combo with a live "Now:" readout. Profiles may carry an EPP value, written by the desktop user to every cpufreq policy node (read and write both use `policy*`). `packaging/host/tmpfiles/z13-helper-epp.conf` makes only those nodes group-writable for `users`; why and the scope are in `docs/adr/0002-epp-write-via-tmpfiles-grant.md`.
