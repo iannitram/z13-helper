@@ -207,3 +207,117 @@ def test_resume_owner_does_not_use_socket_subprocess_or_host_commands(profiles_e
             monkeypatch.setattr(subprocess, name, forbidden)
     monkeypatch.setattr(host, "run", forbidden)
     assert _check() == 10
+
+
+def _tdp_fixture(profiles_env, monkeypatch):
+    app, named, state_path = _fixture(
+        profiles_env, monkeypatch, tdp={"pl1": 60, "pl2": 65, "pl3": 70}
+    )
+    state = json.loads(state_path.read_text())
+    backend_name = next(iter(state["custom_profiles"]))
+    state["custom_profiles"][backend_name]["tdp"] = {
+        "pl1_spl": 60,
+        "pl2_sppt": 65,
+        "fppt": 70,
+        "apu_sppt": 45,
+        "platform_sppt": 55,
+    }
+    state_path.write_text(json.dumps(state))
+    return app, state_path, backend_name
+
+
+def test_resume_owner_tdp_positive(profiles_env, monkeypatch):
+    _tdp_fixture(profiles_env, monkeypatch)
+    assert _check() == 10
+
+
+def test_resume_owner_tdp_negative_pl1_spl(profiles_env, monkeypatch):
+    app, state_path, backend_name = _tdp_fixture(profiles_env, monkeypatch)
+    state = json.loads(state_path.read_text())
+    state["custom_profiles"][backend_name]["tdp"]["pl1_spl"] = 61
+    state_path.write_text(json.dumps(state))
+    assert _check() == 0
+
+
+def test_resume_owner_tdp_negative_pl2_sppt(profiles_env, monkeypatch):
+    app, state_path, backend_name = _tdp_fixture(profiles_env, monkeypatch)
+    state = json.loads(state_path.read_text())
+    state["custom_profiles"][backend_name]["tdp"]["pl2_sppt"] = 66
+    state_path.write_text(json.dumps(state))
+    assert _check() == 0
+
+
+def test_resume_owner_tdp_negative_fppt(profiles_env, monkeypatch):
+    app, state_path, backend_name = _tdp_fixture(profiles_env, monkeypatch)
+    state = json.loads(state_path.read_text())
+    state["custom_profiles"][backend_name]["tdp"]["fppt"] = 71
+    state_path.write_text(json.dumps(state))
+    assert _check() == 0
+
+
+def test_resume_owner_tdp_negative_values_swapped(profiles_env, monkeypatch):
+    app, state_path, backend_name = _tdp_fixture(profiles_env, monkeypatch)
+    state = json.loads(state_path.read_text())
+    state["custom_profiles"][backend_name]["tdp"]["pl1_spl"] = 65
+    state["custom_profiles"][backend_name]["tdp"]["pl2_sppt"] = 60
+    state_path.write_text(json.dumps(state))
+    assert _check() == 0
+
+
+def test_resume_owner_tdp_negative_non_dict(profiles_env, monkeypatch):
+    app, state_path, backend_name = _tdp_fixture(profiles_env, monkeypatch)
+    state = json.loads(state_path.read_text())
+    state["custom_profiles"][backend_name]["tdp"] = [60, 65, 70]
+    state_path.write_text(json.dumps(state))
+    assert _check() == 0
+
+    state["custom_profiles"][backend_name]["tdp"] = "60"
+    state_path.write_text(json.dumps(state))
+    assert _check() == 0
+
+
+def test_resume_owner_tdp_negative_backend_none(profiles_env, monkeypatch):
+    app, state_path, backend_name = _tdp_fixture(profiles_env, monkeypatch)
+    state = json.loads(state_path.read_text())
+    state["custom_profiles"][backend_name]["tdp"] = None
+    state_path.write_text(json.dumps(state))
+    assert _check() == 0
+
+
+def test_resume_owner_missing_app_curve_max_fans_on(profiles_env, monkeypatch):
+    for missing_mode in ("none", "absent"):
+        app, named, state_path = _fixture(profiles_env, monkeypatch, max_on=True)
+        if missing_mode == "none":
+            app["fan_curve"] = None
+        else:
+            del app["fan_curve"]
+        profiles_env.store.write_text(
+            json.dumps({"version": 1, "active": app["name"], "profiles": [app]})
+        )
+        assert _check() == 0
+
+
+def test_resume_owner_missing_app_curve_max_fans_off(profiles_env, monkeypatch):
+    for missing_mode in ("none", "absent"):
+        app, named, state_path = _fixture(profiles_env, monkeypatch, max_on=False)
+        if missing_mode == "none":
+            app["fan_curve"] = None
+        else:
+            del app["fan_curve"]
+        profiles_env.store.write_text(
+            json.dumps({"version": 1, "active": app["name"], "profiles": [app]})
+        )
+        assert _check() == 0
+
+
+def test_resume_owner_fan_curve_pwm_pm1_boundary(profiles_env, monkeypatch):
+    app, named, state_path = _fixture(profiles_env, monkeypatch, max_on=False)
+    baseline = json.loads(state_path.read_text())
+    backend_name = next(iter(baseline["custom_profiles"]))
+
+    for delta, expected_rc in ((1, 10), (-1, 10), (2, 0)):
+        state = copy.deepcopy(baseline)
+        state["custom_profiles"][backend_name]["fan_curve"]["points"][0]["pwm"] += delta
+        state_path.write_text(json.dumps(state))
+        assert _check() == expected_rc
+

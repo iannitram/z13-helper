@@ -57,10 +57,10 @@ def env(tmp_path, real_subprocess):
     for f in stubs.iterdir():
         f.chmod(0o755)
 
-    def write_ctl(rc=0, version="z13ctl version 1.4.2", log=ctl_log):
+    def write_ctl(rc=0, version="z13ctl version 1.4.2", version_rc=0, log=ctl_log):
         p = home / ".local" / "bin" / "z13ctl"
         p.write_text(executable_stub("Z13CTL_LOG", "z13ctl") +
-                     f'if [ "$1" = "--version" ]; then echo "{version}"; exit 0; fi\nexit {rc}\n')
+                     f'if [ "$1" = "--version" ]; then echo "{version}"; exit {version_rc}; fi\nexit {rc}\n')
         p.chmod(0o755)
         return p
 
@@ -128,6 +128,12 @@ def test_resume_owner_defers_without_restore_or_sleep(env, version):
     ("z13ctl version 1.4.1", 10),
     ("z13ctl version 1.3.12", 10),
     ("garbage version", 10),
+    ("z13ctl version 1.4", 10),
+    ("z13ctl version v1.4.2", 10),
+    ("z13ctl version 1.4.2-rc1", 10),
+    ("foo version 1.4.2", 10),
+    ("z13ctl version 0.4.2", 10),
+    ("z13ctl version 0.5.2", 10),
     ("z13ctl version 1.4.2", 0),
     ("z13ctl version 1.4.2", 2),
     ("z13ctl version 1.4.2", 124),
@@ -137,6 +143,19 @@ def test_unproven_resume_owner_keeps_restore_path(env, version, owner_rc):
     env.write_profile(rc=0, owner_rc=owner_rc)
     p = env()
     assert p.returncode == 0, p.stderr
+    if owner_rc == 10:
+        assert "resume-owner" not in env.profile_log.read_text()
+    assert "restore" in env.profile_log.read_text()
+    assert "re-applied active profile" in env.logger_log.read_text()
+    assert env.sleep_log.read_text().strip() == "3"
+
+
+def test_failed_version_check_keeps_restore_path(env):
+    env.write_ctl(version="z13ctl version 1.4.2", version_rc=1)
+    env.write_profile(rc=0, owner_rc=10)
+    p = env()
+    assert p.returncode == 0, p.stderr
+    assert "resume-owner" not in env.profile_log.read_text()
     assert "restore" in env.profile_log.read_text()
     assert "re-applied active profile" in env.logger_log.read_text()
     assert env.sleep_log.read_text().strip() == "3"
