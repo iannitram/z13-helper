@@ -10,8 +10,8 @@ DECK_HOME="${Z13_FAN_RESUME_DECK_HOME:-/home/deck}"
 DECK_USER="${Z13_FAN_RESUME_DECK_USER:-deck}"
 Z13CTL="$DECK_HOME/.local/bin/z13ctl"
 PROFILE="$DECK_HOME/.local/bin/z13-profile"
-CURVE="40:127,50:191,60:229,70:255,75:255,80:255,85:255,90:255"
-MAXF="$DECK_HOME/.config/z13-helper/max-fans.json"
+# Unknown profile / Max Fans state falls back to the protective full-speed curve.
+CURVE="20:100%,30:100%,40:100%,50:100%,60:100%,70:100%,80:100%,90:100%"
 
 # Every executable under the deck user's home runs *as* deck, even on the fallback
 # path: root never executes a binary (or symlink) that deck's own account can replace.
@@ -19,29 +19,41 @@ as_deck() {
     runuser -u "$DECK_USER" -- env HOME="$DECK_HOME" XDG_RUNTIME_DIR=/run/user/1000 "$@"
 }
 
-# The z13ctl daemon restores its custom profile by about +3.7 s after resume.
-# Wait until that has landed before deciding whether this hook must apply it.
+# On the Z13 with z13ctl 1.4.2, eight real suspends showed the daemon logging
+# "resume: restoring custom profile" at about +3.0 s and finishing the named
+# profile set and batterylimit by about +3.7 s. No writer other than z13ctl
+# touched platform_profile or pwm (issue #80 comment, 2026-11-06). Keep the
+# existing wait, then poll for verified live state through +8 s after wake.
 # A write into a stalled EC can hard-lock (z13ctl 1.3.3 notes).
 sleep 4
 
 restore_rc=127
 if [ -x "$PROFILE" ] && [ -f "$DECK_HOME/.config/z13-helper/profiles.json" ]; then
-    restore_output=$(as_deck "$PROFILE" restore --if-needed 2>/dev/null)
+    elapsed=4
+    while [ "$elapsed" -le 8 ]; do
+        # z13-profile uses exit 10 only when every live-state guard is satisfied.
+        as_deck "$PROFILE" restore --if-needed --check-only >/dev/null 2>&1
+        check_rc=$?
+        if [ "$check_rc" -eq 10 ]; then
+            logger -t z13-fan-resume "z13ctl daemon restored the profile; hook skipped (exit 10)"
+            exit 0
+        fi
+        if [ "$check_rc" -eq 2 ]; then
+            # Older z13-profile CLIs reject the new option with argparse status 2.
+            break
+        fi
+        if [ "$check_rc" -ne 0 ]; then
+            break
+        fi
+        if [ "$elapsed" -lt 8 ]; then sleep 1; fi
+        elapsed=$((elapsed + 1))
+    done
+
+    # The state never proved current (or this is an older CLI): restore now.
+    as_deck "$PROFILE" restore >/dev/null 2>&1
     restore_rc=$?
-    if [ "$restore_rc" -eq 2 ]; then
-        # Older z13-profile CLIs reject the new option with argparse status 2.
-        restore_output=$(as_deck "$PROFILE" restore 2>/dev/null)
-        restore_rc=$?
-    fi
     if [ "$restore_rc" -eq 0 ]; then
-        case "$restore_output" in
-            *"already restored by z13ctl; skipped"*)
-                logger -t z13-fan-resume "z13ctl daemon restored the profile; hook skipped"
-                ;;
-            *)
-                logger -t z13-fan-resume "hook re-applied the active profile"
-                ;;
-        esac
+        logger -t z13-fan-resume "hook re-applied the active profile"
         exit 0
     fi
     if [ "$restore_rc" -ne 127 ]; then
@@ -57,14 +69,12 @@ if [ -x "$PROFILE" ] && [ -f "$DECK_HOME/.config/z13-helper/profiles.json" ]; th
     fi
 fi
 
-# Fallback: the old behaviour, only when restore did not run at all.
-# Still runs z13ctl as deck, never as root (#5).
-if grep -q '"enabled": *true' "$MAXF" 2>/dev/null; then
-    CURVE="20:100%,30:100%,40:100%,50:100%,60:100%,70:100%,80:100%,90:100%"
-fi
+# Fallback: the old behaviour, only when restore did not run at all. Unknown
+# Max Fans state gets the full-speed curve. Still run z13ctl as deck, never root.
 if [ -x "$Z13CTL" ] && as_deck "$Z13CTL" fancurve --set "$CURVE" >/dev/null 2>&1; then
     logger -t z13-fan-resume "profile restore unavailable; re-applied curve after resume ($CURVE)"
 else
-    [ -x "$Z13CTL" ] && as_deck "$Z13CTL" fancurve --reset >/dev/null 2>&1
-    logger -t z13-fan-resume "WARN curve re-apply FAILED; firmware-auto reset after resume"
+    # Unknown profile/Max Fans state is not permission to enable firmware auto:
+    # that would discard a custom curve or the required full-speed pin.
+    logger -t z13-fan-resume "WARN protective curve re-apply FAILED; left curve state untouched"
 fi

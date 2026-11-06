@@ -48,10 +48,11 @@ def env(tmp_path, real_subprocess):
     stubs = tmp_path / "bin"
     stubs.mkdir()
     logger_log = tmp_path / "logger.txt"
+    sleep_log = tmp_path / "sleep.txt"
     ctl_log = tmp_path / "z13ctl.txt"
     (stubs / "runuser").write_text(RUNUSER_STUB)
     (stubs / "logger").write_text(f'#!/bin/sh\necho "$*" >> "{logger_log}"\n')
-    (stubs / "sleep").write_text("#!/bin/sh\nexit 0\n")
+    (stubs / "sleep").write_text(f'#!/bin/sh\necho "$1" >> "{sleep_log}"\nexit 0\n')
     for f in stubs.iterdir():
         f.chmod(0o755)
 
@@ -61,11 +62,12 @@ def env(tmp_path, real_subprocess):
         p.chmod(0o755)
         return p
 
-    def write_profile(rc=0, log=None, old_cli=False, output=""):
+    def write_profile(rc=0, log=None, old_cli=False, output="", skip=False):
         p = home / ".local" / "bin" / "z13-profile"
-        old = 'if [ "$*" = "restore --if-needed" ]; then exit 2; fi\n' if old_cli else ""
+        old = 'case "$*" in *--check-only*) exit 2;; esac\n' if old_cli else ""
         printed = f'printf "%s\\n" {output!r}\n' if output else ""
-        p.write_text(executable_stub("PROFILE_LOG", "z13-profile") + old + printed + f"exit {rc}\n")
+        check = 'case "$*" in *--check-only*) exit 10;; esac\n' if skip else ""
+        p.write_text(executable_stub("PROFILE_LOG", "z13-profile") + old + check + printed + f"exit {rc}\n")
         p.chmod(0o755)
         (home / ".config" / "z13-helper" / "profiles.json").write_text("{}")
         return p
@@ -84,6 +86,7 @@ def env(tmp_path, real_subprocess):
     run.home, run.stubs = home, stubs
     run.write_ctl, run.write_profile = write_ctl, write_profile
     run.logger_log = logger_log
+    run.sleep_log = sleep_log
     run.runuser_log = tmp_path / "runuser.txt"
     run.ctl_log, run.profile_log = ctl_log, tmp_path / "profile.txt"
     return run
@@ -100,7 +103,8 @@ def test_profile_restore_runs_as_deck_not_root(env):
     assert "ran as deck via runuser" in env.profile_log.read_text()
     assert "ran DIRECTLY" not in env.profile_log.read_text()
     assert "hook re-applied the active profile" in env.logger_log.read_text()
-    assert "restore --if-needed" in env.profile_log.read_text()
+    assert "restore --if-needed --check-only" in env.profile_log.read_text()
+    assert "restore\n" in env.profile_log.read_text()
 
 
 def test_fallback_never_writes_pwm_enable_sysfs():
@@ -134,20 +138,20 @@ def test_fallback_curve_set_runs_as_deck_not_root(env):
     assert "ran as deck via runuser" in log
     assert "ran DIRECTLY" not in log
     assert "fancurve --set" in log
+    assert "20:100%,30:100%,40:100%,50:100%,60:100%,70:100%,80:100%,90:100%" in log
     assert "profile restore unavailable; re-applied curve" in env.logger_log.read_text()
 
 
-def test_fallback_reset_runs_as_deck_not_root(env):
-    # z13ctl present but --set fails -> the reset call is the one issue #5 flagged
-    # as still unconditional (no -x/runuser guard) even after a first-pass fix.
+def test_fallback_set_failure_never_resets_firmware_auto(env):
+    # Unknown profile/Max Fans state must not fall through to firmware auto.
     env.write_ctl(rc=1)
     p = env()
     assert p.returncode == 0, p.stderr
     log = env.ctl_log.read_text()
-    assert log.count("ran as deck via runuser") == 2          # --set attempt, then --reset
+    assert log.count("ran as deck via runuser") == 1
     assert "ran DIRECTLY" not in log
-    assert "fancurve --reset" in log
-    assert "WARN curve re-apply FAILED" in env.logger_log.read_text()
+    assert "fancurve --reset" not in log
+    assert "WARN protective curve re-apply FAILED; left curve state untouched" in env.logger_log.read_text()
 
 
 def test_missing_z13ctl_fallback_does_not_crash(env):
@@ -155,16 +159,25 @@ def test_missing_z13ctl_fallback_does_not_crash(env):
     # (root-owned sysfs writes, not a user-writable executable) without erroring.
     p = env()
     assert p.returncode == 0, p.stderr
-    assert "WARN curve re-apply FAILED" in env.logger_log.read_text()
+    assert "WARN protective curve re-apply FAILED; left curve state untouched" in env.logger_log.read_text()
 
 
 def test_daemon_skip_is_logged_without_plain_restore(env):
-    env.write_profile(output="already restored by z13ctl; skipped")
+    env.write_profile(skip=True)
     env.profile_log.write_text("")
     p = env()
     assert p.returncode == 0, p.stderr
-    assert "restore --if-needed" in env.profile_log.read_text()
-    assert "z13ctl daemon restored the profile; hook skipped" in env.logger_log.read_text()
+    assert "restore --if-needed --check-only" in env.profile_log.read_text()
+    assert "restore\n" not in env.profile_log.read_text()
+    assert "z13ctl daemon restored the profile; hook skipped (exit 10)" in env.logger_log.read_text()
+
+
+def test_poll_is_bounded_to_about_eight_seconds(env):
+    env.write_profile()
+    p = env()
+    assert p.returncode == 0, p.stderr
+    assert env.profile_log.read_text().count("restore --if-needed --check-only") == 5
+    assert env.sleep_log.read_text().splitlines() == ["4", "1", "1", "1", "1"]
 
 
 def test_old_profile_cli_falls_back_to_plain_restore(env):
@@ -172,6 +185,6 @@ def test_old_profile_cli_falls_back_to_plain_restore(env):
     p = env()
     assert p.returncode == 0, p.stderr
     log = env.profile_log.read_text()
-    assert "restore --if-needed" in log
+    assert "restore --if-needed --check-only" in log
     assert "restore\n" in log
     assert "hook re-applied the active profile" in env.logger_log.read_text()

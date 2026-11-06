@@ -93,6 +93,7 @@ EPP_SYSFS = "/sys/devices/system/cpu/cpu{n}/cpufreq/energy_performance_preferenc
 
 # Max Fans = every point at 100%. Must match the desktop app and the Decky plugin.
 MAX_FAN_TEMPS = (20, 30, 40, 50, 60, 70, 80, 90)   # Low anchor; firmware response still needs verification.
+RESTORE_SKIPPED = 10  # CLI status used by the resume hook when live state is current.
 MAX_FANS_SPEC = ",".join(f"{t}:100%" for t in MAX_FAN_TEMPS)
 
 # Curves carried over from the z13-max / z13-balanced host scripts (the
@@ -1516,8 +1517,12 @@ def main(argv=None):
     s.add_argument("--no-hooks", action="store_true")
     s.add_argument("--if-needed", action="store_true",
                    help="skip when z13ctl has already restored the active profile and curve")
+    s.add_argument("--check-only", action="store_true",
+                   help="with --if-needed, check current state without applying the profile")
     sub.add_parser("watch", help="stream z13ctl state changes as JSON lines")
     args = ap.parse_args(argv)
+    if args.cmd == "restore" and args.check_only and not args.if_needed:
+        ap.error("restore --check-only requires --if-needed")
 
     if args.cmd == "watch":
         try:
@@ -1568,7 +1573,11 @@ def main(argv=None):
             return 1
         try:
             if args.cmd == "restore" and args.if_needed and _resume_restore_is_current():
+                # Exit 10 is a stable machine interface for the resume hook; do
+                # not make shell callers parse user-facing output.
                 print("already restored by z13ctl; skipped")
+                return RESTORE_SKIPPED
+            if args.cmd == "restore" and args.check_only:
                 return 0
             print(f"Applying profile: {name}")
             # On restore the hooks are intentionally skipped: a login shouldn't
@@ -1607,6 +1616,7 @@ def _resume_restore_is_current():
         # Reuse the app's established z13ctl curve parser. Import lazily because
         # hardware_controller imports profiles for its normal UI operations.
         from hardware_controller import HardwareController
+        from sensor_reader import SensorReader
         curve = HardwareController().get_fancurve()
         if curve.get("mode") != "manual":
             return False
@@ -1616,9 +1626,26 @@ def _resume_restore_is_current():
         max_state = _read_json(MAX_FANS_PATH)
         if not isinstance(max_state, dict) or not isinstance(max_state.get("enabled"), bool):
             return False
+        if SensorReader().get_platform_profile() != profile.get("base"):
+            return False
+        tdp = profile.get("tdp")
+        if tdp:
+            live_tdp = HardwareController().get_tdp()
+            if not isinstance(live_tdp, dict) or any(live_tdp.get(k) != tdp[k]
+                                                     for k in ("pl1", "pl2", "pl3")):
+                return False
         if max_state["enabled"]:
-            return all(pwm == 255 and pct == 100 for _, pwm, pct in points)
-        return True
+            return all(temp in MAX_FAN_TEMPS and pwm == 255 and pct == 100
+                       for temp, pwm, pct in points)
+        stored = profile.get("fan_curve")
+        if stored is None:
+            return False
+        expected = {int(temp): round(int(pct) * 255 / 100) for temp, pct in stored}
+        if len(expected) != 8 or len(points) != 8:
+            return False
+        return (all(temp in expected and abs(pwm - expected[temp]) <= 1
+                    for temp, pwm, _pct in points)
+                and set(expected) == {temp for temp, _, _ in points})
     except Exception:  # noqa: BLE001 - unreadable state always restores
         return False
 

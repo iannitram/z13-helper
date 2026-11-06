@@ -18,7 +18,7 @@ the device but not yet verified on the Z13. Plan and status: `docs/ROADMAP.md`.
 
 ## Unreleased
 
-- **Resume hook avoids a duplicate profile switch (#80; on-device check pending).** Wait for z13ctl's measured resume restore, then skip the hook apply only when the active named profile and live custom curve are confirmed (including a full 100% curve while Max Fans is ON). Unknown state safely re-applies the profile; older `z13-profile` versions fall back to plain restore.
+- **Resume hook verifies the completed z13ctl restore before skipping (#80; on-device check pending).** On the Z13 with z13ctl 1.4.2, eight real suspends measured `resume: restoring custom profile` at about +3.0 s after wake and completion of the named profile set and batterylimit by about +3.7 s; no writer other than z13ctl touched `platform_profile` or pwm (issue #80 comment, 2026-11-06). The hook polls verified base, TDP, Max Fans and curve state through about +8 s, then runs a full restore for any mismatch or unknown state. It recognizes skip via documented exit code 10; older CLIs fall back to plain restore. If restore is unavailable, a failed protective curve write leaves the unknown fan state untouched rather than resetting to firmware auto. `src/fan_watchdog.py` is unchanged; its writer log belongs with the concurrently open #66 branch.
 - **Automatic crash reporting (#82; live upload check pending).** Configured builds
   queue scrubbed exception and fatal reports from the desktop app and Decky plugin
   for background upload to the shared bug drop. Help → Error log has a default-on
