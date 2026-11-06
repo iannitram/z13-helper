@@ -1,3 +1,4 @@
+import copy
 import json
 import socket
 import socketserver
@@ -27,14 +28,19 @@ class Handler(socketserver.StreamRequestHandler):
                 self.wfile.write((json.dumps({"ok": True, "event": event}) + "\n").encode())
                 self.wfile.flush()
         elif request["cmd"] == "get-state":
-            self.wfile.write(b'{"ok":true,"state":{"profile":"Turbo","on_ac":false}}\n')
+            self.wfile.write((json.dumps({"ok": True, "state": self.server.state}) + "\n").encode())
         elif request["cmd"] == "profile-list":
             self.wfile.write((json.dumps({"ok": True, "value": json.dumps(self.server.profiles)}) + "\n").encode())
         elif request["cmd"] == "bad":
             self.wfile.write(b'{"ok":false,"error":"unknown command"}\n')
         elif request["cmd"] == "profile-create":
-            self.server.profiles.append({"name": request["set"]})
-            self.wfile.write(b'{"ok":true}\n')
+            name = request["set"]
+            if name != name.lower():  # the real 1.4.2 daemon rejects capitalized names
+                reply = {"ok": False, "error": f'profile-create: profile name "{name}" must be lowercase'}
+            else:
+                self.server.profiles.append({"name": name})
+                reply = {"ok": True}
+            self.wfile.write((json.dumps(reply) + "\n").encode())
         else:
             self.wfile.write(b'{"ok":true}\n')
         self.wfile.flush()
@@ -47,6 +53,7 @@ def daemon(tmp_path):
     server.requests = []
     server.events = ["power-source", "gui-toggle", "state-changed"]
     server.profiles = []
+    server.state = {"profile": "Turbo", "on_ac": False}
     server.subscribed = threading.Event()
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -106,7 +113,7 @@ def test_named_profile_mirror_probes_and_targets_every_setting(daemon):
                "tdp": {"pl1": 35, "pl2": 45, "pl3": 50}, "undervolt": -10}
     backend_name = client.ensure_named_profile(profile)
     assert backend_name.startswith("z13h-daily-travel-")
-    writes = [r for r in server.requests if r["cmd"] not in ("profile-list",)]
+    writes = [r for r in server.requests if r["cmd"] not in ("profile-list", "get-state")]
     assert writes[0] == {"cmd": "profile-create", "set": backend_name}
     assert all(r.get("profile") == backend_name for r in writes[1:])
     assert [r["cmd"] for r in writes] == ["profile-create", "tdp-reset", "fancurve", "tdp", "undervolt"]
@@ -197,3 +204,76 @@ def test_explicit_test_socket_is_native_even_under_root(daemon, monkeypatch):
     monkeypatch.setattr(host, 'MODE', 'root')
     assert client.get_state()['profile'] == 'Turbo'
     assert server.requests == [{'cmd': 'get-state'}]
+
+
+# Real z13ctl 1.4.2 replies, captured from the device (issue #179).
+REAL_PROFILE_LIST = [{"name": "custom", "fan_curve": {"mode": 1, "points": [{"temp": 20, "pwm": 255}]},
+                      "active": False}]
+REAL_STATE_BALANCED = {"profile": "balanced", "undervolt_available": False}
+BALANCED = {"name": "Balanced", "base": "balanced", "fan_curve": profiles.BALANCED_CURVE,
+            "tdp": None, "undervolt": None}
+
+
+def _real_device(server, state=REAL_STATE_BALANCED):
+    server.profiles = copy.deepcopy(REAL_PROFILE_LIST)
+    server.state = dict(state)
+
+
+def test_restoring_balanced_creates_lowercase_backend_profile_then_activates_it(daemon):
+    server, client = daemon
+    _real_device(server)
+    assert client.activate_app_profile(BALANCED) == client.mapped_profile_name(BALANCED)
+    creates = [r["set"] for r in server.requests if r["cmd"] == "profile-create"]
+    assert len(creates) == 1
+    name = creates[0]
+    assert name == name.lower()
+    assert name not in ("quiet", "balanced", "performance")
+    assert name == client.mapped_profile_name(BALANCED)
+    assert server.requests[0] == {"cmd": "profile", "set": "balanced"}
+    assert server.requests[-1] == {"cmd": "profile", "set": name}
+    assert any(p["name"] == name for p in server.profiles)
+
+
+def test_no_undervolt_reset_when_daemon_reports_undervolt_unavailable(daemon):
+    server, client = daemon
+    _real_device(server)
+    client.ensure_named_profile(BALANCED)
+    assert not [r for r in server.requests if r["cmd"].startswith("undervolt")]
+
+
+def test_requested_undervolt_is_skipped_without_raising_when_unavailable(daemon):
+    server, client = daemon
+    _real_device(server)
+    name = client.ensure_named_profile(dict(BALANCED, undervolt=-10))
+    assert name == client.mapped_profile_name(BALANCED)
+    assert not [r for r in server.requests if r["cmd"].startswith("undervolt")]
+    assert [r["cmd"] for r in server.requests if r["cmd"] == "fancurve"] == ["fancurve"]
+
+
+def test_undervolt_reset_is_still_sent_when_undervolt_is_available(daemon):
+    server, client = daemon
+    _real_device(server, {"profile": "balanced", "undervolt_available": True})
+    client.ensure_named_profile(BALANCED)
+    assert [r["cmd"] for r in server.requests if r["cmd"].startswith("undervolt")] == ["undervolt-reset"]
+    # One fresh snapshot per call, read before any write.
+    assert [r["cmd"] for r in server.requests].count("get-state") == 1
+
+
+def test_undervolt_is_still_written_when_available(daemon):
+    server, client = daemon
+    _real_device(server, {"profile": "balanced", "undervolt_available": True})
+    client.ensure_named_profile(dict(BALANCED, undervolt=-10))
+    undervolts = [r for r in server.requests if r["cmd"].startswith("undervolt")]
+    assert undervolts == [{"cmd": "undervolt", "set": "-10", "profile": client.mapped_profile_name(BALANCED)}]
+
+
+def test_stale_capitalized_override_is_not_sent_to_the_daemon():
+    stored = dict(BALANCED, z13ctl_profile="Balanced")
+    name = z13ctl_client.Z13CtlClient.mapped_profile_name(stored)
+    assert name == name.lower()
+    assert name.startswith("z13h-balanced-")
+
+
+def test_custom_override_is_still_sent_as_is():
+    stored = {"name": "Custom", "base": "balanced", "z13ctl_profile": "custom"}
+    assert z13ctl_client.Z13CtlClient.mapped_profile_name(stored) == "custom"

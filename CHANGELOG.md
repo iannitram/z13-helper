@@ -18,6 +18,11 @@ the device but not yet verified on the Z13. Plan and status: `docs/ROADMAP.md`.
 
 ## Unreleased
 
+- **Restore works on z13ctl 1.4.2 (#179).** Built-in profiles no longer send the capitalized
+  names z13ctl rejects (or a name equal to a firmware base); they use generated lowercase backend
+  names. Undervolt writes are skipped when the daemon reports `undervolt_available: false`, so
+  `z13-profile restore` no longer aborts before the saved fan curve is applied.
+
 - **Automatic crash reporting (#82; live upload check pending).** Configured builds
   queue scrubbed exception and fatal reports from the desktop app and Decky plugin
   for background upload to the shared bug drop. Help → Error log has a default-on
