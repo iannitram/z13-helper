@@ -64,9 +64,21 @@ def setUpModule():
     # Backend writes target a fixed owner, independent of the runner's account.
     owner = types.SimpleNamespace(pw_uid=m.DECK_UID, pw_gid=m.DECK_GID,
                                   pw_dir=os.path.join(_HOME, "owner-home"))
-    patcher = mock.patch("pwd.getpwuid", return_value=owner)
-    patcher.start()
-    unittest.addModuleCleanup(patcher.stop)
+    global _PWD_PATCHER
+    _PWD_PATCHER = mock.patch("pwd.getpwuid", return_value=owner)
+    _PWD_PATCHER.start()
+
+
+def tearDownModule():
+    # tearDownModule, not addModuleCleanup: pytest runs the former, so the fake
+    # account never leaks into later test files (tarfile, crash reports).
+    global _PWD_PATCHER
+    if _PWD_PATCHER is not None:
+        _PWD_PATCHER.stop()
+        _PWD_PATCHER = None
+
+
+_PWD_PATCHER = None
 
 
 def _store(active="Balanced"):

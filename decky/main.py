@@ -80,6 +80,7 @@ DECK_IDS = (1000, 1000)
 # = no fan trace file; missing = on. Read once, when the watchdog starts.
 INSTALL_JSON = os.path.expanduser("~/.config/z13-helper/install.json")
 timeline.INSTALL_JSON = INSTALL_JSON   # the timeline honours the same logging choice
+timeline.LOGGER = decky.logger         # bounded recording warnings go to the plugin log
 
 # Desktop app check: in Desktop Mode the resident desktop app should be running (it
 # owns the side button there). Its single-instance socket (src/single_instance.py)
@@ -812,8 +813,8 @@ def _check_steamos_build_id():
             after={"steamos": f"{ver or '?'} ({cur})", "kernel": os.uname().release},
             path=TIMELINE_PATH,
         )
-    except Exception as e:
-        decky.logger.warning("SteamOS build ID timeline record failed: %s", e)
+    except Exception as e:  # noqa: BLE001 - recording is best-effort
+        timeline.warn_failure("steamos build id", e)
         return None
 
 
@@ -978,63 +979,77 @@ def _edit_field(field, value, expected):
 
 
 def _timeline_setting(kind, summary, before, after, ok):
-    """Best-effort timeline entry for a manual setting write; never blocks or fails it."""
+    """Best-effort timeline entry for a manual setting write; queued, never blocks it."""
     try:
         timeline.record_setting_change(
             kind=kind, summary=summary, before=before, after=after,
-            ok=ok, path=TIMELINE_PATH,
+            ok=ok, path=TIMELINE_PATH, defer=True,
         )
-    except Exception:  # noqa: BLE001 - timeline recording is best-effort
-        pass
+    except Exception as exc:  # noqa: BLE001 - timeline recording is best-effort
+        timeline.warn_failure(kind, exc)
 
 
-def _before_snapshot(read):
-    """Run a read-only 'before' lookup for the timeline; None if it fails."""
+def _before_snapshot(read, context="snapshot"):
+    """Run a read-only 'before' lookup for the timeline; UNKNOWN if it fails."""
     try:
         return read()
-    except Exception:  # noqa: BLE001 - timeline recording is best-effort
+    except Exception as exc:  # noqa: BLE001 - timeline recording is best-effort
+        timeline.warn_failure(context, exc)
+        return timeline.UNKNOWN
+
+
+def _peek_max_fans():
+    """Max Fans state for the timeline, strictly read-only: no seeding from the
+    legacy stores, no lock, no write (unlike _load_max_fans). None if missing,
+    unreadable or not a regular file (a FIFO never blocks the open)."""
+    try:
+        fd = os.open(MAX_FANS_STATE, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+    except OSError:
         return None
+    try:
+        with os.fdopen(fd, "rb") as f:
+            if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+                return None
+            state = json.loads(f.read(1 << 16).decode("utf-8"))
+    except (OSError, ValueError):
+        return None
+    return state if isinstance(state, dict) else None
 
 
 def _set_max_fans_recorded(enabled):
     """authority.set_max_fans plus a best-effort goal-change timeline entry.
-    The hardware write is exactly authority.set_max_fans(enabled); reads happen around it."""
-    before_mf = _before_snapshot(lambda: dict(_load_max_fans()))
-    prof_name = _before_snapshot(lambda: (active_profile(_read_store()) or {}).get("name") or None)
+    The hardware write is exactly authority.set_max_fans(enabled); the reads
+    around it are read-only, and the entry is queued, never written inline."""
+    before_mf = _peek_max_fans()
+    prof_name = _before_snapshot(lambda: (active_profile(_read_store()) or {}).get("name") or None,
+                                 "profile name")
+    if prof_name is timeline.UNKNOWN:
+        prof_name = None
+
+    def record(ok):
+        try:
+            before, after = timeline.max_fans_goal_states(before_mf or {}, _peek_max_fans(), enabled, ok=ok)
+            timeline.record_goal_change(
+                goal=after["goal"], previous_goal=before["goal"],
+                before=before, after=after, profile=prof_name, ok=ok,
+                path=TIMELINE_PATH, defer=True,
+            )
+        except Exception as exc:  # noqa: BLE001 - timeline recording is best-effort
+            timeline.warn_failure("max fans", exc)
+
     try:
         message = authority.set_max_fans(enabled)
     except Exception:
-        try:
-            after_mf = dict(_load_max_fans())
-            before, after = timeline.max_fans_goal_states(before_mf or {}, after_mf, enabled, ok=False)
-            timeline.record_goal_change(
-                goal=after["goal"], previous_goal=before["goal"],
-                before=before, after=after, profile=prof_name, ok=False,
-                path=TIMELINE_PATH,
-            )
-        except Exception:  # noqa: BLE001 - timeline recording is best-effort
-            pass
+        record(False)
         raise
-    try:
-        after_mf = dict(_load_max_fans())
-        before, after = timeline.max_fans_goal_states(before_mf or {}, after_mf, enabled, ok=True)
-        timeline.record_goal_change(
-            goal=after["goal"], previous_goal=before["goal"],
-            before=before, after=after, profile=prof_name, ok=True,
-            path=TIMELINE_PATH,
-        )
-    except Exception:  # noqa: BLE001 - timeline recording is best-effort
-        pass
+    record(True)
     return message
 
 
 def _edit_field_recorded(field, value, expected):
-    """_edit_field; setting changes are recorded by state_authority._push_field."""
-    try:
-        entries_before = len(timeline.read_entries(TIMELINE_PATH))
-    except Exception:
-        entries_before = 0
-
+    """_edit_field; setting changes are recorded by state_authority._push_field.
+    The fallback entry is written only when that shared owner did not acknowledge
+    a recording on this thread (timeline.capture), never inferred from counts."""
     if field == "tdp":
         def _read():
             v = (active_profile(_read_store()) or {}).get("tdp")
@@ -1046,16 +1061,12 @@ def _edit_field_recorded(field, value, expected):
     else:
         def _read():
             return _load_state().get("brightness")
-    before_v = _before_snapshot(_read)
+    before_v = _before_snapshot(_read, field)
 
-    result = _edit_field(field, value, expected)
+    with timeline.capture() as ack:
+        result = _edit_field(field, value, expected)
 
-    try:
-        entries_after = len(timeline.read_entries(TIMELINE_PATH))
-    except Exception:
-        entries_after = entries_before
-
-    if entries_after == entries_before:
+    if not ack["recorded"]:
         ok = bool(result.get("ok"))
         if field == "tdp":
             summary = (f"TDP {value['pl1']}/{value['pl2']}/{value['pl3']} W" if value else "TDP off")
@@ -1267,7 +1278,6 @@ class Plugin:
             config_path=INSTALL_JSON, logger=decky.logger, loop=self.loop,
             fatal_name="fatal-decky.log",
         )
-        await asyncio.to_thread(_check_steamos_build_id)
         def on_state(state, event):
             if state_events.event_action(event, False) == "refresh":
                 self._backend_state = state or {}
@@ -1278,6 +1288,11 @@ class Plugin:
         self._state_stream = StateStream(on_state, command=Z13_PROFILE + ["watch"]).start()
         self._enforce_task = self.loop.create_task(self._enforce_max_fans())
         self._desktop_task = self.loop.create_task(self._watch_desktop_app())
+        # Recorded on its own task after the watchdog is running: a slow or
+        # contended timeline must never delay the fan watchdog start.
+        self._timeline_task = self.loop.create_task(asyncio.to_thread(_check_steamos_build_id))
+        self._timeline_task.add_done_callback(
+            lambda t: t.exception() if not t.cancelled() else None)
         if self._crash_reporter:
             for task in (self._enforce_task, self._desktop_task):
                 task.add_done_callback(self._crash_reporter.task_done)

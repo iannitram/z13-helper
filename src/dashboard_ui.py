@@ -640,9 +640,10 @@ class DashboardUI(QMainWindow):
                     timeline.record_goal_change(
                         goal=after["goal"], previous_goal=before["goal"],
                         before=before, after=after, profile=active_name, ok=ok,
+                        defer=True,   # queued: never delays the next hardware action
                     )
-                except Exception:
-                    pass
+                except Exception as exc:  # noqa: BLE001 - recording is best-effort
+                    timeline.warn_failure("max fans", exc)
 
             try:
                 message = authority.set_max_fans(checked)

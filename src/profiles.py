@@ -1204,9 +1204,12 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
                 results=results,
                 before_max_fans=before_max_fans,
                 after_max_fans=bool(_max_fans_state().get("enabled")),
+                # Queued for the writer thread: apply() runs inside hardware
+                # transactions, which must never wait on timeline persistence.
+                defer=True,
             )
-        except Exception:  # noqa: BLE001 - timeline recording is best-effort
-            pass
+        except Exception as exc:  # noqa: BLE001 - timeline recording is best-effort
+            timeline.warn_failure("profile apply", exc)
     return results
 
 

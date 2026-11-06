@@ -9,6 +9,7 @@ import functools
 import json
 import logging
 import os
+import stat
 import threading
 
 import host
@@ -138,8 +139,13 @@ def _read_saved_brightness():
 
     for p in paths:
         try:
-            with open(p, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            # Non-blocking, regular files only: this runs inside a hardware
+            # transaction, so a FIFO planted here must not stall it.
+            fd = os.open(p, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0))
+            with os.fdopen(fd, "rb") as f:
+                if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+                    continue
+                data = json.loads(f.read(1 << 16).decode("utf-8"))
             if isinstance(data, dict):
                 v = data.get("brightness")
                 if v is not None:
@@ -158,6 +164,7 @@ def edit(profile, field, *, devices=None):
         profiles.sync_active_from_backend(client.get_state())
     current = profiles.get_profile(profile['name'])
     before_value = None
+    before_known = current is not None
     if current is not None:
         raw = current.get(field)
         before_value = dict(raw) if isinstance(raw, dict) else raw
@@ -172,7 +179,8 @@ def edit(profile, field, *, devices=None):
     previous = getattr(_local, 'profile', None)
     _local.profile = profile
     try:
-        return _push_field(profile, field, devices=devices, before=before_value)
+        return _push_field(profile, field, devices=devices, before=before_value,
+                           before_known=before_known)
     finally:
         _local.profile = previous
 
@@ -184,7 +192,7 @@ def apply_profile(name, **kw):
     return profiles.apply_by_name(name, **kw)
 
 
-def _push_field(profile, field, *, devices=None, before=None):
+def _push_field(profile, field, *, devices=None, before=None, before_known=True):
     import profiles
     from hardware_controller import HardwareController
     # Use the same full ordered apply for clearing overrides and base changes.
@@ -208,9 +216,11 @@ def _push_field(profile, field, *, devices=None, before=None):
             else:
                 summary = f"{field} {value}"
 
-            b_val = before
-            if field == "brightness" and b_val is None:
+            b_val = before if before_known else timeline.UNKNOWN
+            if field == "brightness" and b_val in (None, timeline.UNKNOWN):
                 b_val = _read_saved_brightness()
+                if b_val is None:
+                    b_val = timeline.UNKNOWN
 
             before_dict = {field: b_val}
             after_dict = {field: value} if ok else before_dict
@@ -222,9 +232,16 @@ def _push_field(profile, field, *, devices=None, before=None):
                 after=after_dict,
                 ok=ok,
                 path=None,
+                # Queued, never written here: this runs inside the hardware
+                # transaction, which must not wait on the timeline lock or disk.
+                defer=True,
             )
-        except Exception as e:
-            logger.warning("timeline recording failed for %s: %s", field, e)
+        except Exception as e:  # noqa: BLE001 - recording is best-effort
+            try:
+                import timeline
+                timeline.warn_failure(field, e)
+            except Exception:  # noqa: BLE001
+                logger.warning("timeline recording failed for %s: %s", field, type(e).__name__)
 
     if field == 'tdp' and value:
         try:

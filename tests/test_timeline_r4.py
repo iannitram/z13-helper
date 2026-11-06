@@ -148,6 +148,7 @@ def test_f6_profile_apply_never_writes_hook_command_to_timeline(profiles_env, mo
 
     profiles.apply(profile, previous=previous, skip_hooks=False)
 
+    assert timeline.flush()   # apply() queues its entry; it is never written inline
     raw = _raw(timeline.TIMELINE_PATH)
     assert "SECRET-EXIT-HOOK" not in raw
     assert "SECRET-ENTER-HOOK" not in raw

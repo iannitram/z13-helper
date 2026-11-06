@@ -294,5 +294,6 @@ def test_timeline_failure_never_breaks_a_battery_limit_write(decky_main, monkeyp
     monkeypatch.setattr(m, "_live_battery_limit", lambda: 80)
     res = _call(m.Plugin().set_battery_limit(60))
     assert res["ok"] is True
+    timeline.flush()   # the entry is queued; the writer thread calls append
     assert calls, "the hardware write must still be made"
     assert attempts, "the battery write must reach the timeline recorder"
