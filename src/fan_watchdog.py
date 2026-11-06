@@ -4,8 +4,9 @@ Two failure modes, both seen live on this machine:
 
 1. **Curve dropped.** asus-wmi disables custom fan curves on every
    platform-profile write (this app, the Decky plugin, z13-* scripts,
-   Boondock, Steam). pwmN_enable on the asus_custom_fan_curve node flips to
-   2 (auto), which is easy to see and re-apply.
+   Boondock, Steam). The z13ctl daemon re-applies dropped curves within its
+   2 s poll, and the watchdog only steps in when one is still dropped after
+   DROP_GRACE_S (for example, an older z13ctl or a stopped daemon).
 
 2. **Curve stalled.** After a Desktop <-> Game Mode session switch
    (2026-10-09) the sysfs curve still read "custom, 100% everywhere" and
@@ -47,6 +48,9 @@ import time
 STALL_TICKS = 2
 # Minimum gap between re-apply attempts so a failing z13ctl isn't hammered.
 RETRY_S = 10
+# The daemon (z13ctl 1.4.2+) restores a dropped curve within one 2 s poll; the
+# watchdog only acts if the curve is still dropped after this.
+DROP_GRACE_S = RETRY_S
 # Only treat 0 RPM as a stall when the curve asks for at least this much
 # (50%): fans at half speed or more never read 0, while a low first point
 # may legitimately idle them, and a false stall would rewrite the profile
@@ -121,6 +125,7 @@ class FanWatchdog:
         self._clock = clock
         self.trace = trace
         self._stall_ticks = 0
+        self._dropped_since = None
         self._last_reapply = float("-inf")
         self._last_auto = float("-inf")
         self._auto_zero_since = None   # when both fans first read 0 RPM, hot, in auto
@@ -200,6 +205,7 @@ class FanWatchdog:
             # across it, so judge nothing until they have had RETRY_S.
             self._grace_until = now + RETRY_S
             self._stall_ticks = 0
+            self._dropped_since = None
             self._zero_since = [None, None]
             self._rpm_changed_at = [now, now]
             self._temp_at_change = [None, None]
@@ -229,6 +235,7 @@ class FanWatchdog:
         t = self._tick
         if self._suspended():
             self._stall_ticks = 0
+            self._dropped_since = None
             self._zero_since = [None, None]
             self._auto_zero_since = None
             self._holding = False
@@ -248,6 +255,12 @@ class FanWatchdog:
         #    establish daemon curve restoration on the target SteamOS kernel.
         if max_on and enabled is False:
             self._stall_ticks = 0
+            if self._dropped_since is None:
+                self._dropped_since = now
+                self._event(f"WAIT dropped curve with Max Fans on (daemon gets {DROP_GRACE_S:.0f}s)")
+                return None
+            if now - self._dropped_since < DROP_GRACE_S or now < self._grace_until:
+                return None
             if not self._ready("dropped curve"):
                 return None
             self._last_reapply = now
@@ -256,6 +269,8 @@ class FanWatchdog:
             return self._dispatch(True, lambda msg: msg.replace(
                 "Fans were stalled at 0 RPM;", "Max Fans re-applied after a profile change;"),
                 cancel_if_max_fans_drop=True)
+
+        self._dropped_since = None
 
         if enabled is False and not max_on:
             self._stall_ticks = 0
