@@ -94,7 +94,7 @@ def boost_ui(profiles_env, monkeypatch):
     monkeypatch.setattr(authority, "mirror_profile", lambda p: mirrored.append(p["name"]))
     # writes records the value each live push receives (None = "Unchanged").
     monkeypatch.setattr(authority, "_push_field",
-                        lambda profile, field, devices=None: writes.append(profile.get(field)))
+                        lambda profile, field, devices=None, before=None: writes.append(profile.get(field)))
     controller = SimpleNamespace(get_epp_choices=lambda: ["power", "performance"],
                                  get_epp=lambda: live["epp"])
     control = SimpleNamespace(controller=controller, changed=Signal(),

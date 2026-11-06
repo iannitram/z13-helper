@@ -1144,7 +1144,11 @@ def epp_argv(value):
 
 
 def write_epp(value):
-    """(ok, message): write `value` to every cpufreq policy's energy_performance_preference."""
+    """(ok, message): write `value` to every cpufreq policy's energy_performance_preference.
+
+    Callers must hold the state_authority transaction (all current callers do:
+    set_epp via _push_field, apply_epp via the serialized apply paths).
+    """
     rc, out, timed_out = host.run(epp_argv(value), timeout=Z13CTL_WRITE_TIMEOUT_S)
     if rc == 0:
         return True, value

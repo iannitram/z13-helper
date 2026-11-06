@@ -249,7 +249,11 @@ def _push_field(profile, field, *, devices=None, before=None):
             _record_change(ok=False)
             raise
         _record_change(ok=True)
-    elif field == 'epp' and value is not None:
+    elif field == 'epp':
+        # None is "Unchanged": a no-op, never the full apply below (that rewrites
+        # the platform profile and fan curve and stops the fans for 5-10 s).
+        if value is None:
+            return 'CPU Boost: unchanged'
         result = c.set_epp(value)
     elif field == 'brightness' and value:
         try:
