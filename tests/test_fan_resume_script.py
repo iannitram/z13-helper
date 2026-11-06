@@ -106,7 +106,12 @@ def test_profile_restore_runs_as_deck_not_root(env):
     assert "re-applied active profile" in env.logger_log.read_text()
 
 
-@pytest.mark.parametrize("version", ["z13ctl version 1.4.2", "z13ctl version 1.5.0"])
+@pytest.mark.parametrize("version", [
+    "z13ctl version 1.4.2",
+    "z13ctl version 1.4.10",
+    "z13ctl version 1.5.0",
+    "z13ctl version 2.0.0",
+])
 def test_resume_owner_defers_without_restore_or_sleep(env, version):
     env.write_ctl(version=version)
     env.write_profile(owner_rc=10)
@@ -121,6 +126,7 @@ def test_resume_owner_defers_without_restore_or_sleep(env, version):
 
 @pytest.mark.parametrize("version,owner_rc", [
     ("z13ctl version 1.4.1", 10),
+    ("z13ctl version 1.3.12", 10),
     ("garbage version", 10),
     ("z13ctl version 1.4.2", 0),
     ("z13ctl version 1.4.2", 2),
@@ -133,6 +139,7 @@ def test_unproven_resume_owner_keeps_restore_path(env, version, owner_rc):
     assert p.returncode == 0, p.stderr
     assert "restore" in env.profile_log.read_text()
     assert "re-applied active profile" in env.logger_log.read_text()
+    assert env.sleep_log.read_text().strip() == "3"
 
 
 def test_fallback_never_writes_pwm_enable_sysfs():

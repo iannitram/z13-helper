@@ -1675,7 +1675,7 @@ def _z13ctl_owns_resume_restore():
     elif backend_tdp is not None:
         return False
 
-    if "epp" not in profile or profile["epp"] is not None:
+    if profile.get("epp") is not None:
         return False
     if "battery_limit" not in profile:
         return False

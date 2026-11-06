@@ -44,6 +44,28 @@ def test_resume_owner_baseline(profiles_env, monkeypatch):
     assert _check() == 10
 
 
+def test_resume_owner_real_shape_profile_without_epp_defers(profiles_env, monkeypatch):
+    defaults = profiles.default_profiles()
+    turbo = copy.deepcopy(next(p for p in defaults if p["name"] == "Turbo"))
+    assert "epp" not in turbo
+    store = {"version": 1, "active": turbo["name"], "profiles": defaults}
+    profiles_env.store.parent.mkdir(parents=True, exist_ok=True)
+    profiles_env.store.write_text(json.dumps(store))
+    profiles_env.max_fans.write_text(json.dumps({"enabled": False}))
+
+    from z13ctl_client import Z13CtlClient
+    name = Z13CtlClient.mapped_profile_name(turbo)
+    points = [{"temp": t, "pwm": round(p * 255 / 100)} for t, p in turbo["fan_curve"]]
+    named = {"name": name, "fan_curve": {"mode": 1, "points": points}}
+    state_home = profiles_env.store.parents[2] / "xdg-state"
+    state_dir = state_home / "z13ctl"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    (state_dir / "state.json").write_text(json.dumps({
+        "profile": name, "battery_limit": 80, "custom_profiles": {name: named}}))
+    monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
+    assert _check() == 10
+
+
 def test_resume_owner_rejects_each_profile_state_guard(profiles_env, monkeypatch):
     # Rebuild the same passing baseline for each single-field mutation.
     for mutation in ("profile", "curve", "tdp", "epp", "battery"):
@@ -118,6 +140,61 @@ def test_resume_owner_missing_or_corrupt_files_fall_back(profiles_env, monkeypat
         path.write_text("{")
         assert _check() == 0
         path.write_text(original)
+
+
+def test_resume_owner_tdp_present_only_in_z13ctl(profiles_env, monkeypatch):
+    app, named, state_path = _fixture(profiles_env, monkeypatch, tdp=None)
+    assert app.get("tdp") is None
+    state = json.loads(state_path.read_text())
+    backend_name = next(iter(state["custom_profiles"]))
+    state["custom_profiles"][backend_name]["tdp"] = {
+        "pl1_spl": 45, "pl2_sppt": 55, "fppt": 65, "apu_sppt": 45,
+    }
+    state_path.write_text(json.dumps(state))
+    assert _check() == 0
+
+
+def test_resume_owner_max_fans_points_count_rejects(profiles_env, monkeypatch):
+    _fixture(profiles_env, monkeypatch, max_on=True)
+    state_path = profiles_env.store.parents[2] / "xdg-state" / "z13ctl" / "state.json"
+    baseline = json.loads(state_path.read_text())
+    named_key = next(iter(baseline["custom_profiles"]))
+    for temps in (
+        (20, 30, 40, 50, 60, 70, 80),
+        (20, 30, 40, 50, 60, 70, 80, 85, 90),
+    ):
+        state = copy.deepcopy(baseline)
+        state["custom_profiles"][named_key]["fan_curve"]["points"] = [
+            {"temp": t, "pwm": 255} for t in temps
+        ]
+        state_path.write_text(json.dumps(state))
+        assert _check() == 0
+
+
+def test_resume_owner_explicit_battery_limit(profiles_env, monkeypatch):
+    app, named, state_path = _fixture(profiles_env, monkeypatch)
+    app["battery_limit"] = 60
+    profiles_env.store.write_text(json.dumps({"version": 1, "active": app["name"], "profiles": [app]}))
+
+    state = json.loads(state_path.read_text())
+    state["battery_limit"] = 60
+    state_path.write_text(json.dumps(state))
+    assert _check() == 10
+
+    state["battery_limit"] = 80
+    state_path.write_text(json.dumps(state))
+    assert _check() == 0
+
+
+def test_resume_owner_epp_setting(profiles_env, monkeypatch):
+    app, named, state_path = _fixture(profiles_env, monkeypatch)
+    app["epp"] = "performance"
+    profiles_env.store.write_text(json.dumps({"version": 1, "active": app["name"], "profiles": [app]}))
+    assert _check() == 0
+
+    app["epp"] = None
+    profiles_env.store.write_text(json.dumps({"version": 1, "active": app["name"], "profiles": [app]}))
+    assert _check() == 10
 
 
 def test_resume_owner_does_not_use_socket_subprocess_or_host_commands(profiles_env, monkeypatch):
