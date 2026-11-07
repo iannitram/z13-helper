@@ -77,14 +77,18 @@ export const setBrightness = callable<[level: BrightnessLevel], BrightnessResult
 export const getTelemetry = callable<[], Telemetry>("get_telemetry");
 
 export interface TimelineEntry {
+  id?: string;
   ts?: string;
   kind?: string;
   summary?: string;
   changed?: string[];
+  no_rollback_reason?: string | null;
   no_rollback_reason?: string;
   rollback?: Record<string, unknown> | null;
+  rollback_supported?: boolean;
 }
 export const getTimeline = callable<[limit?: number], TimelineEntry[]>("get_timeline");
+export const rollbackTimelineEntry = callable<[entryId: string], { ok: boolean; message: string }>("rollback_timeline_entry");
 
 /** Same rule as main.py clamp_tdp / the desktop Fans + Power window:
  *  sPPT >= SPL, fPPT >= sPPT, all within [min, max]. */

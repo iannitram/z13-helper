@@ -1277,9 +1277,43 @@ class Plugin:
     # ---- Machine timeline (Phase 16f, #134) ----
     async def get_timeline(self, limit: int = 50) -> list:
         cap = max(0, int(limit))
-        return await asyncio.to_thread(
+        rows = await asyncio.to_thread(
             lambda: timeline.read_entries(TIMELINE_PATH, limit=cap, newest_first=True)
         )
+        for row in rows:
+            row["rollback_supported"] = timeline.rollback_spec(row) is not None
+        return rows
+
+    async def rollback_timeline_entry(self, entry_id: str) -> dict:
+        """Run one validated, allowlisted rollback through existing APIs."""
+        if not isinstance(entry_id, str) or not entry_id:
+            return {"ok": False, "message": "Invalid timeline entry."}
+        rows = await self.get_timeline(500)
+        entry = next((row for row in rows if row.get("id") == entry_id), None)
+        spec = timeline.rollback_spec(entry)
+        if spec is None:
+            return {"ok": False, "message": "This rollback record is unsupported."}
+        kind = spec["kind"]
+        async with _lock():
+            try:
+                if kind == "profile":
+                    rc, out = await asyncio.to_thread(
+                        lambda: _run(Z13_PROFILE + ["apply", spec["profile"], "--no-hooks"],
+                                     PROFILE_APPLY_TIMEOUT_S, as_deck=True))
+                    ok = rc == 0 and "ERR  profile" not in out
+                    return {"ok": ok, "message": "Saved profile restored." if ok else
+                            f"Profile restore failed ({out[-160:] or f'rc={rc}'})."}
+                if kind == "goal":
+                    await asyncio.to_thread(_set_max_fans_recorded, spec["goal"] == "max")
+                    return {"ok": True, "message": "Saved fan goal restored."}
+                field = kind
+                value = spec["value"]
+                result = await asyncio.to_thread(_edit_field_recorded, field, value, "")
+                return {"ok": bool(result.get("ok")),
+                        "message": result.get("message") or ("Saved setting restored." if result.get("ok") else "Setting restore failed.")}
+            except (OSError, RuntimeError, ValueError, KeyError) as exc:
+                decky.logger.warning("Timeline rollback failed: %s", str(exc)[:200])
+                return {"ok": False, "message": f"Rollback failed: {str(exc)[:200]}"}
 
     # ---- Lifecycle ----
     async def _main(self):

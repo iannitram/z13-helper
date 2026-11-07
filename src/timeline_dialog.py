@@ -5,7 +5,7 @@ import json
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QComboBox, QDialog, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
-    QPushButton, QSplitter, QVBoxLayout,
+    QMessageBox, QPushButton, QSplitter, QVBoxLayout,
 )
 
 import timeline
@@ -18,11 +18,12 @@ def _label(entry):
 class TimelineDialog(QDialog):
     """Browse newest-first entries and compare the before/after snapshots."""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, rollback=None):
         super().__init__(parent)
         self.setWindowTitle("Machine timeline")
         self.resize(820, 520)
         self.entries = timeline.read_entries(limit=100, newest_first=True)
+        self.rollback = rollback
         layout = QVBoxLayout(self)
         split = QSplitter(Qt.Orientation.Horizontal)
         self.list = QListWidget()
@@ -49,6 +50,10 @@ class TimelineDialog(QDialog):
         self.note = QLabel("")
         self.note.setWordWrap(True)
         layout.addWidget(self.note)
+        self.rollback_button = QPushButton("Roll back…")
+        self.rollback_button.hide()
+        self.rollback_button.clicked.connect(self._rollback_selected)
+        layout.addWidget(self.rollback_button, alignment=Qt.AlignmentFlag.AlignLeft)
         close = QPushButton("Close")
         close.clicked.connect(self.accept)
         layout.addWidget(close, alignment=Qt.AlignmentFlag.AlignRight)
@@ -74,10 +79,25 @@ class TimelineDialog(QDialog):
         for value in entry.get("changed", []):
             self.details.addItem(str(value))
         rollback = entry.get("rollback")
-        if rollback:
-            self.note.setText("A rollback record is available for this entry. The record is descriptive; this view does not execute rollback actions.")
+        if timeline.rollback_spec(entry):
+            self.note.setText("A supported rollback record is available. Applying it creates a new timeline entry.")
+            self.rollback_button.setVisible(self.rollback is not None)
         else:
-            self.note.setText("Cannot be undone: " + str(entry.get("no_rollback_reason") or "No rollback record was saved."))
+            reason = entry.get("no_rollback_reason") or ("This rollback record format is not supported by the app." if rollback else "No rollback record was saved.")
+            self.note.setText("Cannot be undone: " + str(reason))
+            self.rollback_button.setVisible(False)
+
+    def _rollback_selected(self):
+        row = self.list.currentRow()
+        if not (0 <= row < len(self.entries)) or self.rollback is None:
+            return
+        entry = self.entries[row]
+        if QMessageBox.question(self, "Roll back change?", f"Apply the saved prior state for:\n\n{_label(entry)}") != QMessageBox.StandardButton.Yes:
+            return
+        ok, message = self.rollback(entry)
+        QMessageBox.information(self, "Timeline rollback", message)
+        if ok:
+            self.accept()
 
     def _compare(self, *_):
         self.compare_result.clear()
