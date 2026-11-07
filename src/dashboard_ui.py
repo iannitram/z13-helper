@@ -38,6 +38,7 @@ import post_update_view
 import profiles
 import timeline
 import update_watch
+import hw_signals
 from fan_watchdog import FanTrace, FanWatchdog, FanWatchdogRunner
 from display_modes import RefreshControl
 from screen_brightness import ScreenBrightness, MIN_PERCENT
@@ -139,9 +140,19 @@ class DashboardUI(QMainWindow):
         self._new_updates = []
         self.screen = ScreenBrightness(QDBusConnection.sessionBus())
         self._screen_last_write = 0.0
+        self._signals_active = {}
+        self._signals_shown = None
+        self._signals_shown_at = {}
+        self._signals_last_write = None
+        self._signals_pending = None
+        self._signals_timer = QTimer(self)
+        self._signals_timer.setInterval(250)
+        self._signals_timer.timeout.connect(self._tick_hardware_signals)
+        self.worker.done.connect(self._on_hardware_signal_source_done)
 
         self._build_menu_bar()
         self._build_ui()
+        self._signals_timer.start()
         self._setup_tray()
         self._refresh_profile_ui()
         self._load_initial_state()
@@ -385,6 +396,11 @@ class DashboardUI(QMainWindow):
 
         # 2. Keyboard & Rear Light
         self.light = Panel("Keyboard & Rear Light")
+        self.signals_enabled = QCheckBox("Lightbar signals")
+        self.signals_enabled.setToolTip("Use the rear light for app notifications")
+        self.signals_enabled.setChecked(self.config.get("hardware_signals_enabled", True) is not False)
+        self.signals_enabled.toggled.connect(self._set_hardware_signals_enabled)
+        self.light.add_head_widget(self.signals_enabled)
         self.light_target = QComboBox()
         for label, _devs in _LIGHT_TARGETS:
             self.light_target.addItem(label)
@@ -570,6 +586,69 @@ class DashboardUI(QMainWindow):
     def _refresh_epp_ui(self, profile):
         epp.show_profile_epp(self.epp_combo, profile)
         self.epp_now.setText(epp.now_text(self.controller.get_epp()))
+
+    def _set_hardware_signals_enabled(self, enabled):
+        self.config.set("hardware_signals_enabled", bool(enabled))
+        # Run immediately so disabling a visible signal restores the saved lightbar mode.
+        self._tick_hardware_signals()
+
+    def _on_hardware_signal_source_done(self, label, result):
+        if label == "Hardware signal lightbar":
+            pending = self._signals_pending
+            self._signals_pending = None
+            if pending is None:
+                return
+            action, pattern, event, started = pending
+            if isinstance(result, Exception):
+                logger.warning("Lightbar signal write failed: %s", result)
+                return
+            self._signals_last_write = time.monotonic()
+            if action == "play":
+                self._signals_shown = pattern
+                if event and hw_signals.signal_for(event).duration_s is not None:
+                    self._signals_shown_at[event] = self._signals_last_write
+            else:
+                self._signals_shown = None
+                if action == "clear":
+                    self._signals_active.clear()
+                    self._signals_shown_at.clear()
+            return
+        if label.startswith("Profile → ") and not isinstance(result, Exception):
+            now = time.monotonic()
+            self._signals_active[hw_signals.PROFILE_CHANGED] = now
+            self._signals_shown_at.pop(hw_signals.PROFILE_CHANGED, None)
+            self._tick_hardware_signals()
+
+    def _tick_hardware_signals(self):
+        """Play the highest-priority app signal and restore the active profile's lightbar."""
+        if self._signals_pending is not None:
+            return
+        profile = self.control.active()
+        saved = (profile.get("lighting") or {}).get(hw_signals.DEVICE)
+        restore = None
+        if isinstance(saved, dict) and saved.get("mode") and saved.get("color"):
+            restore = hw_signals.Pattern(saved["mode"], saved["color"])
+        enabled = self.config.get("hardware_signals_enabled", True) is not False
+        now = time.monotonic()
+        action, pattern = hw_signals.next_action(
+            self._signals_active, self._signals_shown, now=now,
+            last_write=self._signals_last_write, enabled=enabled, restore=restore,
+            shown_at=self._signals_shown_at)
+        if action == "none":
+            return
+        chosen = pattern or restore
+        if chosen is None:
+            if action == "clear":
+                self._signals_shown = None
+                self._signals_active.clear()
+                self._signals_shown_at.clear()
+            return
+        signal = hw_signals.active_signal(self._signals_active, now,
+                                          shown_at=self._signals_shown_at)
+        event = signal.event if action == "play" and signal else None
+        self._signals_pending = (action, pattern, event, now)
+        self.worker.submit("Hardware signal lightbar", lambda: self.controller.set_lighting(
+            hw_signals.DEVICE, chosen.setting(), chosen.brightness))
 
     def _on_epp(self, _index):
         self.control.save(epp.profile_with_epp(self.control.shown(), self.epp_combo), "epp")
@@ -893,6 +972,13 @@ class DashboardUI(QMainWindow):
     def _post_update_banner(self, status):
         text = post_update_view.tray_text(status)
         self._post_update_text = text
+        event = hw_signals.UPDATE_ATTENTION
+        if text:
+            self._signals_active[event] = time.monotonic()
+        else:
+            self._signals_active.pop(event, None)
+            self._signals_shown_at.pop(event, None)
+        self._tick_hardware_signals()
         if self._tray is not None:
             self._tray.setToolTip("Z13-Helper" + (f"\n{text}" if text else ""))
             self._rebuild_tray_menu()

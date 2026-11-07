@@ -209,7 +209,8 @@ class ProfileControl(QObject):
         self.worker.submit(label, fn)
 
     def _on_done(self, label, result):
-        if label == FAN_RECOVERY_LABEL:   # the fan watchdog shares the worker; not ours
+        if label == FAN_RECOVERY_LABEL or label == "Hardware signal lightbar":
+            # The fan watchdog and lightbar signal runner share this queue, not profile state.
             return
         if self.pending_name and label == f"Profile → {self.pending_name}":
             self.pending_name = None
