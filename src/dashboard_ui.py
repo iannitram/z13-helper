@@ -48,6 +48,7 @@ import state_events
 from profile_control import ProfileControl
 from fans_window import FansWindow
 from updates_dialog import UpdatesDialog, UpdateCheckThread, PostUpdateThread
+from timeline_dialog import TimelineDialog
 from theme import (STYLESHEET, ModeTile, Panel, pill, tip, ECO, STANDARD, TURBO, CUSTOM,
                    ACCENT_FOR_BASE, BORDER, TOUCH_TARGET_MIN)
 from evdev_listener import find_side_button_device, EvdevListener
@@ -224,6 +225,9 @@ class DashboardUI(QMainWindow):
         upd = QAction("Updates…", self)
         upd.triggered.connect(self._open_updates)
         file_menu.addAction(upd)
+        timeline_action = QAction("Machine timeline…", self)
+        timeline_action.triggered.connect(self._open_timeline)
+        file_menu.addAction(timeline_action)
         file_menu.addSeparator()
         hide = QAction("Hide to Tray", self)
         hide.setShortcut("Ctrl+H")
@@ -1038,6 +1042,10 @@ class DashboardUI(QMainWindow):
         self._updates_dialog.populate(update_watch.summary())
         self._updates_dialog.show()
         self._updates_dialog.raise_()
+
+    def _open_timeline(self):
+        dialog = TimelineDialog(self)
+        dialog.exec()
 
     # ------------------------------------------------------------------
     # Telemetry tick
