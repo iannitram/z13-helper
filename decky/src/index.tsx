@@ -27,6 +27,7 @@ import { PowerLimits } from "./components/PowerLimits";
 import { BatteryLimit } from "./components/BatteryLimit";
 import { KeyboardBrightness } from "./components/KeyboardBrightness";
 import { PostUpdate } from "./components/PostUpdate";
+import { Timeline } from "./components/Timeline";
 
 const PLATFORM_PROFILES = [
   { data: "quiet", label: "Quiet" },
@@ -160,6 +161,7 @@ function Content() {
       <PanelSection title="After SteamOS update">
         <PostUpdate />
       </PanelSection>
+      <Timeline />
     </>
   );
 }

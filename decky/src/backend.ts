@@ -76,6 +76,16 @@ export const setBatteryLimit = callable<
 export const setBrightness = callable<[level: BrightnessLevel], BrightnessResult>("set_brightness");
 export const getTelemetry = callable<[], Telemetry>("get_telemetry");
 
+export interface TimelineEntry {
+  ts?: string;
+  kind?: string;
+  summary?: string;
+  changed?: string[];
+  no_rollback_reason?: string;
+  rollback?: Record<string, unknown> | null;
+}
+export const getTimeline = callable<[limit?: number], TimelineEntry[]>("get_timeline");
+
 /** Same rule as main.py clamp_tdp / the desktop Fans + Power window:
  *  sPPT >= SPL, fPPT >= sPPT, all within [min, max]. */
 export function clampTdp(
