@@ -5,26 +5,37 @@ in both themes. `ModeTile` reproduces RButton: a flat rounded button whose
 active state is a 2 px accent border plus a faint top tint.
 """
 
+import json
+import os
+
 from PyQt6.QtCore import Qt, QRectF, QEvent
 from PyQt6.QtGui import QColor, QPainter, QPen, QLinearGradient, QFont, QFontMetrics, QPainterPath
 from PyQt6.QtWidgets import QPushButton, QLabel, QFrame, QVBoxLayout, QHBoxLayout, QWidget
 
-# Dark theme (RForm.cs)
-FORM = "#1C1C1C"
-BUTTON_MAIN = "#2E2E2E"
-BUTTON_SECOND = "#242424"
-TEXT = "#F0F0F0"
-TEXT_DIM = "#A8A8A8"
-BORDER = "#373737"
-CHART_BG = "#232323"
-CHART_GRID = "#464646"
+# Shared with Decky at build time; keep token data framework independent.
+_TOKEN_PATH = os.path.join(os.path.dirname(__file__), "design_tokens.json")
+with open(_TOKEN_PATH, encoding="utf-8") as _token_file:
+    TOKENS = json.load(_token_file)
 
-# Accents (fixed in both themes)
-ECO = "#06B48A"        # Silent (green)
-STANDARD = "#3AAEEF"   # Balanced (blue) — also the slider accent
-TURBO = "#FF2020"      # Turbo (red)
-CUSTOM = "#FF8000"     # Fans + Power / custom (orange)
-GRAY = "#A8A8A8"
+PALETTE = TOKENS["palette"]
+ACCENTS = TOKENS["accent"]
+SPACING = TOKENS["spacing"]
+RADII = TOKENS["radii"]
+TOUCH_TARGET_MIN = TOKENS["touchTarget"]["minimum"]
+
+FORM = PALETTE["surface"]
+BUTTON_MAIN = PALETTE["surfaceRaised"]
+BUTTON_SECOND = PALETTE["surfaceInset"]
+TEXT = PALETTE["text"]
+TEXT_DIM = PALETTE["textMuted"]
+BORDER = PALETTE["border"]
+CHART_BG = PALETTE["chart"]
+CHART_GRID = PALETTE["chartGrid"]
+ECO = ACCENTS["quiet"]
+STANDARD = ACCENTS["balanced"]
+TURBO = ACCENTS["performance"]
+CUSTOM = ACCENTS["custom"]
+GRAY = ACCENTS["neutral"]
 
 ACCENT_FOR_BASE = {"quiet": ECO, "balanced": STANDARD, "performance": TURBO}
 
@@ -35,28 +46,29 @@ QLabel#title {{ font-weight: bold; }}
 QLabel#dim {{ color: {TEXT_DIM}; }}
 QLabel#tip {{ color: {TEXT_DIM}; font-size: 8pt; }}
 QComboBox, QLineEdit, QSpinBox {{
-    background: {BUTTON_MAIN}; border: 1px solid {BORDER}; border-radius: 3px;
-    padding: 3px 8px; min-height: 20px; color: {TEXT};
+    background: {BUTTON_MAIN}; border: 1px solid {BORDER}; border-radius: {RADII["control"]}px;
+    padding: 8px 12px; min-height: {TOUCH_TARGET_MIN - 2}px; color: {TEXT};
 }}
 QComboBox::drop-down {{ border: none; width: 18px; }}
 QComboBox QAbstractItemView {{ background: {BUTTON_MAIN}; selection-background-color: {STANDARD}; color: {TEXT}; }}
 QPushButton {{
     background: {BUTTON_SECOND}; border: 1px solid {BORDER}; border-radius: 3px;
-    padding: 4px 10px; color: {TEXT}; min-height: 20px;
+    padding: 8px 12px; color: {TEXT}; min-height: {TOUCH_TARGET_MIN - 2}px;
 }}
 QPushButton:hover {{ background: {BUTTON_MAIN}; }}
 QPushButton:disabled {{ color: #6a6a6a; }}
-QPushButton#pill, QPushButton#pillOrange {{ border-radius: 2px; font-size: 7.5pt; font-weight: bold; padding: 2px 8px; min-height: 16px; }}
+QPushButton#pill, QPushButton#pillOrange {{ border-radius: 6px; font-size: 9pt; font-weight: bold; padding: 8px 12px; min-height: {TOUCH_TARGET_MIN - 2}px; }}
 QPushButton#tile {{ padding: 0px; }}
 QPushButton#pill:checked {{ background: {STANDARD}; border-color: {STANDARD}; color: white; }}
 QPushButton#pillOrange:checked {{ background: {CUSTOM}; border-color: {CUSTOM}; color: white; }}
-QCheckBox {{ spacing: 6px; }}
-QCheckBox::indicator {{ width: 14px; height: 14px; border: 1px solid {BORDER}; border-radius: 2px; background: {BUTTON_MAIN}; }}
+QCheckBox {{ spacing: 10px; min-height: {TOUCH_TARGET_MIN}px; padding: 4px; }}
+QCheckBox::indicator {{ width: 24px; height: 24px; border: 1px solid {BORDER}; border-radius: 2px; background: {BUTTON_MAIN}; }}
 QCheckBox::indicator:checked {{ background: {STANDARD}; border-color: {STANDARD}; }}
-QSlider::groove:horizontal {{ height: 4px; background: {CHART_GRID}; border-radius: 2px; }}
+QSlider {{ min-height: {TOUCH_TARGET_MIN}px; }}
+QSlider::groove:horizontal {{ height: 8px; background: {CHART_GRID}; border-radius: 2px; }}
 QSlider::sub-page:horizontal {{ background: {STANDARD}; border-radius: 2px; }}
 QSlider::handle:horizontal {{
-    width: 16px; height: 16px; margin: -6px 0; border-radius: 8px;
+    width: 24px; height: 24px; margin: -9px 0; border-radius: 8px;
     background: white; border: 3px solid {STANDARD};
 }}
 QStatusBar {{ background: {FORM}; color: {TEXT_DIM}; font-size: 8pt; }}
@@ -67,7 +79,7 @@ QMenuBar::item:selected, QMenu::item:selected {{ background: {BUTTON_MAIN}; }}
 QMenu {{ background: {BUTTON_SECOND}; border: 1px solid {BORDER}; }}
 QTableWidget {{ background: {CHART_BG}; gridline-color: {CHART_GRID}; border: 1px solid {BORDER}; }}
 QHeaderView::section {{ background: {BUTTON_MAIN}; border: none; padding: 4px; }}
-QScrollBar:vertical {{ background: {FORM}; width: 10px; }}
+QScrollBar:vertical {{ background: {FORM}; width: 16px; }}
 QScrollBar::handle:vertical {{ background: {BUTTON_MAIN}; border-radius: 4px; min-height: 20px; }}
 QToolTip {{ background: {BUTTON_MAIN}; color: {TEXT}; border: 1px solid {BORDER}; }}
 """
@@ -94,6 +106,7 @@ class ModeTile(QPushButton):
         self.setObjectName("tile")
         self._h = height
         self.setFixedHeight(height)
+        self.setMinimumWidth(TOUCH_TARGET_MIN)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
@@ -196,7 +209,7 @@ def pill(text, orange=False, checkable=True):
     b = QPushButton(text)
     b.setObjectName("pillOrange" if orange else "pill")
     b.setCheckable(checkable)
-    b.setFixedHeight(20)
+    b.setMinimumHeight(TOUCH_TARGET_MIN)
     b.setCursor(Qt.CursorShape.PointingHandCursor)
     b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
     return b

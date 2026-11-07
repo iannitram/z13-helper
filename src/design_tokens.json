@@ -1,0 +1,22 @@
+{
+  "palette": {
+    "surface": "#1C1C1C",
+    "surfaceRaised": "#2E2E2E",
+    "surfaceInset": "#242424",
+    "text": "#F0F0F0",
+    "textMuted": "#A8A8A8",
+    "border": "#373737",
+    "chart": "#232323",
+    "chartGrid": "#464646"
+  },
+  "accent": {
+    "quiet": "#06B48A",
+    "balanced": "#3AAEEF",
+    "performance": "#FF2020",
+    "custom": "#FF8000",
+    "neutral": "#A8A8A8"
+  },
+  "radii": {"control": 8, "tile": 14, "panel": 12},
+  "spacing": {"xs": 4, "sm": 8, "md": 12, "lg": 16, "xl": 24},
+  "touchTarget": {"minimum": 48}
+}

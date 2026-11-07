@@ -19,7 +19,7 @@ import time
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QSlider, QStatusBar, QSystemTrayIcon, QMenu, QMessageBox, QComboBox, QCheckBox, QFrame,
+    QSlider, QStatusBar, QSystemTrayIcon, QMenu, QMessageBox, QComboBox, QCheckBox, QFrame, QScrollArea,
 )
 from PyQt6.QtCore import QTimer, Qt, pyqtSlot, pyqtSignal
 from PyQt6.QtDBus import QDBusConnection
@@ -48,7 +48,7 @@ from profile_control import ProfileControl
 from fans_window import FansWindow
 from updates_dialog import UpdatesDialog, UpdateCheckThread, PostUpdateThread
 from theme import (STYLESHEET, ModeTile, Panel, pill, tip, ECO, STANDARD, TURBO, CUSTOM,
-                   ACCENT_FOR_BASE, BORDER)
+                   ACCENT_FOR_BASE, BORDER, TOUCH_TARGET_MIN)
 from evdev_listener import find_side_button_device, EvdevListener
 from versions import APP_VERSION
 
@@ -108,8 +108,8 @@ class DashboardUI(QMainWindow):
 
         self.setWindowTitle("Z13-Helper")
         self.setStyleSheet(STYLESHEET)
-        # No fixed minimum: the layout's own minimum keeps the title row (profile
-        # name + live sensors) from being clipped, which a hard 430 px allowed.
+        self.resize(620, 760)
+        self.setMinimumSize(480, 520)
         self._app_icon = self._make_app_icon()
         self.setWindowIcon(self._app_icon)
         QApplication.instance().setWindowIcon(self._app_icon)
@@ -347,28 +347,32 @@ class DashboardUI(QMainWindow):
         self.error_badge.hide()
         self.status_bar.addPermanentWidget(self.error_badge)
 
-        root = QWidget()
-        root.setObjectName("root")
-        self.setCentralWidget(root)
-        col = QVBoxLayout(root)
-        col.setContentsMargins(6, 4, 6, 4)
-        col.setSpacing(0)
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        content = QWidget()
+        content.setObjectName("root")
+        scroll.setWidget(content)
+        self.setCentralWidget(scroll)
+        col = QVBoxLayout(content)
+        col.setContentsMargins(12, 12, 12, 12)
+        col.setSpacing(8)
 
         # 1. Performance Mode
         self.perf = Panel("Performance Mode")
         self.maxfans_pill = pill("MAX FANS", orange=True)
         self.maxfans_pill.setToolTip("Both fans at 100%. Off restores the profile's curve.")
         self.maxfans_pill.clicked.connect(self._toggle_max_fans)
-        self.maxfans_pill.setFixedHeight(28)
+        self.maxfans_pill.setMinimumHeight(TOUCH_TARGET_MIN)
         tiles = QHBoxLayout()
-        tiles.setSpacing(6)
+        tiles.setSpacing(10)
         self._tiles = {}
         for name, accent, icon in _TILES:
-            t = ModeTile(name, accent, height=60, icon=icon)
+            t = ModeTile(name, accent, height=72, icon=icon)
             t.clicked.connect(lambda checked, n=name: self._tile_clicked(n))
             tiles.addWidget(t)
             self._tiles[name] = t
-        self.fans_tile = ModeTile("Fans + Power", CUSTOM, secondary=True, height=60, icon="fan")
+        self.fans_tile = ModeTile("Fans + Power", CUSTOM, secondary=True, height=72, icon="fan")
         self.fans_tile.clicked.connect(self._fans_tile_clicked)
         tiles.addWidget(self.fans_tile)
         self.perf.body.addLayout(tiles)
@@ -417,7 +421,7 @@ class DashboardUI(QMainWindow):
         self.light_target.currentIndexChanged.connect(lambda _index: self._refresh_profile_ui())
         self._bright_tiles = {}
         for label, level in _BRIGHTNESS:
-            t = ModeTile(label, STANDARD, height=36)
+            t = ModeTile(label, STANDARD, height=TOUCH_TARGET_MIN + 16)
             t.clicked.connect(lambda checked, lv=level, lb=label: self._change_brightness(lv, lb))
             brow.addWidget(t)
             self._bright_tiles[level] = t
