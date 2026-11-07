@@ -50,6 +50,7 @@ DECKY_LOGS = os.path.join(HOME, "homebrew", "logs", "z13-helper")
 DECKY_FILES = ["plugin.json", "package.json", "main.py", "dist/index.js",
                "py_modules/fan_watchdog.py", "py_modules/sensor_reader.py", "py_modules/host.py",
                "py_modules/state_authority.py", "py_modules/state_stream.py", "py_modules/state_events.py",
+               "py_modules/hw_signals.py",
                "py_modules/z13ctl_client.py", "py_modules/z13ctl_profiles.py", "py_modules/profiles.py",
                "py_modules/hardware_controller.py", "py_modules/max_fans_state.py", "py_modules/epp.py",
                "py_modules/power_range.py", "py_modules/timeline.py",
