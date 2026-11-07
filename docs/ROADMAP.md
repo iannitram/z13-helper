@@ -555,6 +555,8 @@ Not issues (checked, nothing to do): the RDNA1/2 dedicated-GPU resume fix (Strix
 | 15e Comfort sensor (probe) | #127 | — |
 | 15f goal picker, Expert section | #128 | #125, #126 |
 
+**Build snapshot (2026-11-07):** #123 has a pure decision-step implementation; it still needs trace/edge-case acceptance. #126's source probe ended with no dependable live FPS source, so Hold FPS remains unavailable. #124 is present from prior work. The goal runner (#125), Comfort probe (#127) and goal UI (#128) remain future builds.
+
 **Done when:** Quiet and Max are verified on the Z13 across a Desktop↔Game Mode switch and resume; Comfort and Hold FPS are verified or recorded as a no-go with the reason; no other code path writes a curve while a goal is active.
 
 ## 10b. Phase 16 — Hardware as the interface 💤 after 1.0 (added 2026-11-01, the owner's pick)
@@ -575,6 +577,8 @@ Not issues (checked, nothing to do): the RDNA1/2 dedicated-GPU resume fix (Strix
 | 16e touch-first layout | #133 | #132 |
 | 16f timeline store (`src/timeline.py`; storage and host/Decky/post-update writers implemented; issue #134 closed) | #134 | #109 |
 | 16g timeline view | #135 | #134 |
+
+**Build snapshot (2026-11-07):** #130 now signals successful profile changes in Desktop and Game Mode, and update attention in Desktop. Thermal/charge/goal event sources and a one-hour no-wedge device check remain. #133 has shared tokens and initial desktop/Decky consumers, with rendered target-size and device evidence pending. #135 has desktop compare and QAM recent-change views plus allowlisted rollback for profile, Max Fans goal, TDP, charge limit and brightness entries; actions create their own timeline entries. Installer/post-update backup and OS rollback records remain view-only because no safe persisted executor exists. #131 remains unbuilt.
 
 - **16e (#133) Where:** `src/design_tokens.json`, `src/theme.py`, `src/dashboard_ui.py`, `src/fans_window.py`, `decky/src/tokens.ts` (and token consumers in `decky/src/`), `MAP/README.md`, `MAP/decky.md` (no `PyQt6-WebEngine`, local web bridge, or `@decky/ui` DOM shim).
 - **16e (#133) Done when:** `src/design_tokens.json` defines the shared palette, semantic profile/goal accents, radii, spacing and `>= 44 px` touch-target minimums consumed by both `src/theme.py` and `decky/src/` (checked in `pytest` without `PyQt6`); every interactive control in the desktop app is reachable by touch with targets of at least `44 px` while preserving every control from the current windows; the Decky plugin keeps `@decky/ui` `Focusable` QAM navigation styled from the same tokens; screenshots in tablet (keyboard off) and laptop use are in the PR; Flatpak dependencies remain unchanged. *Pending owner/coordinator action:* sync this Where and Done-when, including the shared-token and Decky acceptance criteria, to #133 on GitHub; it has not been posted. The ADR's prototype timings are offscreen only, with no committed harness, and are not application-level startup costs.

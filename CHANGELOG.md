@@ -19,6 +19,7 @@ the device but not yet verified on the Z13. Plan and status: `docs/ROADMAP.md`.
 
 ## Unreleased
 
+- **Post-1.0 build batch (#123, #126, #130, #133, #135):** created `post-1.0` and integrated the goal decision step, fail-closed FPS probe API, lightbar signal wiring, shared touch tokens/layout changes, and desktop/QAM timeline views. Timeline rollback is allowlisted for profiles, Max Fans goals, TDP, charge limit and brightness; backup/OS rollback remains unsupported. Acceptance remains open: #123 traces/review; #126 has no dependable live FPS source; #130 broader event coverage and device soak; #133 rendered touch-target/device evidence; #135 verify supported rollback flows. See `docs/ROADMAP.md` §10a–§10b and `MAP/README.md`.
 - **Resume restore defers to z13ctl 1.4.2+ when its saved state matches (Refs #80; on-device five-cycle check pending).** `z13-profile resume-owner` compares the active app profile, Max Fans intent and z13ctl's saved named profile using files only. The system resume hook defers only when the version is at least 1.4.2 and the ownership check succeeds; every uncertain case retains the full restore and protective-curve fallback.
 - **Crash reports sort into the drop's `z13-helper/` folder (Refs #82).** `upload_report` PUTs to `<base>/public.php/dav/files/<token>/z13-helper/<name>` (`DROP_FOLDER`); the drop creates the folder itself. Queued retries go through the same function, so they land there too.
 
