@@ -11,14 +11,37 @@ Status marks: ✅ shipped · 🔧 in progress · ⏳ planned · 🚧 gated (need
 
 ---
 
-## 1. Where we are (audit, 2026-10-09)
+## 1. Where we are (reconciled 2026-11-07, `main` 84f0b1e)
 
-**2026-10-30 update:** Repair release **0.5.1** has Desktop fan/power checks on SteamOS
-**3.9.5 / kernel 7.2** with z13ctl 1.4.2. See the [release verification record](releases/0.5.1.md)
-and [current code/connection map](../MAP/README.md). PRs #89, #92, #93, #95 and #97 remain
-open (#97 stacks on #93). The remaining historical audit and upstream-watch tables below retain
-their dated observations; they are not current inventory. Interactive Game Mode, cold boot,
-suspend/resume, sustained load and soak still need verification; 1.0 remains unfinished.
+Release **0.5.1** remains the latest tagged repair release; the current `main` includes substantial
+unreleased implementation work since that snapshot. The 1.0 spec is **not complete**: code and CI
+coverage do not substitute for the Z13 acceptance checks below. No pull requests are currently open.
+The [code map](../MAP/README.md) describes the current implementation; the [Nov 7 audit
+reconciliation](audit/2026-11-07-plan-reconciliation.md) records what changed since the Nov 4 audit.
+
+### Implemented on current `main`
+
+| Area | Current state |
+|---|---|
+| Fan/power repair release | ✅ 0.5.1 repairs are integrated; the [release record](releases/0.5.1.md) is historical evidence for that snapshot, not a full 1.0 sign-off. |
+| Shared state owner and event refresh (#23) | ✅ `state_authority.py` serializes profile/hardware writes across the desktop app, CLI, Decky and recovery; `state_stream.py` refreshes both frontends. Issue #23 is closed. Live daemon and frontend convergence still need device verification. |
+| Post-update checks and reversible repair (#27) | ✅ Desktop and Decky surfaces, inventory, repair planning, rollback records and support-bundle preview are implemented. Issue #27 is closed. A real update/repair/rollback cycle remains to be verified on-device. |
+| CPU Boost / EPP (#64) | ✅ Control and profile persistence are implemented; on-device write/read verification remains. |
+| Game Mode VRR (#73) | ✅ Panel-specific script and read-only preflight are implemented; actual Game Mode range and panel acceptance remain unverified. |
+| Resume ownership (#80) | ✅ Resume hook defers to z13ctl 1.4.2+ only when a file-only ownership check proves the saved profile matches; uncertain cases keep the full restore. Five-cycle device check remains open. |
+| Fan watchdog curve-drop (#66) | 🔧 Recovery now waits 10 seconds for the daemon and avoids immediate post-resume recovery. Retirement remains gated on sustained device evidence. |
+| Decky install/frontend (#100, #122) | ✅ Staged plugin replacement and separate frontend checks are implemented. One changed-plugin repair with Steam's gamepad UI is still pending device verification. |
+
+### Remaining 1.0 work
+
+- **Device acceptance:** #61 is open for the remaining cross-mode checks; #74 and #75 cover SteamOS 3.9.5 hardware and session behavior. Include cold boot, suspend/resume, fan response after settling, Decky interaction with a running game, installer/repair UI, lightbar recovery, EPP, VRR and a real post-update repair/rollback. Record each result or file a focused issue.
+- **Fan/kernel investigation:** #86 remains open. The shipped fan/power changes are mitigations; firmware/kernel causality and cold-boot/resume/Game Mode response are not established.
+- **Memory:** #30 remains open until the 24-hour current-identity RSS run is interpreted. Source bounds and safeguards do not answer whether the original report was this plugin.
+- **Watchdog retirement:** #66 remains open until daemon-only curve restoration and the resume matrix prove that the curve-drop branch can be removed safely.
+- **VRR:** #73 remains open until the on-device 48, 60, 120 and 180 Hz and frame-limiter matrix is recorded.
+- **Phase 7 cleanup:** inspect the current Boondock script before changing this item. The script no longer contains Docker/VM steps and does not read live PPT values; its remaining value, legacy power path and user-service behavior still need review and current-device verification.
+
+Issues #23 and #27 are closed because their code is integrated; that does not close their real-device acceptance. #58, #60, #64, #76-#79, #82, #100, #122 and #179 are closed. The live tracker is authoritative for issue state; the status above separates merged implementation from outstanding evidence.
 
 ### Shipped and working
 | Area | State |
@@ -31,15 +54,13 @@ suspend/resume, sustained load and soak still need verification; 1.0 remains unf
 | Installer | ✅ `install.sh` / `--repair` + `install_check.py verify` (§9a); Repair button in the Updates panel (on-device check pending) |
 | Lightbar wedge | ✅ auto-recovery via `z13-lightbar-reset.service` + polkit rule (§3; on-device check pending) |
 | App version | **0.5.1** (2026-10-30; `CHANGELOG.md`, desktop/Decky/AppStream aligned) |
-| Boondock | Earlier hardware/profile-hook checks: quiet + 20/30/40 W + screen 35 %. Optional service/container/VM paths remain in the script; cleanup and current device verification are pending. |
+| Boondock | ✅ Docker/VM paths removed; hooks use the user `llama-swap` unit and never touch PPT nodes. Standalone 20/30/40 W defaults and current-device behavior still need review. |
 
-### Open bugs and test debt (updated 2026-10-30)
-- **#60** no-curve `NameError`: fixed via PR #83. Current repair PR CI is green; the old main-CI blocker no longer applies.
-- **#16** Decky Profile dropdown showing a state that never applied: ✅ fixed by PR #49 (`decky/src/profileSwitch.ts`), merged 2026-10-26; the on-device check is part of #61.
-- **#58** flaky and environment-dependent tests: partly resolved, including temp-name/store-owner fixtures. Current suites pass; this does not close every environment check in the issue.
-- **#86** fan/power regression: individual fixes are under review; root firmware causality and broader device verification remain open. See the release record for observed behaviour and rejected workarounds.
-- **#30** the reported 43 GB memory spike: open (investigation). Source audit and preventive trace/RSS bounds are recorded in [fan-watchdog-memory.md](fan-watchdog-memory.md); no completed 24-hour current-identity sampler result or leak attribution is claimed.
-- Also merged 2026-10-26: PR #3, `tooling/z13_gamemode_report.py` (reads a Game Mode session back from local logs).
+### Issue status snapshot (2026-11-07)
+- **Closed:** #16, #58, #60, #64, #76-#79, #82, #100, #122 and #179. Their current code does not itself establish any outstanding device acceptance.
+- **Open:** #30 (24-hour RSS evidence), #61 (device-check tracker), #66 (watchdog retirement evidence), #73 (VRR acceptance), #74-#75 (SteamOS 3.9.5 device passes), #80 (resume-cycle evidence) and #86 (fan/power regression and causality).
+- **#86**'s issue report and the 0.5.1 record document observed behavior; the shipped fixes are not proof of a general firmware/kernel cause or full mode/resume coverage.
+- `tooling/z13_gamemode_report.py` is already part of the repo and reads prior Game Mode sessions from local logs.
 
 ### Fixed today (2026-10-09)
 - **Keyboard brightness didn't change.** z13ctl sends each packet to the keyboard *then* the
@@ -114,7 +135,7 @@ likely means Boondock's 20 W cap only holds while a custom curve is active). See
 
 ---
 
-## 3. Phase 7 — Stability ✅ (Boondock cleanup still ⏳)
+## 3. Phase 7 — Stability ✅ (Boondock device/path review remains ⏳)
 Shipped today: per-device brightness, fan-stall watchdog, dashboard scroll (above).
 
 Remaining:
@@ -122,8 +143,10 @@ Remaining:
   the EC, then runs `z13-profile restore` as deck (active profile: platform profile, TDP, curve, Max Fans
   pinned if ON) and falls back to the old curve logic. Backup: `z13-fan-resume.sh.bak-20261009`.
   Repo copy: `packaging/host/systemd/system/z13-fan-resume.sh`.
-- ⏳ **Boondock script cleanup.** Drop the Docker/VM steps and the system `llama-swap` unit; point
-  `BG_SERVICES` at the user unit (`systemctl --user`). The wiki already documents this.
+- ✅ **Boondock cleanup, source state checked 2026-11-07.** `tooling/boondock` has no Docker/VM steps,
+  uses the user `llama-swap` unit, and its session hooks do not write power hardware. Standalone
+  hardware commands remain a legacy path with 20/30/40 W defaults and need range/current-profile
+  review plus device verification before this phase is fully accepted.
 - ✅ written, on-device check pending (2026-10-12) **Lightbar wedge auto-recovery.** Root oneshot
   `z13-lightbar-reset.service` → `/etc/systemd/system/z13-lightbar-reset.sh` finds the USB device by
   ID `0b05:18c6` (never by port) and writes `authorized` 0 → 1; polkit rule
@@ -146,7 +169,7 @@ Remaining:
 
 ---
 
-## 4. Phase 8 — Profiles engine ✅ (2026-10-09; z13ctl mirror still 🚧)
+## 4. Phase 8 — Profiles engine ✅ (z13ctl state mirror and event path implemented; device check pending)
 **Replaces the Boondock button with a Profile dropdown** (2026-10-09). A profile bundles what
 G-Helper calls a "mode": base platform profile + TDP + fan curve + undervolt + brightness + battery
 limit + an enter/exit hook. Boondock becomes a profile whose hooks run the script for the
@@ -171,9 +194,10 @@ non-hardware effects.
   window (Phase 9); the Fans + Power window always edits *the selected profile*.
 - ✅ **Decky:** dropdown lists `profiles.json`; `set_profile` invokes `z13-profile apply <name>` through
   `host.run(as_deck=True)`. Only a root process adds `runuser`; the installed backend runs as deck.
-- 🚧 **After the z13ctl upgrade (§8):** mirror each profile into a z13ctl named profile
-  (`profile --create`, `tdp/fancurve/undervolt --set --profile <name>`) so the daemon re-applies it on
-  resume and `autoswitch --ac/--battery` can pick between two of ours.
+- ✅ **z13ctl named-profile mirror and event stream (#23, implemented on current main).**
+  `state_authority.py` mirrors supported app profiles and directs targeted edits to an explicit
+  profile; `z13-profile watch` and `state_stream.py` reconcile daemon events into Desktop and Decky.
+  Device checks for daemon behavior, cross-frontend convergence and reconnect remain open (#61).
 
 - ✅ **Per-profile Max Fans** (2026-10-11): profile field `max_fans`; Turbo ships with it ON.
   Switching *to* such a profile turns Max Fans ON, switching *away* turns it OFF (and resets to
@@ -185,7 +209,7 @@ the active profile; Max Fans survives a profile change; Decky shows and applies 
 
 ---
 
-## 5. Phase 9 — G-Helper layout port ✅ (2026-10-09; Screen panel, lighting modes and tile icons still ⏳)
+## 5. Phase 9 — G-Helper layout port ✅ (in-scope controls implemented; device acceptance pending)
 Lift G-Helper's layout (seerge/g-helper, `app/Settings*.cs`, `app/Fans*.cs`) as closely as the Z13 +
 Linux allow. Research spec (2026-10-09) is summarised here; the port keeps its names.
 
@@ -211,7 +235,7 @@ Theme (both from G-Helper): dark form `#1C1C1C`, primary tile `#2E2E2E`, seconda
 
 ### Fans + Power window (opens left of the main window, same height)
 - **Left column (CPU page):** *Platform profile* combo (G-Helper's "Windows Power Mode" slot; quiet /
-  balanced / performance); *CPU Boost* combo ⏳ (amd-pstate EPP — `power/balance_power/balance_performance/performance`);
+  balanced / performance); *CPU Boost* combo (amd-pstate EPP — `power/balance_power/balance_performance/performance`; implemented under #64, device check pending);
   **Power Limits**: **SPL (CPU sustained) / sPPT (CPU long boost) / fPPT (CPU short boost)** sliders
   per-rail host metadata bounds (5…93 W fallback), constraint sPPT ≥ SPL, values written on release; checkbox
   **Apply Power Limits** (= profile has a TDP). *Advanced page* (CPU UV −40…0, iGPU UV) only when
@@ -281,27 +305,17 @@ schema + `z13-profile` CLI, z13ctl output formats parsed by `main.py`.
 
 ---
 
-## 8. Phase 12 — Adopt z13ctl 1.4.2 ✅ installed 2026-10-09 (the owner's go); follow-ups 🔧
-**Why:** named profiles + autoswitch + resume re-apply + `subscribe` events + the curve-drop and TDP-undone
-fixes + the EC hard-lock fixes. It would let us delete `z13-fan-resume.sh`, most of the Max Fans
-watchdog, and the polling.
-**Why not yet:** 1.4.0, 1.4.1 and 1.4.2 all shipped **today**; 1.4.1 fixes a hard-lock hazard 1.4.0
-introduced. Let it settle a week. The daemon (`systemctl --user z13ctl`) is **not running here** today;
-1.3+ expects it.
-**Go/no-go checklist:** (1) no new hard-lock issues on the tracker for 7 days; (2) vendored 1.1.6 tarball
-in `tooling/z13ctl-install/` verified as rollback; (3) `sudo z13ctl setup` re-run (new permission grants);
-(4) daemon enabled `--no-button` (our watcher owns the button); (5) `tdp --get` confirms the old
-asus-nb-wmi path on 6.18 (armoury `ppt_*` are ENODEV here, so the 28 W floor doesn't apply); (6) one
-suspend/resume cycle on a custom curve with the fans checked after; (7) profiles mirrored (§4).
-**Rollback:** `cp ~/.local/bin/z13ctl.bak-1.1.6 ~/.local/bin/z13ctl && systemctl --user disable --now z13ctl.socket z13ctl.service`
-(the vendored 1.1.6 tarball in `tooling/z13ctl-install/` is the second copy).
-**Follow-ups:** mirror app profiles into z13ctl named profiles + autoswitch (§4); retire the Max Fans
-watchdog's curve-drop branch once the daemon is proven to re-apply curves itself; use `subscribe`
-events (not in 1.4.2's CLI — check the socket API) instead of polling.
+## 8. Phase 12 — z13ctl 1.4.2 integration ✅ (device acceptance and watchdog retirement remain open)
 
-**#66 retirement gate:** retain curve-drop recovery for now. The issue records z13ctl
-1.4.2 as untested on SteamOS 3.9.5's kernel 7.2 (2026-10-26); a version number or
-custom-curve-enabled bit alone is insufficient evidence to remove recovery.
+The daemon is the hardware state backend. Current `main` mirrors app profiles into z13ctl named
+profiles, routes thermal writes through the shared authority, and consumes the daemon's subscription
+stream for UI state. The system resume hook uses `z13-profile resume-owner` to defer only when the
+daemon version and saved state prove it owns the active profile; otherwise it performs the full
+restore. The old 1.1.6 rollback notes and adoption checklist above have expired and are removed.
+
+**#66 retirement gate:** retain curve-drop recovery for now. The 0.5.1 Desktop fan/power
+checks exercised z13ctl 1.4.2 on SteamOS 3.9.5 / kernel 7.2, but that bounded test is not
+the daemon-only curve restoration and cross-mode resume evidence needed to remove recovery.
 Before retiring this branch, record #74 step 3 and #80 results: daemon-only curve
 restoration after platform-profile writes and three suspend/resume cycles in
 Desktop Mode and Game Mode, including Valve's ASUS fan-after-wake workaround.
@@ -313,8 +327,8 @@ the curve or the mode can no longer be read.
 
 ---
 
-## 9. Phase 13 — Game Mode polish ⏳
-- **Steam's own TDP / charge-limit / profile controls.** steamos-manager reports `DeviceModel "unknown"`
+## 9. Phase 13 — Game Mode polish 🔧 (VRR tooling implemented; device acceptance pending)
+- **Steam's own TDP / charge-limit / profile controls (#29, after 1.0).** steamos-manager reports `DeviceModel "unknown"`
   here, so the QAM Performance tab lacks them. A small system-bus service implementing
   `com.steampowered.SteamOSManager1.{TdpLimit1,BatteryChargeLimit1,PerformanceProfile1}` registered
   via `/etc/steamos-manager/remotes.d/*.toml` (the ROG Ally ships one) would bring them back. Must call
@@ -406,7 +420,13 @@ side button, fans, profiles and the QAM plugin back without any other step.
 
 ---
 
-## 9b. Phase 12c — Post-update tasks in the Updates panel ⏳ (added 2026-10-15, widened same day)
+## 9b. Phase 12c — Post-update tasks in the Updates panel ✅ implemented; device acceptance pending (#27)
+
+The desktop Updates tab, Decky QAM view, checks, repair plan, per-step confirmation, backups,
+rollback records and redacted support-bundle preview are present on current `main` (issue #27 closed).
+The design below records implemented behavior; remaining acceptance is a real SteamOS update check,
+selected repair, failure rollback and support-bundle preview on the Z13. Do not treat a successful
+unit test or simulated inventory as proof of a live repair.
 
 **Why.** A SteamOS atomic update ("nuclear update") wipes `/usr`, Valve's grub file and the pacman
 keyring, and rolls `/etc` changes back unless they're registered. Today the maintainer re-applies
@@ -469,7 +489,7 @@ recipe, its wiki row changes to "Z13-Helper post-update task `<id>`", so the two
 **Done when:** after a real SteamOS update, the tray says so; one tab shows what's broken; ticking
 amdgpu + ROCm and pressing Run fixes both with a single reboot; the health report is green.
 
-## 9c. Phase 12d — SteamOS 3.9 compatibility ⏳ (3.9.5 stable 2026-10-23)
+## 9c. Phase 12d — SteamOS 3.9 compatibility 🔧 (code fixes merged; device passes pending)
 
 Valve's 3.9.5 post: https://store.steampowered.com/news/app/1675200/view/694275728822244963 (2026-10-23). Valve's page doesn't render to our fetcher, so the item list comes from GamingOnLinux's copy of the notes (2026-10-24), cross-checked with SteamDeckHQ (https://steamdeckhq.com/news/steamos-3-9-update-improves-idle-battery-life/, 2026-10-24) and MIXED (https://mixed-news.com/en/steamos-3-9-stable-steam-deck-idle-power-streaming-fixes/, 2026-10-24). Confidence: **RN** = in the release notes, **U** = user report, **PR** = press, **?** = unknown.
 
@@ -477,8 +497,8 @@ Valve's 3.9.5 post: https://store.steampowered.com/news/app/1675200/view/6942757
 
 | Change | Conf. | What it means for us | Issue |
 |---|---|---|---|
-| **Kernel 6.18.50 → Linux 7.2** | RN | Every sysfs path z13ctl writes may have moved or changed. z13ctl 1.4.0 already writes power limits through asus-armoury and 1.4.1 falls back when armoury isn't writable, but **no z13ctl release is tested on 7.2** (still 1.4.2, https://github.com/dahui/z13ctl/releases). 7.2's x86 platform-driver merge has no Z13 change (Phoronix, 2026-06-26, https://www.phoronix.com/news/Linux-7.2-x86-Platform-Drivers); the GZ302EAC went into asus-armoury in the 7.0 cycle. | #74 |
-| asus-nb-wmi writes hung 60 s then EIO on a GZ302EA, kernels 7.0.3–7.0.10 | U | Unknown on 7.2. Our power writes wait up to 120 s, so a hang would freeze a profile apply for two minutes. | #74, #79 |
+| **Kernel 6.18.50 → Linux 7.2** | RN | The initial 2026-10-26 note that no z13ctl release was tested on 7.2 is superseded: the 0.5.1 Desktop fan/power checks used z13ctl 1.4.2 on SteamOS 3.9.5 / kernel 7.2. The broader hardware and resume matrix remains open in #74. 7.2's x86 platform-driver merge has no Z13 change (Phoronix, 2026-06-26); the GZ302EAC went into asus-armoury in the 7.0 cycle. | #74 |
+| asus-nb-wmi writes hung 60 s then EIO on a GZ302EA, kernels 7.0.3–7.0.10 | U | #79 added bounded writes and a clear timeout path; the underlying kernel/interface behavior and full device matrix are not inferred from the timeout fix. | #74; #79 closed |
 | **"Worked around a firmware issue on some ASUS devices causing excessive fan speed upon waking from sleep"** (models not named) | RN | Touches the same resume moment as `z13-fan-resume` and z13ctl's own reconcile. If it writes `platform_profile` or pwm after us, the custom curve is lost. | #74, #80 (#66) |
 | **`steamos-*` scripts and packages renamed `holo-*`**, aliases kept only "where appropriate"; `holo-readonly` exists (https://github.com/ValveSoftware/SteamOS/issues/2955) | RN | We call `steamos-update` (Updates panel, installer); the post-update runner will call `steamos-readonly`. Probe `holo-*` first, fall back. | #76 (#67) |
 | **Steam client 2026-10-13 split the QAM class module**: every Decky plugin broke (`TypeError … reading 'Title'`) until **Decky Loader 3.3.0** (2026-10-18; https://github.com/SteamDeckHomebrew/decky-loader/issues/988, https://github.com/SteamDeckHomebrew/decky-loader/releases) | U (maintainer-closed) | Not a 3.9 change, but it lands at the same time. Our panel title uses `staticClasses.Title`. Decky 3.3.0 is the minimum; 3.3.0 also warns about unvetted plugins, which ours (sideloaded) may trigger. | #77, #78 |
@@ -491,9 +511,9 @@ Valve's 3.9.5 post: https://store.steampowered.com/news/app/1675200/view/6942757
 
 Not issues (checked, nothing to do): the RDNA1/2 dedicated-GPU resume fix (Strix Halo is an iGPU); HDMI 2.1 FRL (press only, external displays); Android binder back in the kernel (only #71's probe list); the revoked eMudhra certificates; the Deck-only idle-power change.
 
-**Order of work:** #77 and #76 (small, no device) → #79 → the device passes #74 and #75 (with #61) → #78 → #80 if #74 shows a clash. Kernel-major and BUILD_ID triggers for the post-update tab: comments on #70 and #71.
+**Status:** #76-#79 are closed with their code integrated. The remaining sequence is #74/#75 device passes with #61, plus the five-cycle #80 resume evidence and the separate #73 VRR matrix. Kernel-major and BUILD_ID triggers for the post-update tab are tracked by #70 and #71.
 
-**Done when:** #74 and #75 are green on 3.9.5, #76–#79 are merged, and #80 is merged or closed with measurements.
+**Done when:** #74 and #75 pass on 3.9.5, #76–#79 remain merged, and #80's five-cycle device evidence is recorded. The implementation for #80 is merged; the issue stays open for that evidence.
 
 ## 10. Phase 14 — Feature backlog 💤 (from the 2026-10-09 research, priority order)
 0. ✅ **Crash and error log** (2026-10-12, v0.4.1): `src/app_log.py` + Help → Error log; app log, crash reports and hard-crash recovery under `~/.local/state/z13-helper/`. The diagnostics panel below can grow out of the same window.
@@ -553,7 +573,7 @@ Not issues (checked, nothing to do): the RDNA1/2 dedicated-GPU resume fix (Strix
 | 16c side-button gestures | #131 | #130 |
 | 16d ADR: shared touch UI ✅ | #132 | — |
 | 16e touch-first layout | #133 | #132 |
-| 16f timeline store (`src/timeline.py`; store + install/Decky/steamos writers done, post-update host wiring pending) | #134 | #109 |
+| 16f timeline store (`src/timeline.py`; storage and host/Decky/post-update writers implemented; issue #134 closed) | #134 | #109 |
 | 16g timeline view | #135 | #134 |
 
 - **16e (#133) Where:** `src/design_tokens.json`, `src/theme.py`, `src/dashboard_ui.py`, `src/fans_window.py`, `decky/src/tokens.ts` (and token consumers in `decky/src/`), `MAP/README.md`, `MAP/decky.md` (no `PyQt6-WebEngine`, local web bridge, or `@decky/ui` DOM shim).

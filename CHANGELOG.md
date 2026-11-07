@@ -8,6 +8,7 @@ the device but not yet verified on the Z13. Plan and status: `docs/ROADMAP.md`.
 
 ## Pipeline
 
+- 2026-11-07 Reconciled roadmap/spec/pipeline and refreshed the code map against `main` 84f0b1e; state owner (#23) and post-update repair (#27) are implemented, while device acceptance remains open. Added a disposition for the Nov 4 code-audit findings.
 - 2026-11-02 Code map (MAP/README.md, MAP/decky.md) refreshed to match main: repair PRs merged, new modules and tooling listed.
 - 2026-11-01 Phases 15 (goal control) and 16 (hardware as the interface) added after 1.0 on the owner's pick: ROADMAP §10a, §10b; code map MAP/README.md "Planned (after 1.0)"; issues #123-#135 filed (`after-1.0`). SPEC unchanged.
 - 2026-10-26 End-of-night sweep: code map (MAP/README.md, MAP/decky.md) refreshed for PR #49 (`decky/src/profileSwitch.ts`) and PR #3 (`z13_gamemode_report.py`); ROADMAP §1 open-bugs status; PIPELINE notes issue list updated (#16 done, #74-#81 added); #16 closed.
