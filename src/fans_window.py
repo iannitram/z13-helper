@@ -19,7 +19,7 @@ from PyQt6.QtWidgets import (
 import epp
 import power_range
 import profiles
-from theme import ModeTile, Panel, tip, STANDARD, CUSTOM, ACCENT_FOR_BASE, TEXT_DIM
+from theme import ModeTile, Panel, tip, STANDARD, CUSTOM, ACCENT_FOR_BASE, TEXT_DIM, TOUCH_TARGET_MIN
 from fan_curve_widget import FanCurveWidget, DEFAULT_CURVE
 from history_chart import HistoryChartWidget
 from profile_control import ProfileControl
@@ -86,7 +86,8 @@ class FansWindow(QWidget):
         self._loading = False
         # Per-rail kernel range from sysfs metadata (no live PPT reads, no z13ctl).
         self._ranges = power_range.detect_ranges()
-        self.resize(675, 560)
+        self.resize(1100, 760)
+        self.setMinimumSize(760, 600)
         self._build()
         self.control.changed.connect(self.refresh)
         self.refresh()
@@ -102,15 +103,16 @@ class FansWindow(QWidget):
 
         # ---- left column (265 px) ----
         left = QWidget()
-        left.setFixedWidth(265)
+        left.setMinimumWidth(300)
+        left.setMaximumWidth(420)
         lv = QVBoxLayout(left)
         lv.setContentsMargins(0, 0, 0, 0)
         lv.setSpacing(8)
 
         nav = QHBoxLayout()
-        self.btn_cpu = ModeTile("CPU", STANDARD, secondary=True, height=29)
+        self.btn_cpu = ModeTile("CPU", STANDARD, secondary=True, height=TOUCH_TARGET_MIN)
         self.btn_cpu.radius = 2
-        self.btn_adv = ModeTile("Advanced", STANDARD, secondary=True, height=29)
+        self.btn_adv = ModeTile("Advanced", STANDARD, secondary=True, height=TOUCH_TARGET_MIN)
         self.btn_adv.radius = 2
         self.btn_cpu.clicked.connect(lambda: self._nav(0))
         self.btn_adv.clicked.connect(lambda: self._nav(1))
@@ -141,7 +143,8 @@ class FansWindow(QWidget):
         self.combo.currentTextChanged.connect(self._on_combo)
         head.addWidget(self.combo)
         self.btn_add = QPushButton("＋")
-        self.btn_add.setFixedWidth(30)
+        self.btn_add.setMinimumWidth(TOUCH_TARGET_MIN)
+        self.btn_add.setMinimumHeight(TOUCH_TARGET_MIN)
         self.btn_add.setToolTip("Add a custom profile (copies the selected one)")
         self.btn_add.clicked.connect(self._add)
         self.btn_rename = QPushButton("Rename")

@@ -23,8 +23,8 @@ from profiles import fan_curve_floor_pct as floor_pct
 TEMP_MIN, TEMP_MAX = 20, 110
 PCT_MIN, PCT_MAX = 0, 100
 POINTS = 8
-MARKER_R = 5          # G-Helper MarkerSize 10 → radius 5 px
-HIT_R = 12
+MARKER_R = 10         # Visible marker sized for direct touch interaction
+HIT_R = 22            # 44 px Manhattan hit radius for each curve point
 
 DEFAULT_CURVE = [[40, 20], [50, 35], [60, 55], [70, 75], [75, 90], [80, 100], [85, 100], [90, 100]]
 
