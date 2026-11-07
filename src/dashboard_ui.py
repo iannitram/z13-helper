@@ -621,10 +621,14 @@ class DashboardUI(QMainWindow):
                     self._signals_active.clear()
                     self._signals_shown_at.clear()
             return
-        if label.startswith("Profile → ") and not isinstance(result, Exception):
+        if (label.startswith("Profile → ") and isinstance(result, list) and result
+                and all(isinstance(step, tuple) and len(step) >= 2 and step[1] is True
+                        for step in result)):
             now = time.monotonic()
             self._signals_active[hw_signals.PROFILE_CHANGED] = now
             self._signals_shown_at.pop(hw_signals.PROFILE_CHANGED, None)
+            self._signals_shown = None
+            self._signals_last_write = now  # the profile apply itself may have written the lightbar
             self._tick_hardware_signals()
 
     def _tick_hardware_signals(self):
@@ -635,7 +639,8 @@ class DashboardUI(QMainWindow):
         saved = (profile.get("lighting") or {}).get(hw_signals.DEVICE)
         restore = None
         if isinstance(saved, dict) and saved.get("mode") and saved.get("color"):
-            restore = hw_signals.Pattern(saved["mode"], saved["color"])
+            brightness = profile.get("brightness") or self.config.get("brightness", "high")
+            restore = hw_signals.Pattern(saved["mode"], saved["color"], brightness)
         enabled = self.config.get("hardware_signals_enabled", True) is not False
         now = time.monotonic()
         action, pattern = hw_signals.next_action(

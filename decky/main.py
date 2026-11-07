@@ -32,6 +32,8 @@ if os.path.isdir(_PY_MODULES) and _PY_MODULES not in sys.path:
 import crash_report
 import host
 import state_authority as authority
+import hw_signals
+from hardware_controller import HardwareController
 from state_stream import StateStream
 import state_events
 import power_range
@@ -1091,6 +1093,69 @@ def _edit_field_recorded(field, value, expected):
 
 
 class Plugin:
+    def _signal_profile_changed(self):
+        if not getattr(self, "_signals_wakeup", None):
+            return
+        self._signals_active[hw_signals.PROFILE_CHANGED] = time.monotonic()
+        self._signals_shown_at.pop(hw_signals.PROFILE_CHANGED, None)
+        self._signals_shown = None
+        self._signals_wakeup.set()
+
+    def _signals_enabled(self):
+        return _shared_config().get("hardware_signals_enabled", True) is not False
+
+    def _signal_restore_pattern(self):
+        profile = active_profile(_read_store()) or {}
+        saved = (profile.get("lighting") or {}).get(hw_signals.DEVICE)
+        if not isinstance(saved, dict) or not saved.get("mode") or not saved.get("color"):
+            return None
+        brightness = profile.get("brightness") or _shared_config().get("brightness") or "high"
+        return hw_signals.Pattern(saved["mode"], saved["color"], brightness)
+
+    async def _run_hardware_signals(self):
+        """Serialize Game Mode notifications with QAM/profile writes and restore saved lighting."""
+        while True:
+            self._signals_wakeup.clear()
+            now = time.monotonic()
+            action, pattern = hw_signals.next_action(
+                self._signals_active, self._signals_shown, now=now,
+                last_write=self._signals_last_write, enabled=self._signals_enabled(),
+                restore=await asyncio.to_thread(self._signal_restore_pattern),
+                shown_at=self._signals_shown_at)
+            if action != "none":
+                chosen = pattern or await asyncio.to_thread(self._signal_restore_pattern)
+                if chosen is None:
+                    if action == "clear":
+                        self._signals_shown = None
+                        self._signals_active.clear()
+                        self._signals_shown_at.clear()
+                else:
+                    try:
+                        async with _lock():
+                            await asyncio.to_thread(self._signal_controller.set_lighting,
+                                                    hw_signals.DEVICE, chosen.setting(),
+                                                    chosen.brightness)
+                    except Exception as exc:  # noqa: BLE001
+                        decky.logger.warning("Lightbar signal write failed: %s", exc)
+                    else:
+                        self._signals_last_write = time.monotonic()
+                        if action == "play":
+                            self._signals_shown = pattern
+                            signal = hw_signals.active_signal(
+                                self._signals_active, self._signals_last_write,
+                                shown_at=self._signals_shown_at)
+                            if signal and signal.duration_s is not None:
+                                self._signals_shown_at[signal.event] = self._signals_last_write
+                        else:
+                            self._signals_shown = None
+                            if action == "clear":
+                                self._signals_active.clear()
+                                self._signals_shown_at.clear()
+            try:
+                await asyncio.wait_for(self._signals_wakeup.wait(), timeout=0.25)
+            except asyncio.TimeoutError:
+                pass
+
     # ---- Max Fans (mirrors the desktop app: 100% <-> custom aggressive curve) ----
     async def get_max_fans(self) -> bool:
         return bool(_load_max_fans().get("enabled", False))
@@ -1194,6 +1259,10 @@ class Plugin:
             rc, out = await asyncio.to_thread(
                 lambda: _run(Z13_PROFILE + ["apply", name], PROFILE_APPLY_TIMEOUT_S, as_deck=True))
         ok = rc == 0 and "ERR  profile" not in out
+        ok = ok and not any(line.lstrip().startswith("ERR ") for line in out.splitlines())
+        self._signals_last_write = time.monotonic()
+        if ok:
+            self._signal_profile_changed()
         timeout_message = _extract_z13ctl_timeout(out)
         message = (f"{name} applied" if ok else timeout_message or
                    f"{name}: profile apply failed ({out[-160:] or f'rc={rc}'})")
@@ -1268,6 +1337,7 @@ class Plugin:
                 return {"ok": False, "message": "bad brightness level", "failed": []}
             res = await asyncio.to_thread(_edit_field_recorded, 'brightness', level, None)
         if res["ok"]:
+            self._signals_last_write = time.monotonic()
             _save_plugin_state(brightness=level)
         return res
 
@@ -1284,6 +1354,12 @@ class Plugin:
     # ---- Lifecycle ----
     async def _main(self):
         self.loop = asyncio.get_event_loop()
+        self._signals_active = {}
+        self._signals_shown = None
+        self._signals_shown_at = {}
+        self._signals_last_write = None
+        self._signals_wakeup = asyncio.Event()
+        self._signal_controller = HardwareController(Z13CTL)
         self._memory_guard = BackendMemoryGuard()
         self._memory_guard.start()
         self._crash_reporter = crash_report.install(
@@ -1304,8 +1380,9 @@ class Plugin:
         self._state_stream = StateStream(on_state, command=Z13_PROFILE + ["watch"]).start()
         self._enforce_task = self.loop.create_task(self._enforce_max_fans())
         self._desktop_task = self.loop.create_task(self._watch_desktop_app())
+        self._hardware_signals_task = self.loop.create_task(self._run_hardware_signals())
         if self._crash_reporter:
-            for task in (self._enforce_task, self._desktop_task):
+            for task in (self._enforce_task, self._desktop_task, self._hardware_signals_task):
                 task.add_done_callback(self._crash_reporter.task_done)
         decky.logger.info("z13-helper up. z13ctl=%s exists=%s max_fans=%s",
                           Z13CTL, os.path.exists(Z13CTL),
@@ -1318,7 +1395,8 @@ class Plugin:
             await asyncio.to_thread(self._state_stream.close)
         if getattr(self, "_crash_reporter", None):
             self._crash_reporter.close()
-        for task in (getattr(self, "_enforce_task", None), getattr(self, "_desktop_task", None)):
+        for task in (getattr(self, "_enforce_task", None), getattr(self, "_desktop_task", None),
+                     getattr(self, "_hardware_signals_task", None)):
             if task:
                 task.cancel()
         decky.logger.info("z13-helper unloading")
