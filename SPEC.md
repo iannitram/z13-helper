@@ -6,11 +6,14 @@
 
 A Must or a Won't changed after approval sends the line above back to "not yet".
 
-**Implementation status, 2026-10-30:** 0.5.1 repairs fan/power regressions; it is not 1.0 sign-off.
-The approved Musts and Won'ts below are unchanged. #60 is fixed via PR #83, while #58 is partly
-resolved. Current evidence, review dependencies and outstanding device checks are recorded in
-[`docs/releases/0.5.1.md`](docs/releases/0.5.1.md). In particular, #23 and #27 remain unfinished;
-non-zero/cached RPM or curve-enabled state alone is insufficient evidence of fan response.
+**Implementation status, 2026-11-07:** Current `main` contains the 0.5.1 fan/power repairs and
+later implementation for #23 (shared state owner/event stream), #27 (post-update repair), #64
+(CPU Boost/EPP), #73 (VRR script/preflight), and #80 (conditional resume ownership). Issues #23 and
+#27 are closed in the tracker; their code is present, but live device acceptance remains pending.
+The approved Musts and Won'ts below are unchanged. #58 and #60 are closed. The current evidence
+and remaining device checks are in [`docs/ROADMAP.md`](docs/ROADMAP.md) and the
+[Nov 7 reconciliation](docs/audit/2026-11-07-plan-reconciliation.md). Non-zero/cached RPM or a
+curve-enabled bit alone is insufficient evidence of fan response.
 
 ## Musts
 
@@ -23,7 +26,7 @@ non-zero/cached RPM or curve-enabled state alone is insufficient evidence of fan
 | M3 | THE DESKTOP APP SHALL have the G-Helper layout of Phase 9 complete: lighting mode combos for Rear Light and Laptop Keyboard, tile icons, and the CPU Boost (EPP) combo. | Every control from the old Dashboard and Advanced tabs exists in the new layout. A screenshot matches the §5 spec. | Phase 9 "Done when" + verification step 7 (`needs-owner-device`) |
 | M4 | THE UPDATES PANEL SHALL say when z13ctl, G-Helper, SteamOS or our own release moved (Phase 10), and its **Repair install** button SHALL run `install.sh --repair` and stream the log (Phase 12b). | A newer upstream shows in red with a link; Repair finishes green on a healthy install. | `tests/` update-watch tests; on the Z13, Repair from the panel (`needs-owner-device`) |
 | M5 | IN GAME MODE THE DECKY PLUGIN SHALL show the same profile list, Max Fans, TDP sliders, charge limit, per-device brightness and telemetry as the desktop app, and SHALL never show a state that did not apply (Phase 11, #16). | Applying a profile in the QAM changes the hardware exactly as the desktop does. A failed apply is shown, not hidden. | `decky/tests`; on the Z13, the Phase 11 "Done when" (`needs-owner-device`) |
-| M6 | ONE COMPONENT SHALL own profile and hardware state: app profiles are mirrored into `z13ctl` named profiles, and every frontend refreshes on `z13ctl` events instead of polling (Phase 8 🚧, Phase 12 follow-ups, #23). | A change made in the app, Decky or the `z13ctl` CLI shows in all three within a second, with no polling loop. A stale slider cannot change another profile. A restart of the backend reconnects. | #23's acceptance list; on the Z13 (`needs-owner-device`) |
+| M6 | ONE COMPONENT SHALL own profile and hardware state: app profiles are mirrored into `z13ctl` named profiles, and every frontend refreshes on `z13ctl` events instead of polling (Phase 8, #23; implementation integrated). | A change made in the app, Decky or the `z13ctl` CLI shows in all three within a second, with no polling loop. A stale slider cannot change another profile. A restart of the backend reconnects. | #23's acceptance list; on the Z13 (`needs-owner-device`) |
 | M7 | AFTER A SteamOS UPDATE THE APP SHALL say so, list the post-update tasks that need attention, and run the selected ones with a plan, backups and a rollback record. It never reboots by itself (Phase 12c, #27). | The tray and Decky say "SteamOS updated: N tasks". Ticking amdgpu + ROCm and pressing Run fixes both with one reboot. Every applied repair has a before/after check and a rollback record. A redacted support bundle can be previewed. | Phase 12c "Done when" + #27's acceptance (`needs-owner-device` for the real update) |
 | M8 | THE LIGHTBAR SHALL recover on its own from a wedge (Phase 7), and the Boondock script SHALL use the user `llama-swap` unit with no Docker or VM steps (Phase 7). | A lightbar timeout recovers within one retry. `boondock` runs with no Docker or VM steps. | `tests/` lightbar tests; on the Z13 (`needs-owner-device`) |
 | M9 | IN GAME MODE THE QAM SHALL keep focus with a game running, and gamescope SHALL get a 48-180 Hz VRR profile if the panel accepts it (Phase 13, minus Steam's own controls, which are #29, after 1.0). | The QAM focus test passes with a game running. The VRR profile either works or is recorded as a no-go with the reason. | On the Z13 (`needs-owner-device`) |
