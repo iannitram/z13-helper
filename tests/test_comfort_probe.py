@@ -51,3 +51,18 @@ def test_fit_recovers_offset_and_ranks_by_rmse():
 def test_fit_skips_thin_or_flat_candidates():
     rows = [{"external_c": "30", "tctl": "50"}] * 5 + [{"external_c": "31", "nvme": "40"}]
     assert probe.fit(rows) == []
+
+
+def test_sample_command_reads_hwmon_and_writes_one_row(tmp_path, monkeypatch, capsys):
+    import sensor_reader
+    root = tmp_path / "hwmon"
+    d = root / "hwmon0"
+    d.mkdir(parents=True)
+    (d / "name").write_text("k10temp\n")
+    (d / "temp1_input").write_text("52000\n")
+    monkeypatch.setattr(sensor_reader, "HWMON_ROOT", str(root))
+    out = str(tmp_path / "p.csv")
+    assert probe.main(["sample", "--phase", "game", "--external-c", "36.5", "--out", out]) == 0
+    rows = probe.read_rows(out)
+    assert len(rows) == 1 and rows[0]["phase"] == "game" and rows[0]["external_c"] == "36.5"
+    assert rows[0]["tctl"] == "52.0" and rows[0]["nvme"] == ""
