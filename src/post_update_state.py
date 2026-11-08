@@ -1,4 +1,12 @@
+import re
 from typing import Optional
+
+try:
+    import timeline
+except ImportError:
+    timeline = None
+
+_STEAMOS_PARENS = re.compile(r"\(([^()?]+)\)\s*$")
 
 
 def read_build_id(os_release_text: str) -> Optional[str]:
@@ -44,3 +52,42 @@ def row_state(check: str, reboot_pending: bool, applicable: bool) -> str:
     if check == "needs":
         return "needs"
     return "na"
+
+
+def recorded_build_id(install_rec: Optional[dict]) -> Optional[str]:
+    """Extract the recorded SteamOS BUILD_ID from an `install.json` dict."""
+    if not isinstance(install_rec, dict):
+        return None
+    direct = install_rec.get("build_id")
+    if isinstance(direct, str) and direct.strip() and direct.strip() != "?":
+        return direct.strip()
+    steamos = install_rec.get("steamos")
+    if isinstance(steamos, str):
+        m = _STEAMOS_PARENS.search(steamos.strip())
+        if m and m.group(1).strip():
+            return m.group(1).strip()
+    return None
+
+
+def record_if_build_id_changed(
+    recorded: Optional[str],
+    current: Optional[str],
+    *,
+    before: Optional[dict] = None,
+    after: Optional[dict] = None,
+    changed=(),
+    path: Optional[str] = None,
+    journal_fn=None,
+) -> Optional[dict]:
+    """Record a single `steamos_update` timeline entry when `BUILD_ID` changed."""
+    if not needs_attention(recorded, current) or timeline is None:
+        return None
+    return timeline.record_steamos_update(
+        before_build_id=recorded,
+        after_build_id=current,
+        before=before,
+        after=after,
+        changed=changed,
+        path=path,
+        journal_fn=journal_fn,
+    )

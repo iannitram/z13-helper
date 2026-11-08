@@ -52,7 +52,8 @@ DECKY_FILES = ["plugin.json", "package.json", "main.py", "dist/index.js",
                "py_modules/state_authority.py", "py_modules/state_stream.py", "py_modules/state_events.py",
                "py_modules/z13ctl_client.py", "py_modules/z13ctl_profiles.py", "py_modules/profiles.py",
                "py_modules/hardware_controller.py", "py_modules/max_fans_state.py", "py_modules/epp.py",
-               "py_modules/power_range.py", "py_modules/crash_report.py", "py_modules/crash_queue.py",
+               "py_modules/power_range.py", "py_modules/timeline.py",
+               "py_modules/crash_report.py", "py_modules/crash_queue.py",
                "py_modules/crash_scrub.py", "py_modules/_crash_build.json"]
 
 
@@ -73,8 +74,12 @@ _CRASH_BUILD = ("src/_crash_build.json" if os.path.isfile(os.path.join(REPO, "sr
 MANIFEST = [
     ("src/profiles.py", f"{BIN}/z13-profile", "755", False),
     ("src/z13_helper_cli.py", f"{BIN}/z13-helper", "755", False),
+    # `z13-helper mcp` imports the CLI module from the host library folder.
+    ("src/z13_helper_cli.py", f"{LIB}/z13_helper_cli.py", "644", False),
+    ("src/mcp_server.py", f"{LIB}/mcp_server.py", "644", False),
     # z13-profile's host seam (profiles.py puts this folder on sys.path).
     ("src/host.py", f"{LIB}/host.py", "644", False),
+    ("src/timeline.py", f"{LIB}/timeline.py", "644", False),
     ("src/state_authority.py", f"{LIB}/state_authority.py", "644", False),
     ("src/state_stream.py", f"{LIB}/state_stream.py", "644", False),
     ("src/state_events.py", f"{LIB}/state_events.py", "644", False),
@@ -99,7 +104,10 @@ MANIFEST = [
     ("tooling/post_update/cmdline.py", f"{LIB}/post_update/cmdline.py", "644", False),
     ("tooling/post_update/health.py", f"{LIB}/post_update/health.py", "644", False),
     ("tooling/post_update/local.py", f"{LIB}/post_update/local.py", "644", False),
+    ("tooling/post_update/bluetooth.py", f"{LIB}/post_update/bluetooth.py", "644", False),
+    ("tooling/post_update/probes.py", f"{LIB}/post_update/probes.py", "644", False),
     ("tooling/post_update/recipe.py", f"{LIB}/post_update/recipe.py", "644", False),
+    ("tooling/post_update/registry.py", f"{LIB}/post_update/registry.py", "644", False),
     ("tooling/post_update/runner.py", f"{LIB}/post_update/runner.py", "644", False),
 
     ("tooling/profiles/z13-max", f"{BIN}/z13-max", "755", False),
@@ -112,6 +120,14 @@ MANIFEST = [
     ("tooling/z13_gamemode_report.py", f"{BIN}/z13-gamemode-report", "755", False),
     ("packaging/host/gamescope/displays/asus.rogflowz13.lcd.lua",
      f"{HOME}/.config/gamescope/scripts/00-gamescope/displays/asus.rogflowz13.lcd.lua", "644", False),
+    ("packaging/host/udev/50-mt7925-bt-no-autosuspend.rules",
+     f"{LIB}/packaging/host/udev/50-mt7925-bt-no-autosuspend.rules", "644", False),
+    ("packaging/host/systemd/system/bt-mt7925-cycle.service",
+     f"{LIB}/packaging/host/systemd/system/bt-mt7925-cycle.service", "644", False),
+    ("packaging/host/systemd/system/mt7925-bt-resume.service",
+     f"{LIB}/packaging/host/systemd/system/mt7925-bt-resume.service", "644", False),
+    ("packaging/host/systemd/system/mt7925-bt-resume.sh",
+     f"{LIB}/packaging/host/systemd/system/mt7925-bt-resume.sh", "755", False),
     ("tooling/diag/z13-memory-check", f"{BIN}/z13-memory-check", "755", False),
     ("tooling/diag/z13-storage-check", f"{BIN}/z13-storage-check", "755", False),
     ("tooling/diag/z13-whereami", f"{BIN}/z13-whereami", "755", False),
@@ -123,6 +139,7 @@ MANIFEST = [
     ("packaging/host/systemd/system/z13-lightbar-reset.sh", f"{ETC_UNITS}/z13-lightbar-reset.sh", "755", True),
     ("packaging/host/systemd/system/z13-lightbar-reset.service", f"{ETC_UNITS}/z13-lightbar-reset.service", "644", True),
     ("packaging/host/polkit/50-z13-lightbar-reset.rules", POLKIT_RULE, "644", True),
+    ("packaging/host/tmpfiles/z13-helper-epp.conf", "/etc/tmpfiles.d/z13-helper-epp.conf", "644", True),
 ]
 USER_UNITS_ENABLED = ["z13-button-watcher.service",
                       "z13-helper.service", "z13-restore-profile.service", "z13ctl.socket"]
@@ -134,6 +151,7 @@ KEEP_LIST = [
     f"{ETC_UNITS}/z13-lightbar-reset.sh",
     f"{ETC_UNITS}/z13-lightbar-reset.service",
     POLKIT_RULE,
+    "/etc/tmpfiles.d/z13-helper-epp.conf",
     f"{ETC_UNITS}/z13ctl-perms.service",
     "/etc/udev/rules.d/99-z13ctl.rules",
 ]

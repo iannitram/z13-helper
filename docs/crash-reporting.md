@@ -24,6 +24,9 @@ failed and timed-out requests count because they may have reached the server.
 An unsuccessful upload stays queued and retries on the next start with the same
 filename. Each start makes at most one attempt per queued report.
 
+Reports are uploaded into the drop's `z13-helper/` folder (created by the drop on the
+first upload); queued retries go to the same folder.
+
 Fatal signals write through faulthandler and are reported on the next start;
 Python cannot safely create or upload a zip inside a fatal signal handler.
 Desktop local logging retains its existing fatal report. Decky and desktop runs

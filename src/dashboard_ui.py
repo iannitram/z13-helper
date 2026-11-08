@@ -30,11 +30,13 @@ from sensor_reader import SensorReader
 from telemetry_history import TelemetryHistory
 from config_manager import ConfigManager
 import app_log
+import epp
 import host
 import install_record
 import max_fans_state
 import post_update_view
 import profiles
+import timeline
 import update_watch
 from fan_watchdog import FanTrace, FanWatchdog, FanWatchdogRunner
 from display_modes import RefreshControl
@@ -125,6 +127,7 @@ class DashboardUI(QMainWindow):
         self._sensors = sensors
         self._fan_watchdog = FanWatchdog(sensors, controller,
                                          max_fans_on=max_fans_state.is_enabled,
+                                         suspended=max_fans_state.is_suspended,
                                          may_act=lambda: not self.control._pending,
                                          active_tdp=lambda: self.control.active().get("tdp"),
                                          trace=self._make_fan_trace())
@@ -376,6 +379,7 @@ class DashboardUI(QMainWindow):
         prow.addWidget(self.profile_combo, 1)
         prow.addWidget(self.maxfans_pill)
         self.perf.body.addLayout(prow)
+        self._build_epp_ui()
         col.addWidget(self.perf)
         col.addWidget(self._sep())
 
@@ -526,9 +530,18 @@ class DashboardUI(QMainWindow):
             limit = self.controller.get_battery_limit()
             if limit is not None:
                 self.battery_slider.setValue(limit)
-                self.config.set("battery_limit", limit)
         except Exception:
             pass
+        # config.json is migration input only: seed the active profile from an
+        # old limit once, then every change lives in the profile store.
+        # The key is consumed on first sight, so a profile that has no limit on
+        # purpose (Boondock) is not given the old one on every later launch.
+        legacy = self.config.get("battery_limit")
+        if legacy is not None:
+            self.config.remove("battery_limit")
+            active = self.control.active()
+            if isinstance(legacy, int) and active.get("battery_limit") is None:
+                self.control.save(dict(active, battery_limit=legacy), "battery_limit")
         self.batt_100.setChecked(self.battery_slider.value() == 100)
         self._highlight_brightness(self.config.get("brightness", "medium"))
         self._sync_screen_brightness(force=True)
@@ -541,6 +554,25 @@ class DashboardUI(QMainWindow):
     # ------------------------------------------------------------------
     # Profiles
     # ------------------------------------------------------------------
+
+    def _build_epp_ui(self):
+        row = QHBoxLayout()
+        row.addWidget(QLabel("CPU Boost"))
+        self.epp_combo = QComboBox()
+        epp.fill_combo(self.epp_combo, self.controller.get_epp_choices())
+        self.epp_combo.currentIndexChanged.connect(self._on_epp)
+        row.addWidget(self.epp_combo, 1)
+        self.epp_now = QLabel("")
+        self.epp_now.setObjectName("dim")
+        row.addWidget(self.epp_now)
+        self.perf.body.addLayout(row)
+
+    def _refresh_epp_ui(self, profile):
+        epp.show_profile_epp(self.epp_combo, profile)
+        self.epp_now.setText(epp.now_text(self.controller.get_epp()))
+
+    def _on_epp(self, _index):
+        self.control.save(epp.profile_with_epp(self.control.shown(), self.epp_combo), "epp")
 
     def _refresh_profile_ui(self):
         state = self.control.backend_state
@@ -570,6 +602,7 @@ class DashboardUI(QMainWindow):
             self.profile_combo.addItems(names)
         self.profile_combo.setCurrentText(name)
         self.profile_combo.blockSignals(False)
+        self._refresh_epp_ui(active)
         self._refresh_lighting_ui(active)
         if self._tray is not None:
             if set(self._tray_profile_actions) != set(names):
@@ -610,7 +643,43 @@ class DashboardUI(QMainWindow):
     # ------------------------------------------------------------------
 
     def _toggle_max_fans(self, checked):
-        self.control._submit("Max Fans", lambda: authority.set_max_fans(checked))
+        def go():
+            try:
+                active_name = self.control.active_name()
+            except Exception:
+                active_name = None
+
+            # Timeline recording is best-effort and never blocks or reorders the write.
+            try:
+                before_mf = max_fans_state.load()
+            except Exception:
+                before_mf = None
+
+            def record(ok):
+                try:
+                    after_mf = max_fans_state.load()
+                    before, after = timeline.max_fans_goal_states(before_mf or {}, after_mf, checked, ok=ok)
+                    timeline.record_goal_change(
+                        goal=after["goal"], previous_goal=before["goal"],
+                        before=before, after=after, profile=active_name, ok=ok,
+                        defer=True,
+                    )
+                except Exception as exc:  # best-effort: the hardware result stands
+                    logging.getLogger(__name__).warning(
+                        "timeline recording failed for Max Fans: %s: %s", type(exc).__name__, str(exc)[:200])
+
+            try:
+                message = authority.set_max_fans(checked)
+            except Exception:
+                record(False)
+                raise
+            record(True)
+            return message
+
+        self.control._submit("Max Fans", go)
+
+    def read_timeline(self, limit=50):
+        return timeline.read_entries(limit=limit, newest_first=True)
 
     # ------------------------------------------------------------------
     # Lighting
@@ -699,9 +768,8 @@ class DashboardUI(QMainWindow):
     def _apply_battery_limit(self):
         value = self.battery_slider.value()
         self.batt_100.setChecked(value == 100)
-        target = self.control.active_name()
-        self.control._submit(f"Battery limit {value}%",
-                             lambda: authority.set_field("battery_limit", value, target))
+        profile = self.control.active()
+        self.control.save(dict(profile, battery_limit=value), "battery_limit")
 
     def _battery_100(self):
         self.battery_slider.setValue(100)
@@ -887,22 +955,28 @@ class DashboardUI(QMainWindow):
 
     def _tick(self):
         try:
-            apu = self.sensors.get_apu_temp()
-            gpu = self.sensors.get_gpu_temp()
+            cpu = self.sensors.get_cpu_temp()
+            gpu = self.sensors.get_gpu_temp_labeled()
             fan1, fan2 = self.sensors.get_fan_speeds()
-            self.history.add(time.monotonic(), apu, gpu, fan1, fan2)
+            self.history.add(time.monotonic(), cpu[0] if cpu else None,
+                             gpu[0] if gpu else None, fan1, fan2)
             fw = self._fans_window
             if fw is not None and fw.isVisible() and hasattr(fw, "history_chart"):
                 fw.history_chart.update()
             parts = []
-            if apu is not None:
-                parts.append(f"CPU {apu:.0f}°C")
-            if gpu is not None:
-                parts.append(f"GPU {gpu:.0f}°C")
+            for name, got in (("CPU", cpu), ("GPU", gpu)):
+                if got is None:
+                    parts.append(f"{name} unavailable")
+                else:
+                    parts.append(f"{name} {got[0]:.0f}°C ({got[1]})")
             if fan1 is not None and fan2 is not None:
                 parts.append(f"Fans {fan1}/{fan2}RPM")   # fan1 = CPU side, fan2 = GPU side
             elif fan1 is not None:
                 parts.append(f"Fan {fan1}RPM")
+            elif fan2 is not None:
+                parts.append(f"Fan {fan2}RPM")
+            else:
+                parts.append("Fans unavailable")
             text = "  ".join(parts)
             self.perf.right.setText(text)
             if self._tray is not None:

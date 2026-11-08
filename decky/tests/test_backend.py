@@ -4,7 +4,6 @@ Run from the repo root:  python3 -m unittest discover -s decky/tests -v
 """
 
 import asyncio
-import contextlib
 import importlib.util
 import io
 import json
@@ -52,11 +51,13 @@ _spec.loader.exec_module(m)
 _HOME = tempfile.mkdtemp(prefix="z13-decky-home-")
 REAL = {}   # the real values, for the tests that check the paths themselves
 for _name in ("SHARED_CONFIG", "MAX_FANS_STATE", "PROFILES_STORE", "FAN_TRACE",
+              "TIMELINE_PATH", "OS_RELEASE_PATH",
               "LIGHTBAR_STAMP", "LIGHTBAR_DAEMON_STAMP", "DESKTOP_APP_SOCKET",
               "DESKTOP_APP_USER_QUIT", "INSTALL_JSON"):
     if hasattr(m, _name):
         REAL[_name] = getattr(m, _name)
         setattr(m, _name, os.path.join(_HOME, _name.lower()))
+REAL["FAN_TRACE_DIR"] = m.FAN_TRACE_DIR   # read only; never written by the tests
 
 
 def setUpModule():
@@ -205,22 +206,19 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(result["message"],
                          "z13ctl write timed out after 20 s (kernel asus-wmi hang?) (step: fans)")
 
-    def test_set_profile_takes_the_shared_authority_lock(self):
+    def test_set_profile_rejects_names_that_are_not_bases(self):
         run = fake_host(self)
-        held = []
-        real = state_authority.transaction
+        result = asyncio.run(m.Plugin().set_profile("custom"))
+        self.assertFalse(result["ok"])
+        self.assertIn("unknown profile", result["message"])
+        self.assertEqual(run.calls, [])
 
-        @contextlib.contextmanager
-        def watching():
-            with real():
-                held.append(True)
-                yield
-
-        with mock.patch.object(state_authority, "transaction", watching):
-            result = asyncio.run(m.Plugin().set_profile("balanced"))
+    def test_set_profile_routes_through_the_profile_engine(self):
+        run = fake_host(self)
+        result = asyncio.run(m.Plugin().set_profile("performance"))
         self.assertTrue(result["ok"])
-        self.assertTrue(held)
-        self.assertIn([m.Z13CTL, "profile", "--set", "balanced"], run.argvs)
+        self.assertEqual(run.argvs, [m.Z13_PROFILE + ["apply", "Turbo"]])
+        self.assertTrue(run.calls[0].as_deck)
 
     def test_profile_timeout_without_step_keeps_bare_message(self):
         output = "z13ctl write timed out after 20 s (kernel asus-wmi hang?)\n"
@@ -335,6 +333,12 @@ class TelemetryTest(unittest.TestCase):
                  "hwmon9": ("k10temp", {"temp1_input": "99000"})}
         for d, (name, files) in nodes.items():
             os.makedirs(os.path.join(self.root, d))
+            if name == "amdgpu":
+                device = os.path.join(self.root, d, "device")
+                os.makedirs(device)
+                for fn, value in (("vendor", "0x1002"), ("device", "0x1586")):
+                    with open(os.path.join(device, fn), "w") as f:
+                        f.write(value + "\n")
             with open(os.path.join(self.root, d, "name"), "w") as f:
                 f.write(name + "\n")
             for fn, v in files.items():
@@ -348,12 +352,14 @@ class TelemetryTest(unittest.TestCase):
         sensor_reader.HWMON_ROOT, m._sensors = self._orig
 
     def test_by_name(self):
-        self.assertEqual(m.telemetry(), {"apu": 52.5, "gpu": 48.0, "fan1": 2100, "fan2": 2250})
+        self.assertEqual(m.telemetry(), {"apu": 52.5, "apu_src": "ACPI", "gpu": 48.0, "gpu_src": "amdgpu edge",
+                                         "fan1": 2100, "fan2": 2250})
 
     def test_missing_nodes_are_none(self):
         sensor_reader.HWMON_ROOT = tempfile.mkdtemp(prefix="z13-empty-")
         m._sensors = sensor_reader.SensorReader()
-        self.assertEqual(m.telemetry(), {"apu": None, "gpu": None, "fan1": None, "fan2": None})
+        self.assertEqual(m.telemetry(), {"apu": None, "apu_src": None, "gpu": None, "gpu_src": None,
+                                         "fan1": None, "fan2": None})
 
 
 class StalledSensors:
@@ -666,6 +672,82 @@ class DesktopAppCheckTest(unittest.TestCase):
     def test_paths_match_the_app(self):
         self.assertTrue(REAL["DESKTOP_APP_SOCKET"].endswith("/app/io.github.iannitram.Z13Helper/z13-helper.sock"))
         self.assertTrue(REAL["DESKTOP_APP_USER_QUIT"].endswith("z13-helper.user-quit"))
+        self.assertEqual(REAL["TIMELINE_PATH"],
+                         os.path.join(REAL["FAN_TRACE_DIR"], "timeline.jsonl"))
+
+
+class TimelineTests(unittest.TestCase):
+    def setUp(self):
+        self.td = tempfile.mkdtemp(prefix="z13-decky-tl-")
+        self.tl = os.path.join(self.td, "timeline.jsonl")
+        self.install_json = os.path.join(self.td, "install.json")
+        self.os_rel = os.path.join(self.td, "os-release")
+        self.max_fans = os.path.join(self.td, "max-fans.json")
+        self.store_path = os.path.join(self.td, "profiles.json")
+        with open(self.store_path, "w") as f:
+            json.dump(_store("Balanced"), f)
+        for name, val in (
+            ("TIMELINE_PATH", self.tl),
+            ("INSTALL_JSON", self.install_json),
+            ("OS_RELEASE_PATH", self.os_rel),
+            ("MAX_FANS_STATE", self.max_fans),
+            ("PROFILES_STORE", self.store_path),
+        ):
+            p = mock.patch.object(m, name, val)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_get_timeline_reads_newest_first_across_rotation_and_partial_tail(self):
+        import timeline
+        for idx in range(6):
+            timeline.append(
+                {"id": f"d-{idx}", "kind": "profile", "summary": f"p{idx}"},
+                path=self.tl,
+                max_bytes=350,
+                backups=2,
+            )
+        with open(self.tl, "ab") as f:
+            f.write(b'{"id":"unfinished","kind":"profile"')
+
+        got = asyncio.run(m.Plugin().get_timeline(limit=3))
+        self.assertEqual([e["id"] for e in got], ["d-5", "d-4", "d-3"])
+
+    def test_set_max_fans_records_goal_change(self):
+        fake_host(self)
+
+        def fake_authority_set_max_fans(enabled):
+            # What state_authority.set_max_fans does last: persist the intent.
+            with open(self.max_fans, "w") as f:
+                json.dump({"enabled": bool(enabled)}, f)
+            return "Max Fans ON"
+
+        with mock.patch.object(state_authority, "set_max_fans", fake_authority_set_max_fans):
+            res = asyncio.run(m.Plugin().set_max_fans(True))
+        self.assertTrue(res["ok"])
+        import timeline
+        self.assertTrue(timeline.flush(10))   # the entry is written by the background writer
+        got = asyncio.run(m.Plugin().get_timeline(limit=10))
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0]["kind"], "goal")
+        self.assertEqual(got[0]["after"]["goal"], "max")
+        self.assertEqual(got[0]["rollback"]["goal"], "custom")
+
+    def test_check_steamos_build_id_records_once_and_logs(self):
+        fh = fake_host(self)
+        with open(self.install_json, "w") as f:
+            json.dump({"steamos": "3.8.28 (20260922.1)", "kernel": "6.18.50"}, f)
+        with open(self.os_rel, "w") as f:
+            f.write('VERSION_ID="3.9.5"\nBUILD_ID="20261023.100"\n')
+
+        first = m._check_steamos_build_id()
+        second = m._check_steamos_build_id()
+        self.assertIsNotNone(first)
+        self.assertEqual(first["id"], second["id"])
+
+        got = asyncio.run(m.Plugin().get_timeline(limit=10))
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0]["kind"], "steamos_update")
+        self.assertEqual(len([c for c in fh.calls if c.argv[0] == "logger"]), 1)
 
 
 class PostUpdateTest(unittest.TestCase):

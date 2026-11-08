@@ -7,10 +7,12 @@ may appear only at DEBUG; the INFO/WARNING records carry name, rc and length.
 """
 
 import asyncio
+import errno
 import importlib.util
 import json
 import logging
 import os
+import types
 from pathlib import Path
 
 import pytest
@@ -57,6 +59,39 @@ def test_failing_command_output_is_not_logged_at_warning(main, monkeypatch, capl
     for rec in warnings:
         assert SECRET not in rec.getMessage()
     assert any("output_len=" in r.getMessage() for r in warnings)
+
+
+def test_read_only_lock_fallback_warns_once(main, tmp_path, monkeypatch, caplog):
+    def no_lock(_path):
+        raise OSError(errno.EROFS, "read-only file system")
+
+    monkeypatch.setattr(main, "_open_lock", no_lock)
+    with caplog.at_level(logging.WARNING):
+        for _ in range(3):
+            with main._file_lock(str(tmp_path / "state.json")):
+                pass
+    assert len([r for r in caplog.records if "without a lock" in r.message]) == 1
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_game_mode_watchdog_observes_shared_suspension(main, monkeypatch, clock, enabled):
+    state = {"enabled": enabled, "suspended": "z13ctl write timed out"}
+    monkeypatch.setattr(main, "_load_max_fans", lambda: state)
+    sensors = types.SimpleNamespace(
+        custom_fan_curve_enabled=lambda: False,
+        fan_curve_modes=lambda: (2, 2),
+        custom_fan_curve_points=lambda: None,
+        get_apu_temp=lambda: 80.0,
+        get_fan_speeds=lambda: (0, 0),
+    )
+    # No recovery method: any attempted hardware write fails this test.
+    watchdog = main.make_fan_watchdog(sensors, object(), may_act=lambda: True, clock=clock)
+    assert watchdog._suspended()
+    for _ in range(20):
+        clock.advance(2)
+        assert watchdog.tick() is None
+    state.pop("suspended")
+    assert not watchdog._suspended()
 
 
 def test_fan_trace_file_is_owner_only(tmp_path):

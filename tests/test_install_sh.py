@@ -611,3 +611,54 @@ def test_repair_ends_with_the_pending_post_update_list(tmp_path, real_subprocess
     tail = out[out.rindex("Post-update tasks"):]
     assert "Post-update tasks pending:" in tail
     assert tail.index("Post-update tasks pending") < tail.index("log:")
+@pytest.mark.parametrize("changed,dry,apply_rc", [(False, False, 0), (True, False, 0),
+                                                  (False, False, 1), (True, True, 0)])
+def test_etc_applies_epp_permissions_only_when_the_rule_changed(
+        tmp_path, real_subprocess, changed, dry, apply_rc):
+    source = SCRIPT.read_text()
+    start = source.index("apply_epp_permissions() {")
+    end = source.index("# 8. verify + record", start)
+    functions = tmp_path / "etc-functions.sh"
+    functions.write_text(source[start:end])
+    # Every host interaction is a shell function: never install to real /etc.
+    harness = r'''
+source "$FUNCTIONS"
+DRY=$TEST_DRY
+CHANGED=()
+FAILED=()
+REPO=/fixture
+CHECK=/fixture/check
+PY=manifest_stub
+manifest_stub() {
+    if [[ $1 == "$CHECK" && $2 == manifest && $TEST_CHANGED == 1 ]]; then
+        printf 'packaging/host/tmpfiles/z13-helper-epp.conf\t/etc/tmpfiles.d/z13-helper-epp.conf\t644\t1\n'
+    fi
+}
+say() { :; }
+info() { :; }
+warn() { :; }
+same_root() { return 1; }
+systemctl() { echo enabled; }
+ask() { return 0; }
+backup() { :; }
+logger() { :; }
+fail() { FAILED+=("$*"); }
+sudo() {
+    printf '%s\n' "$*"
+    if [[ $1 == systemd-tmpfiles ]]; then return "$APPLY_RC"; fi
+}
+act() { if ((DRY)); then printf 'DRY %s\n' "$*"; else "$@"; fi; }
+etc_files
+printf 'FAILURES %s\n' "${FAILED[*]}"
+'''
+    env = dict(os.environ, FUNCTIONS=str(functions), TEST_CHANGED=str(int(changed)),
+               TEST_DRY=str(int(dry)), APPLY_RC=str(apply_rc))
+    p = real_subprocess(["bash", "-c", harness], env=env, capture_output=True, text=True)
+    assert p.returncode == 0, p.stderr
+    command = "systemd-tmpfiles --create /etc/tmpfiles.d/z13-helper-epp.conf"
+    assert (command in p.stdout) == changed
+    if changed:
+        assert p.stdout.index("install -D -m 644") < p.stdout.index(command)
+    if dry:
+        assert "DRY sudo " + command in p.stdout
+    assert ("FAILURES apply EPP sysfs permissions" in p.stdout) == (changed and bool(apply_rc))

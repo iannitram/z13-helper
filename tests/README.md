@@ -14,12 +14,16 @@ lets that error through rather than turning it into an rc).
 
 | File | Covers |
 |---|---|
+| `test_verify_gamescope_vrr.py` | Read-only #73 preflight: exact EDID identity, installed script drift, OS/Game Mode context and pending VRR/limiter matrix; no physical acceptance inferred. |
 | `test_crash_wiring.py` | exception hooks, scrubbed uploads, consent, shared queue/rate limit, fatal recovery and build configuration; see `docs/crash-reporting.md` |
+| `test_timeline_r5.py` | review fixes for #134: deferred recording off the hardware lock, read-only Decky Max Fans snapshot, watchdog start not waiting on the timeline, folder held by descriptor, no descriptor leak, no rollback for unknown values, logged failures |
+| `test_timeline.py` | append-only `timeline.jsonl`, size-capped rotation, partly written last line handling, Principle 7 journal lines, and the five write paths |
 | `test_profiles_apply.py` | `profiles.apply()`: write order, step independence, hooks, Max Fans state suspension, undervolt |
 | `test_profiles_store.py` | store seeding/CRUD, `validate`, `apply_by_name`, the `z13-profile` CLI |
 | `test_backend_memory.py` | Decky RSS threshold, read errors, independent monitor and plugin startup/unload; no real exit or hardware |
 | `test_fan_trace.py` | Trace output, replay and history bounded by both time and entry count |
 | `test_z13_helper_cli.py` | `z13-helper` argparse surface, `--json` on every command, and dispatch through a faked state owner (profile, TDP, fans, battery, brightness, lighting, crash and post-update) |
+| `test_mcp_server.py` | `z13-helper mcp`: tool list/schemas, dispatch through the same CLI and faked state owner, argument validation, and a JSON-RPC round trip on fake stdio |
 | `test_fan_watchdog.py` | recovery rules, throttle, stale queued recovery cancellation, in-flight Max Fans cancellation, and "profile rewrite before curve" |
 | `test_power_range.py` | per-rail bounds from kernel metadata and fallback ranges |
 | `test_telemetry_history.py` | bounded telemetry ring buffer: age and count caps, gaps, no disk writes |

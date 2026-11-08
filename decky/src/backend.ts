@@ -54,8 +54,10 @@ export interface BrightnessResult extends ApplyResult {
 }
 
 export interface Telemetry {
-  apu: number | null;      // degC
-  gpu: number | null;      // degC
+  apu: number | null;      // degC, CPU
+  apu_src?: string | null; // sensor it came from: "k10temp Tctl", "ACPI", ...
+  gpu: number | null;      // degC, integrated GPU
+  gpu_src?: string | null; // "amdgpu edge", ...
   fan1: number | null;     // RPM
   fan2: number | null;     // RPM
 }

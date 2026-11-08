@@ -35,6 +35,7 @@ import state_authority as authority
 from state_stream import StateStream
 import state_events
 import power_range
+import timeline
 from fan_watchdog import FanTrace, FanWatchdog
 from sensor_reader import SensorReader
 
@@ -49,6 +50,9 @@ Z13CTL = os.path.expanduser("~/.local/bin/z13ctl")
 # Always run as deck (as_deck=True) so the store stays deck-owned and hooks (boondock)
 # behave as on the desktop.
 Z13_PROFILE = ["/home/deck/.local/bin/z13-profile"]
+# The firmware base profiles the QAM switch accepts (src/profiles.py BASES), and
+# the built-in app profile that carries each one through the profile engine.
+PROFILE_BASES = {"quiet": "Silent", "balanced": "Balanced", "performance": "Turbo"}
 BOONDOCK = os.path.expanduser("~/.local/bin/boondock")
 SHARED_CONFIG = os.path.expanduser("~/.config/z13-helper/config.json")
 # Max Fans state shared with the desktop app (mirror of src/max_fans_state.py):
@@ -68,11 +72,14 @@ ENFORCE_INTERVAL_S = 2
 # Written as root, handed to deck so the app and deck can read and rotate it.
 FAN_TRACE_DIR = "/home/deck/.local/state/z13-helper"
 FAN_TRACE = os.path.join(FAN_TRACE_DIR, "fan-trace-gamemode.log")
+TIMELINE_PATH = os.path.join(FAN_TRACE_DIR, "timeline.jsonl")
+OS_RELEASE_PATH = "/etc/os-release"
 DECK_IDS = (1000, 1000)
 # The user's logging choice (mirror of src/install_record.py logging_enabled()):
 # install.sh asks, the desktop app's Help -> Error log changes it. "logging": false
 # = no fan trace file; missing = on. Read once, when the watchdog starts.
 INSTALL_JSON = os.path.expanduser("~/.config/z13-helper/install.json")
+timeline.INSTALL_JSON = INSTALL_JSON   # the timeline honours the same logging choice
 
 # Desktop app check: in Desktop Mode the resident desktop app should be running (it
 # owns the side button there). Its single-instance socket (src/single_instance.py)
@@ -283,7 +290,8 @@ def _state_path():
 def _load_state():
     try:
         with open(_state_path()) as f:
-            return json.load(f)
+            data = json.load(f)
+            return data if isinstance(data, dict) else {}
     except Exception:  # noqa: BLE001
         return {}
 
@@ -302,6 +310,7 @@ def _shared_config():
 # app, z13-profile and this backend can't lose each other's updates. The lock file is
 # kept deck-owned because we run as root and the other writers run as deck.
 _lock_state = threading.local()
+_lock_fallback_warned = False
 LOCK_TIMEOUT = 10.0   # seconds to wait for another writer before giving up
 
 
@@ -376,10 +385,20 @@ def _file_lock(path):
         if fd is not None:
             os.close(fd)
         raise
-    except OSError:
+    except OSError as e:
         if fd is not None:
             os.close(fd)
-        fd = None   # can't lock (read-only dir?): behave as before, unlocked
+        if e.errno != errno.EROFS:
+            # Only a read-only filesystem is safe to write unlocked; EACCES and
+            # the like mean another writer may hold a lock we cannot open.
+            raise
+        global _lock_fallback_warned
+        if not _lock_fallback_warned:
+            _lock_fallback_warned = True
+            decky.logger.warning(
+                "Cannot lock %s (%s); continuing without a lock", lock_path, e
+            )
+        fd = None   # read-only filesystem: nothing else can be writing either
     held[path] = 1
     try:
         yield
@@ -415,6 +434,30 @@ def _load_max_fans():
             state["saved_curve"] = seeded
         _save_max_fans(state)
         return state
+
+
+def _peek_max_fans():
+    """Max Fans state for the timeline: strictly read-only.
+
+    Unlike `_load_max_fans` it never takes the Max Fans lock, never seeds or
+    migrates the state file from the legacy stores, and never writes. When the
+    file is missing it reports what the seed would be (legacy keys), so the
+    first toggle still restores exactly what it would have restored."""
+    try:
+        with open(MAX_FANS_STATE) as f:
+            state = json.load(f)
+        if isinstance(state, dict):
+            return dict(state)
+    except (OSError, ValueError):
+        pass
+    legacy, old = _shared_config(), _load_state()
+    if not isinstance(legacy, dict):
+        legacy = {}
+    state = {"enabled": bool(legacy.get("fans_max", old.get("max_fans", False)))}
+    seeded = legacy.get("fan_curve_saved") or old.get("saved_curve")
+    if seeded is not None:
+        state["saved_curve"] = seeded
+    return state
 
 
 def _save_max_fans(state):
@@ -553,13 +596,20 @@ def _live_battery_limit():
 
 
 def telemetry():
-    """APU / GPU temps (degC) and both fan RPMs; None where unreadable.
+    """CPU / GPU temps (degC) with their sensor names and both fan RPMs.
 
-    hwmon nodes are found by `name` (acpitz / amdgpu / asus), never by index.
-    Reads only hwmon; never the asus-armoury ppt_* files.
+    A value that cannot be read is None (shown as unavailable), never 0.
+    hwmon nodes are found by `name` (k10temp / acpitz / amdgpu / asus), never
+    by index; the GPU is the integrated one, picked by device. Key `apu` keeps
+    its name for the plugin bundle; `apu_src` / `gpu_src` say where each came
+    from. Reads only hwmon; never the asus-armoury ppt_* files.
     """
     f1, f2 = _sensors.get_fan_speeds()
-    return {"apu": _sensors.get_apu_temp(), "gpu": _sensors.get_gpu_temp(), "fan1": f1, "fan2": f2}
+    cpu = _sensors.get_cpu_temp()
+    gpu = _sensors.get_gpu_temp_labeled()
+    return {"apu": cpu[0] if cpu else None, "apu_src": cpu[1] if cpu else None,
+            "gpu": gpu[0] if gpu else None, "gpu_src": gpu[1] if gpu else None,
+            "fan1": f1, "fan2": f2}
 
 
 def _save_plugin_state(**changes):
@@ -743,6 +793,54 @@ class DesktopAppCheck:
         return "restarted" if ok else "restart-failed"
 
 
+def _check_steamos_build_id():
+    """Record a single `steamos_update` entry when `/etc/os-release` BUILD_ID moved."""
+    try:
+        with open(INSTALL_JSON) as f:
+            rec = json.load(f)
+        if not isinstance(rec, dict):
+            return None
+    except (OSError, ValueError):
+        return None
+    prev = rec.get("build_id")
+    if not (isinstance(prev, str) and prev.strip() and prev.strip() != "?"):
+        m = re.search(r"\(([^()?]+)\)\s*$", str(rec.get("steamos") or "").strip())
+        prev = m.group(1).strip() if m else None
+    if not prev:
+        return None
+    try:
+        with open(OS_RELEASE_PATH) as f:
+            os_text = f.read()
+    except OSError:
+        return None
+    cur = None
+    ver = None
+    for line in os_text.splitlines():
+        if line.startswith("BUILD_ID="):
+            val = line[9:].strip()
+            if len(val) >= 2 and val[0] == val[-1] and val[0] in ('"', "'"):
+                val = val[1:-1]
+            cur = val or None
+        elif line.startswith("VERSION_ID="):
+            val = line[11:].strip()
+            if len(val) >= 2 and val[0] == val[-1] and val[0] in ('"', "'"):
+                val = val[1:-1]
+            ver = val or None
+    if not cur or cur == prev:
+        return None
+    try:
+        return timeline.record_steamos_update(
+            before_build_id=prev,
+            after_build_id=cur,
+            before={"steamos": rec.get("steamos"), "kernel": rec.get("kernel")},
+            after={"steamos": f"{ver or '?'} ({cur})", "kernel": os.uname().release},
+            path=TIMELINE_PATH,
+        )
+    except Exception as e:
+        decky.logger.warning("SteamOS build ID timeline record failed: %s", e)
+        return None
+
+
 def logging_enabled():
     try:
         with open(INSTALL_JSON) as f:
@@ -771,6 +869,7 @@ def make_fan_trace(path=None, owner=DECK_IDS):
 def make_fan_watchdog(sensors=None, fans=None, may_act=None, clock=time.monotonic, trace=None):
     return FanWatchdog(sensors or _sensors, fans or DeckyFans(),
                        max_fans_on=lambda: bool(_load_max_fans().get("enabled", False)),
+                       suspended=lambda: _load_max_fans().get("suspended") is not None,
                        may_act=may_act or _in_gamemode,
                        active_tdp=lambda: (active_profile(_read_store()) or {}).get("tdp"),
                        clock=clock, trace=trace)
@@ -902,6 +1001,95 @@ def _edit_field(field, value, expected):
         return {"ok": False, "saved": False, "message": str(exc), "failed": []}
 
 
+def _timeline_setting(kind, summary, before, after, ok):
+    """Best-effort timeline entry for a manual setting write; never blocks or fails it."""
+    try:
+        timeline.record_setting_change(
+            kind=kind, summary=summary, before=before, after=after,
+            ok=ok, path=TIMELINE_PATH, defer=True,
+        )
+    except Exception as exc:  # noqa: BLE001 - timeline recording is best-effort
+        _log_timeline_failure(f"{kind} record", exc)
+
+
+def _log_timeline_failure(what, exc):
+    decky.logger.warning("Timeline %s failed: %s: %s", what, type(exc).__name__, str(exc)[:200])
+
+
+def _before_snapshot(read):
+    """Run a read-only 'before' lookup for the timeline; None if it fails."""
+    try:
+        return read()
+    except Exception:  # noqa: BLE001 - timeline recording is best-effort
+        return None
+
+
+def _set_max_fans_recorded(enabled):
+    """authority.set_max_fans plus a best-effort goal-change timeline entry.
+    The hardware write is exactly authority.set_max_fans(enabled); reads happen around it."""
+    before_mf = _before_snapshot(_peek_max_fans)
+    prof_name = _before_snapshot(lambda: (active_profile(_read_store()) or {}).get("name") or None)
+    try:
+        message = authority.set_max_fans(enabled)
+    except Exception:
+        try:
+            after_mf = _peek_max_fans()
+            before, after = timeline.max_fans_goal_states(before_mf or {}, after_mf, enabled, ok=False)
+            timeline.record_goal_change(
+                goal=after["goal"], previous_goal=before["goal"],
+                before=before, after=after, profile=prof_name, ok=False,
+                path=TIMELINE_PATH, defer=True,
+            )
+        except Exception as rec_exc:  # noqa: BLE001 - timeline recording is best-effort
+            _log_timeline_failure("goal record", rec_exc)
+        raise
+    try:
+        after_mf = _peek_max_fans()
+        before, after = timeline.max_fans_goal_states(before_mf or {}, after_mf, enabled, ok=True)
+        timeline.record_goal_change(
+            goal=after["goal"], previous_goal=before["goal"],
+            before=before, after=after, profile=prof_name, ok=True,
+            path=TIMELINE_PATH, defer=True,
+        )
+    except Exception as rec_exc:  # noqa: BLE001 - timeline recording is best-effort
+        _log_timeline_failure("goal record", rec_exc)
+    return message
+
+
+def _edit_field_recorded(field, value, expected):
+    """_edit_field; setting changes are recorded by state_authority._push_field."""
+    # The layer that pushes the change (state_authority._push_field) records it
+    # and counts that on this thread; only when it did not do we record here.
+    # Counting handed-over entries (not file lines) stays correct across rotation.
+    accepted_before = timeline.accepted_count()
+
+    if field == "tdp":
+        def _read():
+            v = (active_profile(_read_store()) or {}).get("tdp")
+            return dict(v) if isinstance(v, dict) else v
+    elif field == "battery_limit":
+        def _read():
+            v = _live_battery_limit()
+            return v if v is not None else (active_profile(_read_store()) or {}).get("battery_limit")
+    else:
+        def _read():
+            return _load_state().get("brightness")
+    before_v = _before_snapshot(_read)
+
+    result = _edit_field(field, value, expected)
+
+    if timeline.accepted_count() == accepted_before:
+        ok = bool(result.get("ok"))
+        if field == "tdp":
+            summary = (f"TDP {value['pl1']}/{value['pl2']}/{value['pl3']} W" if value else "TDP off")
+        elif field == "battery_limit":
+            summary = f"Charge limit {value}%"
+        else:
+            summary = f"Brightness {value}"
+        _timeline_setting(field, summary, {field: before_v}, {field: value}, ok)
+    return result
+
+
 class Plugin:
     # ---- Max Fans (mirrors the desktop app: 100% <-> custom aggressive curve) ----
     async def get_max_fans(self) -> bool:
@@ -910,7 +1098,7 @@ class Plugin:
     async def set_max_fans(self, enabled: bool) -> dict:
         async with _lock():
             try:
-                message = await asyncio.to_thread(authority.set_max_fans, bool(enabled))
+                message = await asyncio.to_thread(_set_max_fans_recorded, bool(enabled))
                 return {"ok": True, "message": message}
             except (OSError, RuntimeError, ValueError) as exc:
                 return {"ok": False, "message": str(exc)}
@@ -1017,12 +1205,34 @@ class Plugin:
         return await asyncio.to_thread(_current_platform_profile)
 
     async def set_profile(self, profile: str) -> dict:
+        """Switch the firmware base through the profile engine.
+
+        The QAM sends a base name. Applying the matching built-in app profile
+        re-applies TDP, curve, undervolt and EPP, so the hardware and the
+        active profile cannot drift apart the way a bare `profile --set` let
+        them. Unknown names never reach z13ctl.
+        """
+        name = PROFILE_BASES.get(profile)
+        if name is None:
+            return {"ok": False, "message": f"unknown profile {profile!r}"}
         async with _lock():
-            rc, out, _ = await asyncio.to_thread(
-                authority.set_platform_profile, profile, z13ctl=Z13CTL,
-                timeout=Z13CTL_WRITE_TIMEOUT_S)
-        return {"ok": rc == 0, "message": out or (f"{profile} applied" if rc == 0 else
-                f"z13ctl profile failed (rc={rc})")}
+            rc, out = await asyncio.to_thread(
+                lambda: _run(
+                    Z13_PROFILE + ["apply", name],
+                    PROFILE_APPLY_TIMEOUT_S,
+                    as_deck=True,
+                )
+            )
+        ok = rc == 0 and "ERR  profile" not in out
+        timeout_message = _extract_z13ctl_timeout(out)
+        message = (
+            f"{profile} applied"
+            if ok
+            else timeout_message
+            or f"{profile}: profile apply failed ({out[-160:] or f'rc={rc}'})"
+        )
+        decky.logger.info("profile apply %s -> rc=%s", profile, rc)
+        return {"ok": ok, "message": message}
 
     # ---- Power limits / battery / lighting / telemetry (Phase 11) ----
     # Blocking work runs in a thread so the fan watchdog keeps ticking meanwhile.
@@ -1041,14 +1251,14 @@ class Plugin:
                       profile: str = "") -> dict:
         async with _lock():
             tdp = clamp_tdp(pl1, pl2, pl3, tdp_ranges()) if enabled else None
-            result = await asyncio.to_thread(_edit_field, 'tdp', tdp, profile)
+            result = await asyncio.to_thread(_edit_field_recorded, 'tdp', tdp, profile)
             result['tdp'] = tdp
             return result
 
     async def set_battery_limit(self, value: int, profile: str = "") -> dict:
         async with _lock():
             value = clamp_battery(value)
-            result = await asyncio.to_thread(_edit_field, 'battery_limit', value, profile)
+            result = await asyncio.to_thread(_edit_field_recorded, 'battery_limit', value, profile)
             result['value'] = value
             return result
 
@@ -1056,13 +1266,20 @@ class Plugin:
         async with _lock():
             if level not in BRIGHTNESS_LEVELS:
                 return {"ok": False, "message": "bad brightness level", "failed": []}
-            res = await asyncio.to_thread(_edit_field, 'brightness', level, None)
+            res = await asyncio.to_thread(_edit_field_recorded, 'brightness', level, None)
         if res["ok"]:
             _save_plugin_state(brightness=level)
         return res
 
     async def get_telemetry(self) -> dict:
         return telemetry()   # a handful of sysfs reads; cheap enough inline
+
+    # ---- Machine timeline (Phase 16f, #134) ----
+    async def get_timeline(self, limit: int = 50) -> list:
+        cap = max(0, int(limit))
+        return await asyncio.to_thread(
+            lambda: timeline.read_entries(TIMELINE_PATH, limit=cap, newest_first=True)
+        )
 
     # ---- Lifecycle ----
     async def _main(self):
@@ -1073,6 +1290,10 @@ class Plugin:
             config_path=INSTALL_JSON, logger=decky.logger, loop=self.loop,
             fatal_name="fatal-decky.log",
         )
+        # Off the startup path: a slow or contended timeline must not delay the watchdog.
+        self._steamos_task = self.loop.create_task(asyncio.to_thread(_check_steamos_build_id))
+        self._steamos_task.add_done_callback(
+            lambda t: t.exception() if not t.cancelled() else None)
         def on_state(state, event):
             if state_events.event_action(event, False) == "refresh":
                 self._backend_state = state or {}
