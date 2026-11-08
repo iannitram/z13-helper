@@ -187,6 +187,31 @@ def test_run_normal_exit_with_grandchild_keeps_output_and_threads(real_subproces
     assert threading.active_count() <= before
 
 
+def test_run_noisy_grandchild_does_not_pin_drain_threads(real_subprocess, monkeypatch):
+    """A background grandchild that writes forever on the inherited pipe must not keep
+    a reader thread (or the pipe fd) alive after run() returns (#30 resource bound)."""
+    import os, threading, time
+    monkeypatch.setattr(host, "MODE", "host")
+    monkeypatch.setattr(host, "MAX_OUTPUT_BYTES", 1000)
+    before = threading.active_count()
+    t0 = time.monotonic()
+    r = host.run(["sh", "-c", "yes & echo $!"], timeout=30)
+    grandchild = int(r.out.split()[0])
+    try:
+        assert r.rc == 0 and not r.timed_out
+        assert len(r.out) <= 1000 + 20
+        assert time.monotonic() - t0 < host.PIPE_GRACE_S + 2
+        deadline = time.monotonic() + 2
+        while threading.active_count() > before and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert threading.active_count() <= before
+    finally:
+        try:
+            os.kill(grandchild, 9)
+        except OSError:
+            pass
+
+
 def test_run_thread_start_failure_never_raises(recorded, monkeypatch):
     proc = FakeProc()
     recorded.answer[0] = lambda cmd, kw: proc

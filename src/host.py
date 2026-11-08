@@ -113,9 +113,9 @@ def holo_or_steamos(name: str) -> str:
 
 
 def _drain(stream, chunks, cap, stop):
-    """Read to EOF or until `stop` is set and nothing is pending; keep at most `cap`
-    bytes, drop the rest. Returns whatever is available instead of waiting for a full
-    block, and polls `stop` so a grandchild holding the pipe cannot pin the thread."""
+    """Read to EOF or until `stop` is set; keep at most `cap` bytes, drop the rest.
+    Returns whatever is available instead of waiting for a full block. `stop` is checked
+    before every read, so a grandchild that keeps the pipe busy cannot pin the thread."""
     kept = 0
     try:
         fd = stream.fileno()
@@ -127,14 +127,12 @@ def _drain(stream, chunks, cap, stop):
             if kept < cap:
                 chunks.append(block[:cap - kept])
                 kept += len(chunks[-1])
-    while True:
+    while not stop.is_set():      # checked per read: a noisy grandchild must not pin the thread
         try:
             ready = select.select([fd], [], [], 0.1)[0]
         except (OSError, ValueError):
             return
         if not ready:
-            if stop.is_set():
-                return
             continue
         try:
             block = os.read(fd, 65536)
