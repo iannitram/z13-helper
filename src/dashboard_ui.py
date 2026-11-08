@@ -580,7 +580,7 @@ class DashboardUI(QMainWindow):
                         "saved_curve": before_mf.get("saved_curve"),
                     },
                     after={
-                        "goal": "max" if target_on else "custom",
+                        "goal": "max" if after_mf.get("enabled") else "custom",
                         "max_fans": bool(after_mf.get("enabled")),
                         "saved_curve": after_mf.get("saved_curve"),
                     },
@@ -640,7 +640,16 @@ class DashboardUI(QMainWindow):
         self._highlight_brightness(level)
 
         def go():
-            failed = self.controller.set_brightness(level, devices=devices)
+            before = {f"{dev}_brightness": self.config.get("brightness") for dev in devices}
+            requested = {f"{dev}_brightness": level for dev in devices}
+            succeeded = []
+            try:
+                failed = self.controller.set_brightness(level, devices=devices)
+                succeeded = [f"{dev}_brightness" for dev in devices if dev not in failed]
+            finally:
+                timeline.record_manual_change(
+                    before=before, requested=requested, succeeded=succeeded,
+                    summary=f"Brightness {label}")
             self.config.set("brightness", level)
             return f"Brightness {label}" + (f" ({', '.join(failed)} not responding)" if failed else "")
         self.control._submit("Brightness", go)

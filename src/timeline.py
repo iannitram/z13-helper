@@ -268,12 +268,11 @@ def _emit_journal(rec, journal, journal_tag, journal_fn):
 
 
 def _append_locked(line, target, max_b, bak_n, owner):
+    if max_b > 0 and len(line) > max_b:
+        raise TimelineError(errno.EFBIG, "timeline entry exceeds max_bytes", target)
     parent = os.path.dirname(os.path.abspath(target))
     resolved_owner = _resolve_owner(parent, owner)
-    st = _check_not_symlink(target)
-    existing_size = st.st_size if st is not None else 0
-    if existing_size > 0 and max_b > 0 and existing_size + len(line) > max_b:
-        _rotate_locked(target, bak_n)
+    _check_not_symlink(target)
 
     fd, open_st = _open_regular_nofollow(
         target, os.O_RDWR | os.O_CREAT | os.O_APPEND, mode=0o644, owner=resolved_owner
@@ -286,13 +285,22 @@ def _append_locked(line, target, max_b, bak_n, owner):
             tail = os.pread(fd, 1, open_st.st_size - 1)
             if tail != b"\n":
                 payload = b"\n" + line
+        if max_b > 0 and open_st.st_size + len(payload) > max_b:
+            os.close(fd)
+            fd = None
+            _rotate_locked(target, bak_n)
+            fd, _ = _open_regular_nofollow(
+                target, os.O_RDWR | os.O_CREAT | os.O_APPEND, mode=0o644, owner=resolved_owner
+            )
+            payload = line
         view = memoryview(payload)
         while view:
             written = os.write(fd, view)
             view = view[written:]
         os.fsync(fd)
     finally:
-        os.close(fd)
+        if fd is not None:
+            os.close(fd)
 
 
 def append(entry, *, path=None, max_bytes=MAX_BYTES, backups=BACKUP_COUNT,
@@ -301,6 +309,7 @@ def append(entry, *, path=None, max_bytes=MAX_BYTES, backups=BACKUP_COUNT,
     """Append one JSONL entry (rotating if over `max_bytes`) and emit Principle 7's
     journal line from the same call when `journal` is True (default for `HOST_KINDS`).
 
+    A single entry larger than a positive `max_bytes` is rejected without rotation.
     With "logging": false in install.json nothing is written to disk (the journal
     line, which is not a file, is still emitted)."""
     target = path or TIMELINE_PATH
@@ -472,6 +481,30 @@ def record_profile_apply(*, profile, previous=None, results=(),
         path=path,
         journal=False,
     )
+
+
+def record_manual_change(*, before, requested, succeeded, summary, path=None):
+    """Best-effort manual write record; saved settings are not hardware readback.
+
+    Failed or unattempted writes have unknown after values and no rollback: a
+    timed-out command may still have reached the hardware.
+    """
+    try:
+        return append({
+            "kind": "profile",
+            "summary": summary,
+            "ok": all(key in succeeded for key in requested),
+            "before": before,
+            "before_source": "saved_settings",
+            "requested": requested,
+            "after": {key: value if key in succeeded else None
+                      for key, value in requested.items()},
+            "changed": [key for key in requested if key in succeeded],
+            "no_rollback_reason": "Prior hardware state not verified; before values are saved settings",
+        }, path=path, journal=False)
+    except Exception:
+        # Recording must never turn a successful hardware write into a failure.
+        return None
 
 
 def record_goal_change(*, goal, previous_goal=None, before=None, after=None,

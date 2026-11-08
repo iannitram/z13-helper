@@ -692,6 +692,16 @@ def set_brightness_per_device(level, recover=None, recover_stale=None):
     recover_stale = recover_stale or recover_lightbar_stale
     if level not in BRIGHTNESS_LEVELS:
         return {"ok": False, "failed": list(LIGHTING_DEVICES), "message": f"bad level {level!r}"}
+    prior = (_load_state().get("brightness") or _shared_config().get("brightness")
+             or (active_profile(_read_store()) or {}).get("brightness"))
+    succeeded = []
+
+    def record():
+        timeline.record_manual_change(
+            before={f"{dev}_brightness": prior for dev in LIGHTING_DEVICES},
+            requested={f"{dev}_brightness": level for dev in LIGHTING_DEVICES},
+            succeeded=succeeded, summary=f"Brightness {level}", path=TIMELINE_PATH)
+
     failed = []
     notes = []
     for dev in LIGHTING_DEVICES:
@@ -699,6 +709,7 @@ def set_brightness_per_device(level, recover=None, recover_stale=None):
         rc, out = _run(argv, timeout=LIGHTING_TIMEOUT_S, as_deck=True)
         timeout_prefix = "z13ctl write timed out after "
         if out.startswith(timeout_prefix):
+            record()
             return {"ok": False, "failed": [dev], "message": out}
         if rc != 0 and dev == "lightbar":
             kind = lightbar_failure_kind(out)
@@ -714,6 +725,7 @@ def set_brightness_per_device(level, recover=None, recover_stale=None):
                     if rc == 0:
                         notes.append("lightbar recovered")
                     elif out.startswith(timeout_prefix):
+                        record()
                         return {"ok": False, "failed": [dev], "message": out}
                     else:
                         notes.append("lightbar still wedged after a reset" if kind == "wedged"
@@ -722,6 +734,9 @@ def set_brightness_per_device(level, recover=None, recover_stale=None):
                     notes.append(rec_msg)
         if rc != 0:
             failed.append(dev)
+        else:
+            succeeded.append(f"{dev}_brightness")
+    record()
     ok = len(failed) < len(LIGHTING_DEVICES)
     if not failed:
         msg = f"Brightness {level}"
@@ -783,6 +798,7 @@ def apply_tdp(enabled, pl1, pl2, pl3, profile=None):
            what hands the limits back to the firmware (desktop does the same).
     """
     tdp = clamp_tdp(pl1, pl2, pl3, tdp_ranges())
+    before = (active_profile(_read_store()) or {}).get("tdp")
     name, err = _set_active_field(profile, tdp=tdp if enabled else None)
     if err and err.startswith("Not applied:"):
         return {"ok": False, "saved": False, "stale": True, "message": err}
@@ -804,6 +820,9 @@ def apply_tdp(enabled, pl1, pl2, pl3, profile=None):
         msg = (f"{name}: power limits back to the firmware" if ok
                else timeout_message if timeout_message
                else f"{name}: saved, but re-apply failed ({out[-120:] or f'rc={rc}'})")
+    timeline.record_manual_change(
+        before={"tdp": before}, requested={"tdp": tdp if enabled else None},
+        succeeded=["tdp"] if ok else [], summary=msg, path=TIMELINE_PATH)
     return {"ok": ok, "saved": True, "message": msg, "tdp": tdp}
 
 
@@ -829,6 +848,7 @@ def apply_battery_limit(value, profile=None):
     """Store the active profile's battery_limit, then `z13ctl batterylimit --set` as deck.
     The hardware write still happens if the store can't be written (reported)."""
     v = clamp_battery(value)
+    before = (active_profile(_read_store()) or {}).get("battery_limit")
     name, err = _set_active_field(profile, battery_limit=v)
     if err and err.startswith("Not applied:"):
         return {"ok": False, "saved": False, "stale": True, "message": err,
@@ -840,6 +860,9 @@ def apply_battery_limit(value, profile=None):
            else f"Charge limit failed ({out[-120:] or f'rc={rc}'})")
     if err:
         msg += f" (not saved to profile: {err})"
+    timeline.record_manual_change(
+        before={"battery_limit": before}, requested={"battery_limit": v},
+        succeeded=["battery_limit"] if ok else [], summary=msg, path=TIMELINE_PATH)
     return {"ok": ok, "saved": err is None, "message": msg, "value": v, "profile": name or ""}
 
 
