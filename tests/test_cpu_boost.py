@@ -33,7 +33,12 @@ def _methods(module, class_name, method_names, namespace):
 
 
 @pytest.fixture
-def boost_ui(profiles_env):
+def boost_ui(profiles_env, monkeypatch):
+    import state_authority as authority
+    # The real edit() runs (store merge, active/inactive routing); only its
+    # edges are replaced: no z13ctl backend, no hardware push, no mirror.
+    monkeypatch.setattr(authority, "named_client", lambda: None)
+
     class Signal:
         def connect(self, callback):
             self.callback = callback
@@ -84,17 +89,20 @@ def boost_ui(profiles_env):
         def setText(self, text):
             self.text = text
 
-    jobs, writes, rows = [], [], []
+    jobs, writes, rows, mirrored = [], [], [], []
     live = {"epp": "balance_power"}
+    monkeypatch.setattr(authority, "mirror_profile", lambda p: mirrored.append(p["name"]))
+    # writes records the value each live push receives (None = "Unchanged").
+    monkeypatch.setattr(authority, "_push_field",
+                        lambda profile, field, devices=None: writes.append(profile.get(field)))
     controller = SimpleNamespace(get_epp_choices=lambda: ["power", "performance"],
-                                 get_epp=lambda: live["epp"],
-                                 set_epp=lambda value: writes.append(value))
+                                 get_epp=lambda: live["epp"])
     control = SimpleNamespace(controller=controller, changed=Signal(),
                               active_name=lambda: "Balanced",
                               shown=lambda: profiles.get_profile("Balanced"),
                               _submit=lambda label, fn: jobs.append(fn))
     methods = _methods("profile_control.py", "ProfileControl", ["save", "_pusher"],
-                       {"profiles": profiles})
+                       {"profiles": profiles, "authority": authority})
     for name in ("save", "_pusher"):
         setattr(control, name, methods[name].__get__(control))
     methods = _methods("dashboard_ui.py", "DashboardUI",
@@ -107,7 +115,8 @@ def boost_ui(profiles_env):
         setattr(ui, name, methods[name].__get__(ui))
     ui._build_epp_ui()
     control.changed.connect(lambda: ui._refresh_epp_ui(control.shown()))
-    return SimpleNamespace(ui=ui, jobs=jobs, writes=writes, rows=rows, live=live)
+    return SimpleNamespace(ui=ui, jobs=jobs, writes=writes, rows=rows, live=live,
+                           mirrored=mirrored)
 
 
 def test_performance_panel_contains_cpu_boost(boost_ui):
@@ -132,10 +141,12 @@ def test_performance_cpu_boost_persists_and_dispatches_only_epp(boost_ui):
     b = boost_ui
     before = profiles.get_profile("Balanced")
     b.ui.epp_combo.setCurrentIndex(b.ui.epp_combo.findData("power"))
-    assert profiles.get_profile("Balanced") == dict(before, epp="power")
-    assert b.writes == []  # the worker owns the hardware write
+    # The UI thread stores nothing; the worker's edit() does, and pushes it live.
+    assert profiles.get_profile("Balanced") == before
+    assert b.writes == []
     assert len(b.jobs) == 1
     b.jobs.pop()()
+    assert profiles.get_profile("Balanced") == dict(before, epp="power")
     assert b.writes == ["power"]
 
 
@@ -167,16 +178,18 @@ def test_performance_cpu_boost_refresh_does_not_write(boost_ui, value):
     assert b.jobs == [] and b.writes == []
 
 
-def test_performance_cpu_boost_unchanged_clears_override_without_write(boost_ui):
+def test_performance_cpu_boost_unchanged_clears_override(boost_ui):
     b = boost_ui
     p = profiles.get_profile("Balanced")
     profiles.upsert_profile(dict(p, epp="power"))
     b.ui._refresh_epp_ui(dict(p, epp="power"))
     b.ui.epp_combo.setCurrentIndex(0)
-    assert profiles.get_profile("Balanced")["epp"] is None
+    assert profiles.get_profile("Balanced")["epp"] == "power"   # not until the worker runs
     assert len(b.jobs) == 1
-    assert b.jobs.pop()() == "unchanged"
-    assert b.writes == []
+    b.jobs.pop()()
+    assert profiles.get_profile("Balanced")["epp"] is None
+    # "Unchanged" reaches the owner with epp=None; state_authority decides what that does.
+    assert b.writes == [None]
 
 
 def test_performance_cpu_boost_edits_the_shown_pending_profile(boost_ui):
@@ -184,9 +197,32 @@ def test_performance_cpu_boost_edits_the_shown_pending_profile(boost_ui):
     before = profiles.get_profile("Balanced")
     b.ui.control.shown = lambda: profiles.get_profile("Turbo")
     b.ui.epp_combo.setCurrentIndex(b.ui.epp_combo.findData("performance"))
+    assert profiles.get_profile("Balanced") == before
+    assert len(b.jobs) == 1
+    b.jobs.pop()()
     assert profiles.get_profile("Turbo")["epp"] == "performance"
     assert profiles.get_profile("Balanced") == before
-    assert b.jobs == [] and b.writes == []
+    assert b.mirrored == ["Turbo"] and b.writes == []
+
+
+def test_saving_a_field_on_an_inactive_profile_goes_through_the_owner(boost_ui):
+    """Regression: save() must not upsert the widget's copy on the UI thread.
+
+    The copy is stale (tdp changed in the store since it was taken). Only the
+    field being saved may change, and the save must reach authority.mirror_profile.
+    """
+    b = boost_ui
+    widget_copy = profiles.get_profile("Turbo")
+    stored_tdp = {"pl1": 40, "pl2": 40, "pl3": 40, "force": False}
+    profiles.upsert_profile(dict(widget_copy, tdp=stored_tdp))
+    b.ui.control.save(dict(widget_copy, epp="performance"), "epp")
+    assert profiles.get_profile("Turbo")["tdp"] == stored_tdp
+    assert len(b.jobs) == 1
+    b.jobs.pop()()
+    after = profiles.get_profile("Turbo")
+    assert after["epp"] == "performance"
+    assert after["tdp"] == stored_tdp           # a field it did not edit is kept
+    assert b.mirrored == ["Turbo"] and b.writes == []
 
 
 # ----------------------------------------------------------------------

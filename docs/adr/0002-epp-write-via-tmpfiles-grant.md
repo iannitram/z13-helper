@@ -8,7 +8,7 @@ So `packaging/host/tmpfiles/z13-helper-epp.conf` makes the EPP attribute of each
 
 - Only `/sys/devices/system/cpu/cpufreq/policy*/energy_performance_preference`. No other sysfs file, no `scaling_governor`, no frequency limits.
 - Group `users` only (the desktop account on SteamOS). Other accounts stay read-only.
-- Effect: any user in `users` can pick one of four EPP hints, which the kernel validates. That can change power and performance, but cannot damage hardware or escalate privilege. The firmware platform profile already resets it on its own.
+- Effect: any user in `users` can pick one of four EPP hints, which the kernel validates. That can change power and performance, but cannot damage hardware or escalate privilege. Whether the firmware platform profile resets EPP on its own is expected but not yet checked on the device.
 - Missing policies (no amd-pstate) are skipped by `systemd-tmpfiles`; the app reports "no node written" instead of success.
 - Read and write both use the policy directories (`epp.policy_paths`, the shell glob in `profiles.EPP_SYSFS_GLOB`), never `cpu{n}`, because a policy number is not a CPU number.
 
