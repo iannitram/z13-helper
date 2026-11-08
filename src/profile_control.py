@@ -41,6 +41,9 @@ class ProfileControl(QObject):
         # Profile the user just picked, shown at once while the apply runs
         # (a wedged lightbar alone makes an apply take 5 s).
         self.pending_name = None
+        # Set by the window: returns False on a machine the app does not support
+        # (platform_support), where no hardware write may be issued.
+        self.writes_allowed = lambda: True
         self.backend_state = {}
         self.state_event.connect(self.dispatch_event)
         self._events = None
@@ -101,6 +104,9 @@ class ProfileControl(QObject):
     def switch(self, name):
         """Apply profile `name` (hooks included) in the background."""
         if name == self.active_name() or name == self.pending_name:
+            return
+        if not self.writes_allowed():
+            self.message.emit("Unsupported machine: hardware controls are disabled")
             return
         self.pending_name = name
         self.message.emit(f"Applying {name}…")
@@ -204,6 +210,9 @@ class ProfileControl(QObject):
         return lambda: authority.edit(profile, field)
 
     def _submit(self, label, fn):
+        if not self.writes_allowed():
+            self.message.emit("Unsupported machine: hardware controls are disabled")
+            return
         self._pending += 1
         self.busy.emit(True)
         self.worker.submit(label, fn)

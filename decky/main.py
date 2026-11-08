@@ -879,7 +879,7 @@ async def fan_watchdog_tick(watchdog):
     """One watchdog tick under the write lock; skipped while a write holds it.
     Returns the watchdog's message (None when it didn't act or was skipped)."""
     lock = _lock()
-    if lock.locked():
+    if lock.locked() or not _writes_allowed():
         return None
     try:
         async with lock:
@@ -893,6 +893,24 @@ async def fan_watchdog_tick(watchdog):
 
 
 _write_lock = None
+
+
+DMI_PRODUCT_NAME = "/sys/class/dmi/id/product_name"
+UNSUPPORTED_MESSAGE = "Unsupported machine: Z13-Helper controls the ROG Flow Z13 (GZ302) only"
+
+
+def _writes_allowed():
+    """False on any machine that is not the Z13 (same rule as src/platform_support.py,
+    which this root-owned backend cannot import). Read-only: DMI product name."""
+    try:
+        with open(DMI_PRODUCT_NAME, encoding="utf-8", errors="replace") as f:
+            return "GZ302" in f.read().upper()
+    except OSError:
+        return False
+
+
+def _unsupported():
+    return {"ok": False, "message": UNSUPPORTED_MESSAGE}
 
 
 def _lock():
@@ -1096,6 +1114,8 @@ class Plugin:
         return bool(_load_max_fans().get("enabled", False))
 
     async def set_max_fans(self, enabled: bool) -> dict:
+        if not _writes_allowed():
+            return _unsupported()
         async with _lock():
             try:
                 message = await asyncio.to_thread(_set_max_fans_recorded, bool(enabled))
@@ -1188,6 +1208,8 @@ class Plugin:
             return {"names": [], "active": ""}
 
     async def set_app_profile(self, name: str) -> dict:
+        if not _writes_allowed():
+            return _unsupported()
         # A full apply takes seconds (longer with a wedged lightbar): keep it off the
         # loader's event loop, and serialised with the other writes.
         async with _lock():
@@ -1212,6 +1234,8 @@ class Plugin:
         active profile cannot drift apart the way a bare `profile --set` let
         them. Unknown names never reach z13ctl.
         """
+        if not _writes_allowed():
+            return _unsupported()
         name = PROFILE_BASES.get(profile)
         if name is None:
             return {"ok": False, "message": f"unknown profile {profile!r}"}
@@ -1249,6 +1273,8 @@ class Plugin:
     # `profile` = the profile the user was editing; omitted (older frontend) = the active one.
     async def set_tdp(self, enabled: bool, pl1: int, pl2: int, pl3: int,
                       profile: str = "") -> dict:
+        if not _writes_allowed():
+            return _unsupported()
         async with _lock():
             tdp = clamp_tdp(pl1, pl2, pl3, tdp_ranges()) if enabled else None
             result = await asyncio.to_thread(_edit_field_recorded, 'tdp', tdp, profile)
@@ -1256,6 +1282,8 @@ class Plugin:
             return result
 
     async def set_battery_limit(self, value: int, profile: str = "") -> dict:
+        if not _writes_allowed():
+            return _unsupported()
         async with _lock():
             value = clamp_battery(value)
             result = await asyncio.to_thread(_edit_field_recorded, 'battery_limit', value, profile)
@@ -1263,6 +1291,8 @@ class Plugin:
             return result
 
     async def set_brightness(self, level: str) -> dict:
+        if not _writes_allowed():
+            return _unsupported()
         async with _lock():
             if level not in BRIGHTNESS_LEVELS:
                 return {"ok": False, "message": "bad brightness level", "failed": []}
