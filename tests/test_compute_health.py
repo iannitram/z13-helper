@@ -148,3 +148,25 @@ def test_smoke_script_reports_unloadable_library(real_subprocess):
                          capture_output=True, text=True, timeout=30).stdout
     data = json.loads(out.splitlines()[-1])
     assert data["ok"] is False and "cannot load" in data["detail"]
+
+
+def test_report_text_keeps_pools_apart_and_marks_unknowns():
+    pytest.importorskip("PyQt6.QtWidgets")          # compute_dialog imports Qt
+    import compute_dialog as cd
+    r = {
+        "memory": {"physical_total": 112 * GIB, "ram_total": 96 * GIB, "ram_available": 60 * GIB,
+                   "ram_used": 36 * GIB, "vram_reserved": 16 * GIB, "vram_used": None,
+                   "gtt_limit": 48 * GIB, "gtt_used": 2 * GIB, "pressure_avg10": None,
+                   "notes": ["note-a"]},
+        "gpu_agents": [{"gfx": "gfx1151", "name": "1002:1586"}], "gfx1151": True, "kernel": "7.2",
+        "runtime": {"ok": True, "hip_libs": [], "rocm_version": None, "vulkan_icds": [],
+                    "kfd_access": True, "render_access": None, "rocminfo": None, "vulkaninfo": None},
+    }
+    text = cd.format_report(r)
+    assert "not additive" in text
+    assert "GTT (shared, inside Linux RAM): up to 48.0 GiB, in use 2.0 GiB" in text
+    assert "Firmware-reserved VRAM: 16.0 GiB, in use unavailable" in text
+    assert "Memory pressure (10 s): unavailable" in text
+    assert "gfx1151 (Strix Halo): yes" in text
+    assert "ROCm/HIP: not found" in text
+    assert "render node access: unavailable" in text
