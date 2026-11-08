@@ -557,6 +557,8 @@ Not issues (checked, nothing to do): the RDNA1/2 dedicated-GPU resume fix (Strix
 
 **Build snapshot (2026-11-07):** #123 has a pure decision-step implementation; it still needs trace/edge-case acceptance. #126's source probe ended with no dependable live FPS source, so Hold FPS remains unavailable. #124 is present from prior work. The goal runner (#125), Comfort probe (#127) and goal UI (#128) remain future builds.
 
+**15d frame-rate probe (#126) record:** each source tried, how it reads, and the pick. (1) gamescope's own stats: needs an output path supplied when gamescope starts; gamescope was not running during the probe, so no live read was made. (2) MangoHud: logging is opt-in and writes historical samples; there is no live read contract for the running process. (3) Steam client via Decky: no frame-rate reading exposed through an interface this plugin uses. Latency and overhead were not measured because no source produced a reading. **Pick: none.** `src/fps_source.read()` returns `None` without I/O, so Hold FPS is a no-go for now; 15f must hide it until a source is demonstrated.
+
 **Done when:** Quiet and Max are verified on the Z13 across a Desktop↔Game Mode switch and resume; Comfort and Hold FPS are verified or recorded as a no-go with the reason; no other code path writes a curve while a goal is active.
 
 ## 10b. Phase 16 — Hardware as the interface 💤 after 1.0 (added 2026-11-01, the owner's pick)
