@@ -66,6 +66,14 @@ class ConfigManager:
         """Gets a configuration value."""
         return self.config.get(key, default)
 
+    def remove(self, key: str):
+        """Drops a configuration key and saves it (no-op if absent)."""
+        with self._lock:
+            if key not in self.config:
+                return
+            del self.config[key]
+        self.save_config()
+
     def set(self, key: str, value):
         """Sets a configuration value and saves it."""
         with self._lock:

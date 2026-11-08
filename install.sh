@@ -11,6 +11,14 @@
 #   ./install.sh --dry-run  show what would change, write nothing (combine with either)
 #   ./install.sh --yes      full install without prompts (logging: yes)
 #   ./install.sh --rebuild  rebuild the Flatpak even if it matches the repo
+#   ./install.sh --post-update [--only amdgpu,rocm]
+#                           after a SteamOS update: pick tasks from a list, or run only
+#                           the named ones; --repair then lists tasks still pending
+#   ./install.sh --system-check checks|repair|suspend|bundle
+#                           after a SteamOS update (#27): checks = inventory checks (read-only);
+#                           repair = print the repair plan, ask, run it (with --yes: no question;
+#                           with --dry-run: plan only); suspend = suspend/resume diagnostic
+#                           (read-only); bundle = preview the redacted support bundle
 #
 # Order (each step independent; a failure is reported, the rest still runs):
 #   1. preflight     SteamOS/kernel, `users` group, sudo, network
@@ -26,7 +34,8 @@
 #   8. verify        tooling/install_check.py verify (runs `z13-profile restore`)
 #
 # Every replaced file is copied to ~/.local/state/z13-helper/install-backups/<stamp>/
-# first; /etc changes also get a `logger -t z13-install` journal line. The run log is
+# first; record() appends one entry to ~/.local/state/z13-helper/timeline.jsonl and
+# emits Principle 7's `logger -t z13-install` journal line from the same call. The run log is
 # ~/.local/state/z13-helper/install-<stamp>.log, and the result is recorded in
 # ~/.config/z13-helper/install.json (with this checkout's path, for the app's
 # "Repair install" button). Exit status: 0 = everything verified green.
@@ -36,17 +45,33 @@
 set -uo pipefail
 
 REPO=$(cd "$(dirname "$0")" && pwd)
-MODE=install DRY=0 YES=0 REBUILD=0
-for a in "$@"; do
+MODE=install DRY=0 YES=0 REBUILD=0 POST_UPDATE=0 SYS_CHECK=
+PU_ARGS=()      # --post-update / --only, handed to `python3 -m post_update` (tooling/post_update/cli.py)
+while (($#)); do
+    a=$1; shift
     case "$a" in
         --repair) MODE=repair ;;
         --dry-run) DRY=1 ;;
         --yes|-y) YES=1 ;;
         --rebuild) REBUILD=1 ;;
-        -h|--help) sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        --post-update) POST_UPDATE=1; PU_ARGS+=(--post-update) ;;
+        --system-check)
+            SYS_CHECK=${1:-}; (($#)) && shift
+            case "$SYS_CHECK" in
+                checks|repair|suspend|bundle) ;;
+                *) echo "--system-check needs one of: checks, repair, suspend, bundle" >&2; exit 2 ;;
+            esac ;;
+        --only)
+            PU_ARGS+=(--only)
+            if (($#)) && [[ $1 != --* ]]; then PU_ARGS+=("$1"); shift; fi ;;
+        -h|--help) sed -n '2,42p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown option: $a (try --help)" >&2; exit 2 ;;
     esac
 done
+if ((!POST_UPDATE)) && [[ ${#PU_ARGS[@]} -gt 0 ]]; then
+    echo "--only needs --post-update" >&2
+    exit 2
+fi
 if [[ $EUID -eq 0 ]]; then
     echo "Run as deck, not root (it uses sudo where it must)." >&2
     exit 2
@@ -79,10 +104,16 @@ export PYTHONDONTWRITEBYTECODE=1
 PY="python3"
 CHECK="$REPO/tooling/install_check.py"
 INSTALLERS="$REPO/src/installers.py"
+# post_update_py ARGS: the post-update runner (tooling/post_update/), as this user.
+post_update_py() { PYTHONPATH="$REPO/tooling:$REPO/src" $PY -m post_update "$@"; }
 PLUGIN_DIR="$HOME/homebrew/plugins/z13-helper"
 PLUGIN_FILES=(plugin.json package.json main.py dist/index.js dist/index.js.map
               py_modules/fan_watchdog.py py_modules/sensor_reader.py py_modules/host.py
-              py_modules/power_range.py py_modules/crash_report.py py_modules/crash_queue.py
+              py_modules/state_authority.py py_modules/state_stream.py py_modules/state_events.py
+              py_modules/z13ctl_client.py py_modules/z13ctl_profiles.py py_modules/profiles.py
+              py_modules/hardware_controller.py py_modules/max_fans_state.py py_modules/epp.py
+              py_modules/power_range.py py_modules/timeline.py
+              py_modules/crash_report.py py_modules/crash_queue.py
               py_modules/crash_scrub.py py_modules/_crash_build.json
               py_modules/compute_health.py)
 # py_modules/X comes from src/X (shared with the desktop app, installed root-owned:
@@ -97,6 +128,7 @@ plugin_src() {
     fi
 }
 export Z13_INSTALL_DRY_RUN=$DRY
+export Z13_INSTALL_PARENT=install.sh
 
 FAILED=() CHANGED=()
 APP_REBUILT=0 PLUGIN_CHANGED=0 NET=1 DESKTOP=0
@@ -709,6 +741,37 @@ host_files() {
     fi
 }
 
+# ----------------------------------------------------------------------
+# 6b. local MCP client registration
+# ----------------------------------------------------------------------
+mcp_registration() {
+    say "MCP server (local stdio)"
+    if ! command -v claude >/dev/null 2>&1; then
+        info "claude not installed; register later with: claude mcp add --scope user z13-helper -- z13-helper mcp"
+        return 0
+    fi
+    if ((DRY)); then
+        info "(dry run) would run: claude mcp add --scope user z13-helper -- z13-helper mcp"
+        return 0
+    fi
+    if claude mcp get z13-helper >/dev/null 2>&1; then
+        info "already registered"
+        return 0
+    fi
+    if act claude mcp add --scope user z13-helper -- z13-helper mcp; then
+        CHANGED+=("Claude MCP server z13-helper")
+    else
+        fail "claude mcp add z13-helper"
+    fi
+}
+
+apply_epp_permissions() {
+    # Only when our EPP rule was (re)installed; boot's systemd-tmpfiles covers the rest.
+    # Use only our EPP rule, never every installed tmpfiles configuration.
+    act sudo systemd-tmpfiles --create /etc/tmpfiles.d/z13-helper-epp.conf \
+        || fail "apply EPP sysfs permissions"
+}
+
 etc_files() {
     say "/etc: resume hook, lightbar reset + polkit rule, atomic-update keep-list"
     local rel dest mode root todo=() keep_missing=() p units_changed=0
@@ -742,6 +805,7 @@ etc_files() {
         CHANGED+=("$dest")
         [[ $dest == *.service ]] && units_changed=1
     done
+    [[ " ${todo[*]} " == *"/etc/tmpfiles.d/z13-helper-epp.conf"* ]] && apply_epp_permissions
     # polkitd picks up rules.d changes by itself; systemd needs a reload for units.
     ((units_changed)) && act sudo systemctl daemon-reload
     if ((!enabled)); then
@@ -778,15 +842,25 @@ verify() {
 
 record() {
     ((DRY)) && return 0
-    $PY - "$MODE" "$1" "$REPO" "$LOG" "$LOGGING" <<'EOF' || warn "could not write ~/.config/z13-helper/install.json"
+    $PY - "$MODE" "$1" "$REPO" "$LOG" "$LOGGING" "$BACKUP" "${#CHANGED[@]}" \
+        ${CHANGED[@]+"${CHANGED[@]}"} ${FAILED[@]+"${FAILED[@]}"} <<'EOF' || warn "could not write ~/.config/z13-helper/install.json"
 import json, os, re, subprocess, sys, time
-mode, verify_rc, repo, log, logging = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4], sys.argv[5]
+mode, verify_rc, repo, log, logging, backup_dir = (
+    sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6]
+)
+n_changed = int(sys.argv[7])
+changed_list = sys.argv[8:8 + n_changed]
+failed_list = sys.argv[8 + n_changed:]
 def out(*a):
     try:
         return subprocess.run(a, capture_output=True, text=True, timeout=20).stdout.strip()
     except (OSError, subprocess.SubprocessError):
         return ""
-osr = dict(l.strip().split("=", 1) for l in open("/etc/os-release") if "=" in l)
+os_rel_path = os.environ.get("Z13_OS_RELEASE", "/etc/os-release")
+try:
+    osr = dict(l.strip().split("=", 1) for l in open(os_rel_path) if "=" in l)
+except OSError:
+    osr = {}
 m = re.search(r"\d+\.\d+\.\d+", out(os.path.expanduser("~/.local/bin/z13ctl"), "--version"))
 try:
     decky = open(os.path.expanduser("~/homebrew/services/.loader.version")).read().strip()
@@ -800,6 +874,9 @@ try:
         rec = {}
 except (OSError, ValueError):
     rec = {}
+prev_rec = dict(rec)
+ver_id = osr.get("VERSION_ID", "?").strip(chr(34)).strip("'")
+cur_build = osr.get("BUILD_ID", "?").strip(chr(34)).strip("'")
 rec.update({                      # keys this run doesn't know about are kept
     "date": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
     "mode": mode,
@@ -808,7 +885,8 @@ rec.update({                      # keys this run doesn't know about are kept
     "z13ctl": m.group(0) if m else None,
     "decky_loader": decky,
     "flatpak_commit": (re.search(r"Commit:\s*(\S+)", out("flatpak", "info", "io.github.iannitram.Z13Helper")) or [None, None])[1],
-    "steamos": f"{osr.get('VERSION_ID', '?').strip(chr(34))} ({osr.get('BUILD_ID', '?').strip(chr(34))})",
+    "steamos": f"{ver_id} ({cur_build})",
+    "build_id": cur_build if cur_build and cur_build != "?" else None,
     "kernel": os.uname().release,
     "repo_path": repo,            # the app's "Repair install" button runs <repo_path>/install.sh
     "log": log,
@@ -819,11 +897,60 @@ os.makedirs(os.path.dirname(path), exist_ok=True)
 with open(path + ".tmp", "w") as f:
     json.dump(rec, f, indent=2)
 os.replace(path + ".tmp", path)
+
+src_dir = os.path.join(repo, "src")
+if os.path.isdir(src_dir) and src_dir not in sys.path:
+    sys.path.insert(0, src_dir)
+try:
+    import timeline
+    keys = ("z13ctl", "decky_loader", "flatpak_commit", "steamos", "kernel", "repo_commit")
+    before_snap = {k: prev_rec.get(k) for k in keys if k in prev_rec}
+    after_snap = {k: rec.get(k) for k in keys}
+    prev_build = prev_rec.get("build_id")
+    if not (isinstance(prev_build, str) and prev_build.strip() and prev_build.strip() != "?"):
+        bm = re.search(r"\(([^()?]+)\)\s*$", str(prev_rec.get("steamos") or "").strip())
+        prev_build = bm.group(1).strip() if bm else None
+    if prev_build and cur_build and cur_build != "?" and prev_build != cur_build:
+        timeline.record_steamos_update(
+            before_build_id=prev_build,
+            after_build_id=cur_build,
+            before=before_snap,
+            after=after_snap,
+        )
+    if changed_list or failed_list:   # a run that changed nothing is not timeline news
+        timeline.record_install(
+            mode=mode,
+            target="host",
+            before=before_snap,
+            after=after_snap,
+            changed=changed_list,
+            failed=failed_list,
+            backup_dir=backup_dir,
+            ok=(verify_rc == 0 and not failed_list),
+        )
+except Exception as exc:
+    sys.stderr.write(f"warn: could not append timeline entry: {exc}\n")
 EOF
 }
 
 # ----------------------------------------------------------------------
 main() {
+    if [[ -n $SYS_CHECK ]]; then
+        say "System check: $SYS_CHECK"
+        local sc=("$SYS_CHECK")
+        if [[ $SYS_CHECK == repair ]]; then
+            ((DRY)) && sc+=(--plan-only)
+            ((YES && !DRY)) && sc+=(--yes)
+        fi
+        post_update_py "${sc[@]}"
+        return $?
+    fi
+    if ((POST_UPDATE)); then
+        say "Post-update tasks"
+        local pu=("${PU_ARGS[@]}"); ((DRY)) && pu+=(--dry-run)
+        post_update_py "${pu[@]}"
+        return $?
+    fi
     rename_migration
     logging_choice
     if preflight; then
@@ -834,6 +961,7 @@ main() {
     fi
     flatpak_app
     host_files
+    mcp_registration
     if ((DRY)) || sudo -n true 2>/dev/null; then
         etc_files
     else
@@ -851,6 +979,11 @@ main() {
     fi
     if ((${#FAILED[@]})); then
         info "failed steps:"; printf '    - %s\n' "${FAILED[@]}"
+    fi
+    if [[ $MODE == repair ]]; then
+        say "Post-update tasks"
+        post_update_py --list-pending || warn "could not list post-update tasks"
+        info "run ./install.sh --post-update to pick and run them"
     fi
     info "log: $LOG"
     if ((vrc == 0 && ${#FAILED[@]} == 0)); then

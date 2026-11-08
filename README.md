@@ -227,6 +227,16 @@ One profile store drives the desktop app, the Decky plugin and the host command
 **`z13-profile`** (`list`, `active`, `show`, `apply`, `restore`). `z13-profile` is the same Python file as the
 app's profile engine.
 
+**`z13-helper`** installs beside it and covers the rest of the app: `status`,
+`profile list|get|set|apply`, `tdp`, `fans curve get|set`, `fans max-fans on|off`, `battery`,
+`brightness`, `lighting`, `boondock`, `button`, `post-update list|run`,
+`crash queue|list|upload` and `version`. Every command accepts `--json`. It reads through the
+same shared modules, writes only through the state owner, and clamps values to the GUI's safe
+ranges, so it cannot race a running app. `z13-profile` remains the profile engine's own entry
+point, backed by the same store. `z13-helper mcp` serves the same commands as local Model Context
+Protocol tools over stdio (no listener or network); `install.sh` registers it with
+`claude mcp add z13-helper -- z13-helper mcp`.
+
 Built-in Balanced and Turbo curves start with a 20 °C plateau. Exact old built-ins and matching
 enabled Max Fans restore snapshots migrate with backups; edited/custom curves are preserved.
 App profiles and z13ctl's named profiles remain separate stores (#23). Before a fan-only apply,

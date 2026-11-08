@@ -96,6 +96,7 @@ def rocm_recipe(sys_: Sys) -> Recipe:
         network=True,
         pacman=True,
         replaces=(ROCM_LD_CONF, ROCM_PROFILE),
+        undo="installed ROCm packages stay; remove them with pacman -R if you do not want them",
     )
 
 

@@ -49,7 +49,11 @@ DECKY_PLUGIN = os.path.join(HOME, "homebrew", "plugins", "z13-helper")
 DECKY_LOGS = os.path.join(HOME, "homebrew", "logs", "z13-helper")
 DECKY_FILES = ["plugin.json", "package.json", "main.py", "dist/index.js",
                "py_modules/fan_watchdog.py", "py_modules/sensor_reader.py", "py_modules/host.py",
-               "py_modules/power_range.py", "py_modules/crash_report.py", "py_modules/crash_queue.py",
+               "py_modules/state_authority.py", "py_modules/state_stream.py", "py_modules/state_events.py",
+               "py_modules/z13ctl_client.py", "py_modules/z13ctl_profiles.py", "py_modules/profiles.py",
+               "py_modules/hardware_controller.py", "py_modules/max_fans_state.py", "py_modules/epp.py",
+               "py_modules/power_range.py", "py_modules/timeline.py",
+               "py_modules/crash_report.py", "py_modules/crash_queue.py",
                "py_modules/crash_scrub.py", "py_modules/_crash_build.json",
                "py_modules/compute_health.py"]
 
@@ -62,11 +66,51 @@ def decky_source(f):
         return os.path.join(REPO, "src", f[len("py_modules/"):])
     return os.path.join(REPO, "decky", f)
 
+# A private build supplies src/_crash_build.json; otherwise the empty default
+# keeps automatic and CLI crash uploads unavailable, as for the Decky installer.
+_CRASH_BUILD = ("src/_crash_build.json" if os.path.isfile(os.path.join(REPO, "src", "_crash_build.json"))
+                else "src/crash_build_defaults.json")
+
 # (repo path, installed path, mode, needs root)
 MANIFEST = [
     ("src/profiles.py", f"{BIN}/z13-profile", "755", False),
+    ("src/z13_helper_cli.py", f"{BIN}/z13-helper", "755", False),
+    # `z13-helper mcp` imports the CLI module from the host library folder.
+    ("src/z13_helper_cli.py", f"{LIB}/z13_helper_cli.py", "644", False),
+    ("src/mcp_server.py", f"{LIB}/mcp_server.py", "644", False),
     # z13-profile's host seam (profiles.py puts this folder on sys.path).
     ("src/host.py", f"{LIB}/host.py", "644", False),
+    ("src/timeline.py", f"{LIB}/timeline.py", "644", False),
+    ("src/state_authority.py", f"{LIB}/state_authority.py", "644", False),
+    ("src/state_stream.py", f"{LIB}/state_stream.py", "644", False),
+    ("src/state_events.py", f"{LIB}/state_events.py", "644", False),
+    ("src/z13ctl_client.py", f"{LIB}/z13ctl_client.py", "644", False),
+    ("src/z13ctl_profiles.py", f"{LIB}/z13ctl_profiles.py", "644", False),
+    ("src/profiles.py", f"{LIB}/profiles.py", "644", False),
+    ("src/hardware_controller.py", f"{LIB}/hardware_controller.py", "644", False),
+    ("src/max_fans_state.py", f"{LIB}/max_fans_state.py", "644", False),
+    ("src/epp.py", f"{LIB}/epp.py", "644", False),
+    ("src/versions.py", f"{LIB}/versions.py", "644", False),
+    ("src/power_range.py", f"{LIB}/power_range.py", "644", False),
+    ("src/sensor_reader.py", f"{LIB}/sensor_reader.py", "644", False),
+    ("src/screen_brightness.py", f"{LIB}/screen_brightness.py", "644", False),
+    ("src/evdev_listener.py", f"{LIB}/evdev_listener.py", "644", False),
+    ("src/crash_report.py", f"{LIB}/crash_report.py", "644", False),
+    ("src/crash_queue.py", f"{LIB}/crash_queue.py", "644", False),
+    ("src/crash_scrub.py", f"{LIB}/crash_scrub.py", "644", False),
+    (_CRASH_BUILD, f"{LIB}/_crash_build.json", "644", False),
+    ("tooling/post_update/__init__.py", f"{LIB}/post_update/__init__.py", "644", False),
+    ("tooling/post_update/builtin.py", f"{LIB}/post_update/builtin.py", "644", False),
+    ("tooling/post_update/builtin_4_6.py", f"{LIB}/post_update/builtin_4_6.py", "644", False),
+    ("tooling/post_update/cmdline.py", f"{LIB}/post_update/cmdline.py", "644", False),
+    ("tooling/post_update/health.py", f"{LIB}/post_update/health.py", "644", False),
+    ("tooling/post_update/local.py", f"{LIB}/post_update/local.py", "644", False),
+    ("tooling/post_update/bluetooth.py", f"{LIB}/post_update/bluetooth.py", "644", False),
+    ("tooling/post_update/probes.py", f"{LIB}/post_update/probes.py", "644", False),
+    ("tooling/post_update/recipe.py", f"{LIB}/post_update/recipe.py", "644", False),
+    ("tooling/post_update/registry.py", f"{LIB}/post_update/registry.py", "644", False),
+    ("tooling/post_update/runner.py", f"{LIB}/post_update/runner.py", "644", False),
+
     ("tooling/profiles/z13-max", f"{BIN}/z13-max", "755", False),
     ("tooling/profiles/z13-balanced", f"{BIN}/z13-balanced", "755", False),
     ("tooling/profiles/z13-cool", f"{BIN}/z13-cool", "755", False),
@@ -77,6 +121,14 @@ MANIFEST = [
     ("tooling/z13_gamemode_report.py", f"{BIN}/z13-gamemode-report", "755", False),
     ("packaging/host/gamescope/displays/asus.rogflowz13.lcd.lua",
      f"{HOME}/.config/gamescope/scripts/00-gamescope/displays/asus.rogflowz13.lcd.lua", "644", False),
+    ("packaging/host/udev/50-mt7925-bt-no-autosuspend.rules",
+     f"{LIB}/packaging/host/udev/50-mt7925-bt-no-autosuspend.rules", "644", False),
+    ("packaging/host/systemd/system/bt-mt7925-cycle.service",
+     f"{LIB}/packaging/host/systemd/system/bt-mt7925-cycle.service", "644", False),
+    ("packaging/host/systemd/system/mt7925-bt-resume.service",
+     f"{LIB}/packaging/host/systemd/system/mt7925-bt-resume.service", "644", False),
+    ("packaging/host/systemd/system/mt7925-bt-resume.sh",
+     f"{LIB}/packaging/host/systemd/system/mt7925-bt-resume.sh", "755", False),
     ("tooling/diag/z13-memory-check", f"{BIN}/z13-memory-check", "755", False),
     ("tooling/diag/z13-storage-check", f"{BIN}/z13-storage-check", "755", False),
     ("tooling/diag/z13-whereami", f"{BIN}/z13-whereami", "755", False),
@@ -88,6 +140,7 @@ MANIFEST = [
     ("packaging/host/systemd/system/z13-lightbar-reset.sh", f"{ETC_UNITS}/z13-lightbar-reset.sh", "755", True),
     ("packaging/host/systemd/system/z13-lightbar-reset.service", f"{ETC_UNITS}/z13-lightbar-reset.service", "644", True),
     ("packaging/host/polkit/50-z13-lightbar-reset.rules", POLKIT_RULE, "644", True),
+    ("packaging/host/tmpfiles/z13-helper-epp.conf", "/etc/tmpfiles.d/z13-helper-epp.conf", "644", True),
 ]
 USER_UNITS_ENABLED = ["z13-button-watcher.service",
                       "z13-helper.service", "z13-restore-profile.service", "z13ctl.socket"]
@@ -99,6 +152,7 @@ KEEP_LIST = [
     f"{ETC_UNITS}/z13-lightbar-reset.sh",
     f"{ETC_UNITS}/z13-lightbar-reset.service",
     POLKIT_RULE,
+    "/etc/tmpfiles.d/z13-helper-epp.conf",
     f"{ETC_UNITS}/z13ctl-perms.service",
     "/etc/udev/rules.d/99-z13ctl.rules",
 ]

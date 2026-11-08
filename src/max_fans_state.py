@@ -6,6 +6,10 @@ caching:
 
     {"enabled": bool, "saved_curve": [[temp, pwm], ... 8 points]}
 
+A `suspended` string is present only while an apply is holding Max Fans off
+after a timed-out hardware write; the UI can show it and the watchdog must not
+guess the hardware state.
+
 decky/main.py carries a copy of this logic (it can't import from the app).
 The legacy config.json keys `fans_max` / `fan_curve_saved` are read only to
 seed this file the first time.
@@ -16,9 +20,12 @@ import stat
 import errno
 import fcntl
 import json
+import logging
 import os
 import threading
 import time
+
+logger = logging.getLogger(__name__)
 
 STATE_PATH = os.path.expanduser("~/.config/z13-helper/max-fans.json")
 
@@ -28,7 +35,11 @@ STATE_PATH = os.path.expanduser("~/.config/z13-helper/max-fans.json")
 # serialises threads and processes alike (flock is per open file). Copy of profiles.file_lock
 # (z13-profile is a single installed file, so it can't import this).
 _lock_state = threading.local()
+_lock_fallback_warned = False
 LOCK_TIMEOUT = 10.0   # seconds to wait for another writer before giving up
+
+
+_NO_LOCK_ERRNOS = {errno.EROFS}
 
 
 class StoreLockError(OSError):
@@ -100,10 +111,20 @@ def file_lock(path):
         if fd is not None:
             os.close(fd)
         raise
-    except OSError:
+    except OSError as e:
         if fd is not None:
             os.close(fd)
-        fd = None   # can't lock (read-only dir?): behave as before, unlocked
+        if e.errno not in _NO_LOCK_ERRNOS:
+            # EACCES and the like mean another writer may hold a lock we can't
+            # open: writing unlocked would lose its update. Fail instead.
+            raise
+        global _lock_fallback_warned
+        if not _lock_fallback_warned:
+            _lock_fallback_warned = True
+            logger.warning(
+                "Cannot lock %s (%s); continuing without a lock", lock_path, e
+            )
+        fd = None   # read-only filesystem: nothing else can be writing either
     held[path] = 1
     try:
         yield
@@ -127,6 +148,11 @@ def load() -> dict | None:
 
 def is_enabled() -> bool:
     return bool((load() or {}).get("enabled", False))
+
+
+def is_suspended() -> bool:
+    """An apply timed out and left the hardware state unknown."""
+    return (load() or {}).get("suspended") is not None
 
 
 def saved_curve():

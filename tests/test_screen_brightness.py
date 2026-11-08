@@ -40,16 +40,21 @@ def test_sysfs_fallback_reads_and_writes_latest(tmp_path, fake_host, monkeypatch
     bl = _backlight(tmp_path, "amdgpu_bl0", 31225, 62451)
     done = threading.Event()
     run = fake_host.run
-    monkeypatch.setattr(sb.host, "run", lambda *a, **kw: (run(*a, **kw), done.set())[0])
+    monkeypatch.setattr(sb.state_authority.host, "run", lambda *a, **kw: (run(*a, **kw), done.set())[0])
 
     s = sb.ScreenBrightness(bus=None, backlight_root=str(tmp_path))
     assert s.available() and s.backend.name == "sysfs"
     assert s.get() == 50
+    entered = []
+    real_tx = sb.state_authority.transaction
+    monkeypatch.setattr(sb.state_authority, "transaction",
+                        lambda: (entered.append(1), real_tx())[1])
     s.set(0)                                   # clamped to MIN_PERCENT, not 0
     assert done.wait(2)
     call = fake_host.calls[-1]
     assert call.argv == ["tee", str(bl / "brightness")]
     assert call.input == f"{sb.to_raw(sb.MIN_PERCENT, 62451)}\n"
+    assert entered, "backlight write must run inside the authority transaction"
 
 
 def test_no_backlight_at_all(tmp_path):
