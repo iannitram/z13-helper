@@ -943,12 +943,17 @@ def backend_rss_kib(path="/proc/self/status"):
     raise ValueError("missing VmRSS")
 
 
+def _rss_guard_exits():
+    return os.environ.get("Z13_RSS_GUARD_EXIT") == "1"
+
+
 class BackendMemoryGuard:
     """One stoppable monitor per backend; no sample history or child processes.
 
-    A trip exits this backend (hard cap) unless Z13_RSS_GUARD_EXIT=0 is set in the
-    plugin_loader environment, which makes it log once instead. Exit rather than
-    restarting plugin_loader (which would disrupt all plugins).
+    A trip logs once by default. The hard cap (exit this backend) is opt-in with
+    Z13_RSS_GUARD_EXIT=1 in the plugin_loader environment, until a device check
+    confirms Decky respawns the backend. Exit rather than restarting
+    plugin_loader (which would disrupt all plugins).
     Per-plugin process isolation and any respawn are UNVERIFIED assumptions
     (no Decky version/source cited); reloading this plugin after a trip is a
     device/operator recovery step.
@@ -963,13 +968,13 @@ class BackendMemoryGuard:
         self._thread = threading.Thread(target=self._run, name="z13-rss-guard", daemon=True)
 
     def _default_terminate(self, code):
-        """Exit by default; Z13_RSS_GUARD_EXIT=0 (operator opt-out, see
-        docs/fan-watchdog-memory.md) logs once and keeps the plugin running."""
-        if os.environ.get("Z13_RSS_GUARD_EXIT") != "0":
+        """Log once by default; Z13_RSS_GUARD_EXIT=1 (operator opt-in, see
+        docs/fan-watchdog-memory.md) exits the plugin process instead."""
+        if _rss_guard_exits():
             os._exit(code)
         if not self._tripped:
             self._tripped = True
-            decky.logger.error("Backend RSS over limit; not exiting (Z13_RSS_GUARD_EXIT=0)")
+            decky.logger.error("Backend RSS over limit; not exiting (set Z13_RSS_GUARD_EXIT=1 to exit)")
 
     def start(self):
         self._thread.start()
@@ -992,8 +997,9 @@ class BackendMemoryGuard:
         # os._exit bypasses cleanup that might hang or allocate more memory.
         # Report to stderr first; do not depend on a logging handler's lock.
         try:
+            action = "exiting plugin process" if _rss_guard_exits() else "log only"
             os.write(2, f"z13-helper backend RSS guard: rss_kib={rss} "
-                     f"limit_kib={BACKEND_RSS_LIMIT_KIB}; exiting plugin process\n".encode())
+                     f"limit_kib={BACKEND_RSS_LIMIT_KIB}; {action}\n".encode())
         finally:
             self._terminate(1)
         return True
