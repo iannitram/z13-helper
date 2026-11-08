@@ -18,6 +18,19 @@ the device but not yet verified on the Z13. Plan and status: `docs/ROADMAP.md`.
 
 ## Unreleased
 
+- **Resume restore defers to z13ctl 1.4.2+ when its saved state matches (Refs #80; on-device five-cycle check pending).** `z13-profile resume-owner` compares the active app profile, Max Fans intent and z13ctl's saved named profile using files only. The system resume hook defers only when the version is at least 1.4.2 and the ownership check succeeds; every uncertain case retains the full restore and protective-curve fallback.
+- **Crash reports sort into the drop's `z13-helper/` folder (Refs #82).** `upload_report` PUTs to `<base>/public.php/dav/files/<token>/z13-helper/<name>` (`DROP_FOLDER`); the drop creates the folder itself. Queued retries go through the same function, so they land there too.
+
+- Fan watchdog: Max Fans' dropped-curve recovery waits 10 s for the z13ctl daemon's own re-apply, and no longer fires right after resume (Refs #66).
+
+- **CPU Boost (EPP) per profile (#64; on-device check pending).** The Performance panel and the Fans window share one CPU Boost combo with a live "Now:" readout. Profiles may carry an EPP value, written by the desktop user to every cpufreq policy node (read and write both use `policy*`). `packaging/host/tmpfiles/z13-helper-epp.conf` makes only those nodes group-writable for `users`; why and the scope are in `docs/adr/0002-epp-write-via-tmpfiles-grant.md`.
+  - Crash reports read the account record with `getattr`: the new EPP tests run with partial account records, and the scrubber must not raise on a missing field.
+  - The installer tests build their tarball with `TarInfo` instead of `tarfile.add`: `tarfile.add` does an ambient passwd lookup, and other tests mock that lookup with a lightweight owner record.
+- **Restore works on z13ctl 1.4.2 (#179).** Built-in profiles no longer send the capitalized
+  names z13ctl rejects (or a name equal to a firmware base); they use generated lowercase backend
+  names. Undervolt writes are skipped when the daemon reports `undervolt_available: false`, so
+  `z13-profile restore` no longer aborts before the saved fan curve is applied.
+
 - **Automatic crash reporting (#82; live upload check pending).** Configured builds
   queue scrubbed exception and fatal reports from the desktop app and Decky plugin
   for background upload to the shared bug drop. Help → Error log has a default-on

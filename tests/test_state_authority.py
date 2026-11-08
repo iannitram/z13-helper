@@ -12,6 +12,10 @@ import max_fans_state
 import state_authority as authority
 from z13ctl_client import Z13CtlClient, Z13CtlError
 
+# z13ctl backend names of the built-ins (no fixed named profiles, issue #179).
+BAL = Z13CtlClient.backend_profile_name('Balanced')
+TUR = Z13CtlClient.backend_profile_name('Turbo')
+
 
 REAL_PROBE = authority.named_client
 
@@ -19,7 +23,7 @@ REAL_PROBE = authority.named_client
 class Daemon(Z13CtlClient):
     def __init__(self):
         self.calls = []
-        self.state = {'profile': 'Balanced', 'custom_profiles': {}}
+        self.state = {'profile': BAL, 'custom_profiles': {}}
         self.fail = None
 
     def request(self, cmd, **fields):
@@ -70,12 +74,12 @@ def test_full_apply_mirrors_all_fields_and_selects_only_after_target_is_ready(da
     p['undervolt'] = 0  # zero is a real override, not an absent value
     result = profiles.apply(p, skip_hooks=True)
     assert all(ok for _, ok, _ in result)
-    assert daemon.state['profile'] == 'Turbo'
+    assert daemon.state['profile'] == TUR
     cmds = [cmd for cmd, _ in daemon.calls]
     assert cmds.index('profile-create') < cmds.index('fancurve') < cmds.index('tdp') < cmds.index('undervolt')
-    assert daemon.calls[-1] == ('profile', {'set': 'Turbo'})
+    assert daemon.calls[-1] == ('profile', {'set': TUR})
     assert not any(a[1] in ('tdp', 'fancurve', 'undervolt') for a in fake_host.argvs)
-    assert all(fields.get('profile') == 'Turbo' for cmd, fields in daemon.calls
+    assert all(fields.get('profile') == TUR for cmd, fields in daemon.calls
                if cmd in ('tdp', 'fancurve', 'undervolt'))
 
 
@@ -85,7 +89,7 @@ def test_mirror_failure_never_selects_partial_target_or_falls_back(daemon, fake_
     assert any(not ok for _, ok, _ in results)
     assert daemon.state['profile'] == 'performance'
     assert not fake_host.calls
-    assert not any(cmd == 'profile' and f['set'] == 'Turbo' for cmd, f in daemon.calls)
+    assert not any(cmd == 'profile' and f['set'] == TUR for cmd, f in daemon.calls)
 
 
 def test_stale_frontend_edit_is_stored_but_never_applied_to_another_profile(daemon, fake_host):
@@ -106,24 +110,24 @@ def test_inactive_profile_edit_persists_and_does_not_raise(daemon, fake_host):
     authority.edit(p, 'tdp')
     assert profiles.get_profile('Turbo')['tdp']['pl1'] == 45
     assert profiles.active_name() == 'Balanced'
-    assert daemon.state['profile'] == 'Balanced'
+    assert daemon.state['profile'] == BAL
     assert not fake_host.calls
     # Only the edited profile's own named target is written; live selection never moves.
     assert not any(cmd == 'profile' for cmd, _ in daemon.calls)
-    assert all(f.get('profile') == 'Turbo' for cmd, f in daemon.calls
+    assert all(f.get('profile') == TUR for cmd, f in daemon.calls
                if cmd in ('tdp', 'fancurve', 'undervolt'))
 
 
 def test_live_slider_edit_targets_named_profile_without_default_custom(daemon, fake_host):
     authority.set_field('tdp', {'pl1': 40, 'pl2': 50, 'pl3': 60}, 'Balanced')
     edits = [fields for cmd, fields in daemon.calls if cmd == 'tdp']
-    assert edits == [{'profile': 'Balanced', 'set': '40', 'pl2': '50', 'pl3': '60'}]
+    assert edits == [{'profile': BAL, 'set': '40', 'pl2': '50', 'pl3': '60'}]
     assert profiles.get_profile('Balanced')['tdp']['pl1'] == 40
     assert not fake_host.calls
 
 
 def test_cli_changes_are_reflected_without_hardware_writes(daemon, fake_host):
-    daemon.state['custom_profiles']['Balanced']['tdp'] = {'pl1_spl': 35, 'pl2_sppt': 45, 'fppt': 55}
+    daemon.state['custom_profiles'][BAL]['tdp'] = {'pl1_spl': 35, 'pl2_sppt': 45, 'fppt': 55}
     daemon.state['battery_limit'] = 85
     daemon.state['lighting'] = {'brightness': 1}
     profiles.sync_active_from_backend(daemon.state)
@@ -140,7 +144,7 @@ def test_max_fans_uses_the_same_target_and_only_publishes_confirmed_success(daem
     with pytest.raises(RuntimeError):
         authority.set_max_fans(True)
     assert not max_fans_state.is_enabled()
-    assert any(f.get('profile') == 'Balanced' for c, f in daemon.calls if c == 'fancurve')
+    assert any(f.get('profile') == BAL for c, f in daemon.calls if c == 'fancurve')
 
 
 @pytest.mark.parametrize('reply', ['garbage', '{}', '[{}]'])
@@ -189,7 +193,7 @@ def test_inactive_custom_profile_is_mirrored_without_changing_live_selection(dae
     assert 'Saved' in authority.mirror_profile(p)
     saved = profiles.get_profile('Travel')
     assert saved['z13ctl_profile'] in daemon.state['custom_profiles']
-    assert daemon.state['profile'] == 'Balanced'
+    assert daemon.state['profile'] == BAL
     assert not any(cmd == 'profile' for cmd, _ in daemon.calls)
     assert not fake_host.calls
 
@@ -197,7 +201,7 @@ def test_inactive_custom_profile_is_mirrored_without_changing_live_selection(dae
 def test_stale_widget_cannot_overwrite_unrelated_backend_fields(daemon, fake_host):
     old = profiles.get_profile('Balanced')
     old['tdp'] = {'pl1': 40, 'pl2': 50, 'pl3': 60}
-    daemon.state['custom_profiles']['Balanced']['undervolt'] = {'cpu_co': -5}
+    daemon.state['custom_profiles'][BAL]['undervolt'] = {'cpu_co': -5}
     authority.edit(old, 'tdp')
     assert profiles.get_profile('Balanced')['undervolt'] == -5
 
@@ -246,7 +250,7 @@ def test_profile_apply_and_queued_slider_share_one_transaction(daemon, fake_host
 
 def test_rebuilding_a_lower_tdp_profile_clears_its_old_limit_before_curve(daemon, fake_host):
     original = daemon.request
-    daemon.state['custom_profiles']['Balanced']['tdp'] = {'pl1_spl': 80, 'pl2_sppt': 90, 'fppt': 93}
+    daemon.state['custom_profiles'][BAL]['tdp'] = {'pl1_spl': 80, 'pl2_sppt': 90, 'fppt': 93}
     def request(cmd, **fields):
         if cmd == 'fancurve':
             old = daemon.state['custom_profiles'][fields['profile']].get('tdp')
@@ -258,8 +262,8 @@ def test_rebuilding_a_lower_tdp_profile_clears_its_old_limit_before_curve(daemon
     p['tdp'] = {'pl1': 40, 'pl2': 50, 'pl3': 60}
     results = profiles.apply(p, skip_hooks=True)
     assert all(ok for _, ok, _ in results), results
-    assert daemon.state['custom_profiles']['Balanced']['tdp']['pl1_spl'] == 40
-    assert daemon.state['profile'] == 'Balanced'
+    assert daemon.state['custom_profiles'][BAL]['tdp']['pl1_spl'] == 40
+    assert daemon.state['profile'] == BAL
 
 
 def test_backend_base_snapshot_preserves_an_empty_app_profile_alias(daemon, fake_host):
@@ -297,3 +301,26 @@ def test_platform_profile_switch_holds_the_shared_hardware_lock(fake_host, monke
     assert result.rc == 0
     assert held
     assert fake_host.argvs == [['z13ctl', 'profile', '--set', 'balanced']]
+
+
+# ----------------------------------------------------------------------
+# CPU Boost (EPP) through the real _push_field: stubs only host.run and profiles.apply
+# ----------------------------------------------------------------------
+
+def test_epp_none_is_a_noop_and_never_a_full_apply(monkeypatch, fake_host):
+    applied = []
+    monkeypatch.setattr(profiles, 'apply', lambda *a, **k: applied.append(a) or [])
+    result = authority._push_field({'name': 'Balanced', 'epp': None}, 'epp')
+    assert result == 'CPU Boost: unchanged'
+    assert applied == []
+    assert fake_host.calls == []
+
+
+def test_epp_value_writes_only_the_epp_node(monkeypatch, fake_host):
+    applied = []
+    monkeypatch.setattr(profiles, 'apply', lambda *a, **k: applied.append(a) or [])
+    authority._push_field({'name': 'Balanced', 'epp': 'power'}, 'epp')
+    assert applied == []
+    assert fake_host.argvs == [profiles.epp_argv('power')]
+    assert not any('z13ctl' in ' '.join(a) or 'platform_profile' in ' '.join(a)
+                   for a in fake_host.argvs)

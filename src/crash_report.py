@@ -27,6 +27,7 @@ RAW_LINE_CAP_BYTES = 8 * 1024   # 500 lines x 8 KiB = 4 MiB worst case (see #30)
 MAX_FATAL_BYTES = 256 * 1024
 MAX_FATAL_READ_BYTES = 1024 * 1024
 MESSAGE_CAP = 4096
+DROP_FOLDER = "z13-helper"   # reports sort into this folder of the shared drop
 REPORT_CAP_BYTES = 512 * 1024
 SETTING = "send_crash_reports"
 BUILD_CONFIG = Path(__file__).with_name("_crash_build.json")
@@ -337,8 +338,10 @@ class CrashReporter:
                 text = text.replace(self.build[key], "<redacted>")
             text = scrub(text, **identities)
             if account:
-                text = scrub(text, home=account.pw_dir, user=account.pw_name)
-                text = scrub(text, home="", user=account.pw_gecos.split(",")[0] or None)
+                text = scrub(text, home=getattr(account, "pw_dir", None),
+                             user=getattr(account, "pw_name", None))
+                gecos = getattr(account, "pw_gecos", "")
+                text = scrub(text, home="", user=gecos.split(",")[0] or None)
             return text
 
         # Redact before the size caps: a cut landing inside an identifier would
@@ -361,9 +364,13 @@ def upload_report(build, name, data):
 
     No immediate retry: a timeout may have reached the server already. A queued
     retry on next start uses the same filename and refuses to overwrite it.
+
+    The PUT goes to <base>/public.php/dav/files/<token>/DROP_FOLDER/<name>; the
+    drop creates the folder on first upload, so no MKCOL is needed.
     """
     url = (build["base"].rstrip("/") + "/public.php/dav/files/" +
-           urllib.parse.quote(build["token"], safe="") + "/" + urllib.parse.quote(name, safe=""))
+           urllib.parse.quote(build["token"], safe="") + "/" + DROP_FOLDER + "/" +
+           urllib.parse.quote(name, safe=""))
     request = urllib.request.Request(url, data=data, method="PUT", headers={
         "Content-Type": "application/zip", "If-None-Match": "*",
     })

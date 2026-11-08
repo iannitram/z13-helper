@@ -30,11 +30,13 @@ from sensor_reader import SensorReader
 from telemetry_history import TelemetryHistory
 from config_manager import ConfigManager
 import app_log
+import epp
 import host
 import install_record
 import max_fans_state
 import post_update_view
 import profiles
+import timeline
 import update_watch
 from fan_watchdog import FanTrace, FanWatchdog, FanWatchdogRunner
 from display_modes import RefreshControl
@@ -377,6 +379,7 @@ class DashboardUI(QMainWindow):
         prow.addWidget(self.profile_combo, 1)
         prow.addWidget(self.maxfans_pill)
         self.perf.body.addLayout(prow)
+        self._build_epp_ui()
         col.addWidget(self.perf)
         col.addWidget(self._sep())
 
@@ -552,6 +555,25 @@ class DashboardUI(QMainWindow):
     # Profiles
     # ------------------------------------------------------------------
 
+    def _build_epp_ui(self):
+        row = QHBoxLayout()
+        row.addWidget(QLabel("CPU Boost"))
+        self.epp_combo = QComboBox()
+        epp.fill_combo(self.epp_combo, self.controller.get_epp_choices())
+        self.epp_combo.currentIndexChanged.connect(self._on_epp)
+        row.addWidget(self.epp_combo, 1)
+        self.epp_now = QLabel("")
+        self.epp_now.setObjectName("dim")
+        row.addWidget(self.epp_now)
+        self.perf.body.addLayout(row)
+
+    def _refresh_epp_ui(self, profile):
+        epp.show_profile_epp(self.epp_combo, profile)
+        self.epp_now.setText(epp.now_text(self.controller.get_epp()))
+
+    def _on_epp(self, _index):
+        self.control.save(epp.profile_with_epp(self.control.shown(), self.epp_combo), "epp")
+
     def _refresh_profile_ui(self):
         state = self.control.backend_state
         if isinstance(state.get("battery_limit"), int) and not self.battery_slider.isSliderDown():
@@ -580,6 +602,7 @@ class DashboardUI(QMainWindow):
             self.profile_combo.addItems(names)
         self.profile_combo.setCurrentText(name)
         self.profile_combo.blockSignals(False)
+        self._refresh_epp_ui(active)
         self._refresh_lighting_ui(active)
         if self._tray is not None:
             if set(self._tray_profile_actions) != set(names):
@@ -620,7 +643,43 @@ class DashboardUI(QMainWindow):
     # ------------------------------------------------------------------
 
     def _toggle_max_fans(self, checked):
-        self.control._submit("Max Fans", lambda: authority.set_max_fans(checked))
+        def go():
+            try:
+                active_name = self.control.active_name()
+            except Exception:
+                active_name = None
+
+            # Timeline recording is best-effort and never blocks or reorders the write.
+            try:
+                before_mf = max_fans_state.load()
+            except Exception:
+                before_mf = None
+
+            def record(ok):
+                try:
+                    after_mf = max_fans_state.load()
+                    before, after = timeline.max_fans_goal_states(before_mf or {}, after_mf, checked, ok=ok)
+                    timeline.record_goal_change(
+                        goal=after["goal"], previous_goal=before["goal"],
+                        before=before, after=after, profile=active_name, ok=ok,
+                        defer=True,
+                    )
+                except Exception as exc:  # best-effort: the hardware result stands
+                    logging.getLogger(__name__).warning(
+                        "timeline recording failed for Max Fans: %s: %s", type(exc).__name__, str(exc)[:200])
+
+            try:
+                message = authority.set_max_fans(checked)
+            except Exception:
+                record(False)
+                raise
+            record(True)
+            return message
+
+        self.control._submit("Max Fans", go)
+
+    def read_timeline(self, limit=50):
+        return timeline.read_entries(limit=limit, newest_first=True)
 
     # ------------------------------------------------------------------
     # Lighting
