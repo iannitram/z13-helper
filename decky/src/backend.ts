@@ -83,7 +83,6 @@ export interface TimelineEntry {
   summary?: string;
   changed?: string[];
   no_rollback_reason?: string | null;
-  no_rollback_reason?: string;
   rollback?: Record<string, unknown> | null;
   rollback_supported?: boolean;
 }
