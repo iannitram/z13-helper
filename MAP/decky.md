@@ -13,6 +13,7 @@ flowchart LR
     Lock --> Authority[py_modules/state_authority.py]
     Authority --> CLI[z13ctl CLI / daemon]
     Plugin --> PowerRange[py_modules/power_range.py]
+    Plugin --> Compute[py_modules/compute_health.py]
     PowerRange --> HostProbe[host.run metadata-only probe]
     Plugin --> Shared[(~/.config/z13-helper/)]
     Profile --> Shared
@@ -21,7 +22,7 @@ flowchart LR
     Sensors[py_modules/sensor_reader.py] --> HW[hwmon reads]
 ```
 
-The backend runs as the `deck` user under Decky Loader. `decky/main.py` imports shared helpers from its `py_modules/` directory; `install.sh` and `tooling/install_check.py` source those files from `src/` and install the copies root-owned. Root ownership protects the code files; it does not mean the backend runs as root. `src/host.py` chooses an execution mode from the process environment. When Decky is already running as `deck`, `as_deck=True` supplies Deck's runtime and session-bus environment without `runuser`; `runuser -u deck` is used only if a root-mode process requests it. Calls to z13ctl go through `host.run()` and use the existing user daemon/socket.
+The backend runs as the `deck` user under Decky Loader. `decky/main.py` imports shared helpers (`fan_watchdog.py`, `sensor_reader.py`, `host.py`, `power_range.py` and `compute_health.py`) from its `py_modules/` directory; `install.sh` and `tooling/install_check.py` source those files from `src/` and install the copies root-owned. Root ownership protects the code files; it does not mean the backend runs as root. `src/host.py` chooses an execution mode from the process environment. When Decky is already running as `deck`, `as_deck=True` supplies Deck's runtime and session-bus environment without `runuser`; `runuser -u deck` is used only if a root-mode process requests it. Calls to z13ctl go through `host.run()` and use the existing user daemon/socket.
 
 The desktop app, installed `z13-profile` CLI and Decky share the same state authority.
 Production field edits, Max Fans and the direct platform-profile switch call `state_authority` from root-owned copies;
@@ -58,6 +59,8 @@ compatibility test coverage; production setters use the shared authority.
 | Installed plugin `py_modules/sensor_reader.py` | Root-owned installed copy of `src/sensor_reader.py`; read-only hwmon collection. |
 | Installed plugin `py_modules/power_range.py` | Root-owned installed copy of `src/power_range.py`; per-rail metadata bounds matching z13ctl backend selection. |
 | Installed plugin `py_modules/host.py` | Root-owned installed copy of `src/host.py`; host command mode and environment handling. |
+| `decky/src/components/ComputeHealth.tsx` | Memory and compute section: memory pools, gfx1151, ROCm/Vulkan status, on-request allocation test (`get_compute_health`, `run_compute_smoke`). |
+| Installed plugin `py_modules/compute_health.py` | Root-owned installed copy of `src/compute_health.py`; memory/compute report and on-request allocation smoke test. |
 | Installed plugin `py_modules/timeline.py` | Root-owned installed copy of `src/timeline.py`; append-only `timeline.jsonl` reader/writer with size-capped rotation and partial-line skipping. |
 | Installed plugin `py_modules/crash_report.py`, `crash_scrub.py`, `crash_queue.py`, `_crash_build.json` | Root-owned shared crash reporting and build configuration. Startup installs Python/thread/asyncio hooks; unload restores them. Reports share the desktop queue and preference; see [`docs/crash-reporting.md`](../docs/crash-reporting.md). |
 | `decky/rollup.config.js`, `decky/tsconfig.json`, `decky/package.json`, `decky/pnpm-lock.yaml` | Bundle build for the plugin front end (`pnpm build` writes `dist/index.js`, which `install.sh` installs). |

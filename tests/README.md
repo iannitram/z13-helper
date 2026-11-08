@@ -26,6 +26,7 @@ lets that error through rather than turning it into an rc).
 | `test_mcp_server.py` | `z13-helper mcp`: tool list/schemas, dispatch through the same CLI and faked state owner, argument validation, and a JSON-RPC round trip on fake stdio |
 | `test_fan_watchdog.py` | recovery rules, throttle, stale queued recovery cancellation, in-flight Max Fans cancellation, and "profile rewrite before curve" |
 | `test_power_range.py` | per-rail bounds from kernel metadata and fallback ranges |
+| `test_compute_health.py` | memory pools, gfx identification, runtime discovery and the bounded smoke test (host faked) |
 | `test_telemetry_history.py` | bounded telemetry ring buffer: age and count caps, gaps, no disk writes |
 | `test_display_modes.py` | kscreen-doctor mode parsing, advertised-only refresh choices, read-back and rollback (host faked) |
 | `test_sensor_reader.py` | hwmon discovery by name and the custom-curve readers, on a fake sysfs tree |

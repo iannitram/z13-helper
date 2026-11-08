@@ -103,6 +103,39 @@ export async function safely<T extends ApplyResult>(p: Promise<T>): Promise<T | 
   }
 }
 
+/** Memory and compute panel (compute_health.py). Bytes; null = unavailable. */
+export interface ComputeHealth {
+  memory: {
+    ram_total: number | null;
+    ram_available: number | null;
+    vram_reserved: number | null;
+    vram_used: number | null;
+    physical_total: number | null;
+    gtt_limit: number | null;
+    gtt_used: number | null;
+    pressure_avg10: number | null;
+    notes: string[];
+  };
+  gpu_agents: { gfx: string; name: string | null }[];
+  gfx1151: boolean;
+  kernel: string;
+  runtime: {
+    ok: boolean;
+    hip_libs: string[];
+    rocm_version: string | null;
+    vulkan_icds: string[];
+    kfd_access: boolean | null;
+    render_access: boolean | null;
+  };
+  smoke_budget: string;
+}
+export interface SmokeResult {
+  ok: boolean;
+  detail: string;
+  budget_mib: number | null;
+}
+export const getComputeHealth = callable<[], ComputeHealth>("get_compute_health");
+export const runComputeSmoke = callable<[], SmokeResult>("run_compute_smoke");
 // ---- After SteamOS update (tooling/post_update --tab-json, checks only) ----
 export interface PostUpdateRow {
   id: string;

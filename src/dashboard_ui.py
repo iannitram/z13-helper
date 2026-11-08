@@ -47,6 +47,7 @@ import state_authority as authority
 import state_events
 from profile_control import ProfileControl
 from fans_window import FansWindow
+from compute_dialog import ComputeDialog
 from updates_dialog import UpdatesDialog, UpdateCheckThread, PostUpdateThread
 from theme import (STYLESHEET, ModeTile, Panel, pill, tip, ECO, STANDARD, TURBO, CUSTOM,
                    ACCENT_FOR_BASE, BORDER)
@@ -217,6 +218,9 @@ class DashboardUI(QMainWindow):
         upd = QAction("Updates…", self)
         upd.triggered.connect(self._open_updates)
         file_menu.addAction(upd)
+        mem = QAction("Memory and compute…", self)
+        mem.triggered.connect(self._open_compute)
+        file_menu.addAction(mem)
         file_menu.addSeparator()
         hide = QAction("Hide to Tray", self)
         hide.setShortcut("Ctrl+H")
@@ -951,6 +955,12 @@ class DashboardUI(QMainWindow):
             return
         self._last_crash_notice = time.monotonic()
         self._tray.showMessage("Z13-Helper", text, QSystemTrayIcon.MessageIcon.Warning, 6000)
+
+    def _open_compute(self):
+        if getattr(self, "_compute_dialog", None) is None:
+            self._compute_dialog = ComputeDialog(self)
+        self._compute_dialog.show()
+        self._compute_dialog.raise_()
 
     def _check_post_update(self):
         """Read-only status of the After SteamOS update checks; says "SteamOS updated: N tasks"."""
