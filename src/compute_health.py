@@ -23,10 +23,12 @@ KFD_NODES = "/sys/class/kfd/kfd/topology/nodes"
 MIB = 1024 * 1024
 SMOKE_DEFAULT_MIB = 256
 SMOKE_MAX_MIB = 1024
-SMOKE_TIMEOUT_S = 20
+SMOKE_TIMEOUT_S = 20          # the allocation step only
+DISCOVER_TIMEOUT_S = 15       # runtime discovery, which runs first when no library is given
 SMOKE_BUDGET_TEXT = (f"Allocates {SMOKE_DEFAULT_MIB} MiB of GPU memory (never more than {SMOKE_MAX_MIB} MiB, "
                      f"and never more than a quarter of available RAM), then frees it. "
-                     f"Gives up after {SMOKE_TIMEOUT_S} s. Runs only when you press the button.")
+                     f"Finding the runtime takes up to {DISCOVER_TIMEOUT_S} s; the allocation gives up after "
+                     f"{SMOKE_TIMEOUT_S} s. Runs only when you press the button.")
 
 NOTES = (
     "Firmware reserves VRAM out of physical RAM before Linux starts; MemTotal is what is left.",
@@ -223,7 +225,7 @@ done(good, f"{sys.argv[2]} MiB allocated, written, read back and freed" if good
 
 def discover():
     """Runtime discovery on the host: ROCm/HIP libraries, Vulkan ICDs, device access."""
-    res = host.run(["python3", "-I", "-c", DISCOVER_SCRIPT], timeout=15)
+    res = host.run(["python3", "-I", "-c", DISCOVER_SCRIPT], timeout=DISCOVER_TIMEOUT_S)
     info = {}
     if res.rc == 0:
         try:
@@ -258,7 +260,7 @@ def health_report():
 def clamp_budget(mib, available_bytes):
     """The budget the smoke test will really use, or None when RAM is too tight.
 
-    Never above SMOKE_MAX_MIB nor a quarter of available RAM; None when under 16 MiB would be left.
+    Clamped to 16..SMOKE_MAX_MIB and to a quarter of available RAM; None when that leaves under 16 MiB.
     """
     try:
         mib = int(mib)
