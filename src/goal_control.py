@@ -160,7 +160,8 @@ def step(goal, readings, current, ranges, *, now_s, state=None):
     elif kind == "comfort":
         error, deadband = value - target, HYSTERESIS_C
     else:
-        error, deadband = target - value, HYSTERESIS_FPS
+        # Above target -> negative direction (less power), below -> more power, like Quiet/Comfort.
+        error, deadband = value - target, HYSTERESIS_FPS
     if abs(error) <= deadband:
         return _unchanged(current, f"{kind.title()} is within its hysteresis band", state)
     if kind == "quiet" and error < -deadband:
