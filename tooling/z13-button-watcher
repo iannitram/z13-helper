@@ -10,6 +10,11 @@ hold-duration gestures are impossible; we distinguish presses by *count* instead
                    (so the button can also CLOSE menus with no controller attached).
     double tap  -> Steam menu (left): app switching / library / power.
 
+A quick third press cycles profiles instead (issue #131). One reader owns that gesture per
+session: this watcher in Game Mode (it sends `cycle` to the resident app), the app's own
+reader in Desktop Mode (src/evdev_listener.py gesture_for_app). Here the third press in
+Desktop Mode is only the usual "make sure the app is running" press.
+
 Actions fire on each press with no debounce delay, so the single-tap QAM is instant; a
 double-tap therefore flashes the QAM (first tap) and immediately flips to the Steam menu
 (second tap). Menus are opened with a pure-JS CEF call (see z13_cdp) — no input emulation,
@@ -46,6 +51,7 @@ EV_KEY = 0x01
 KEY_PROG3 = 202  # the side button on the 'Asus WMI hotkeys' device
 
 DOUBLE_TAP_S = 0.35   # second press within this window == double tap
+CYCLE_PRESSES = 3     # third quick press == next profile (src/evdev_listener.py GestureDetector)
 CDP_TIMEOUT = 2.5     # keep short so a stalled Steam UI can't wedge the reader
 
 APP_UNIT = "z13-helper.service"
@@ -144,6 +150,34 @@ def handle_press(is_double):
         logger.warning("menu action failed: %s", exc)
 
 
+def handle_cycle():
+    """Game Mode triple press: ask the resident app (it keeps running in the tray) for the
+    next profile; its apply also flashes the lightbar. Never sends a second command."""
+    if not app_command("cycle"):
+        logger.warning("cycle: the app is not running, nothing to switch")
+
+
+class PressChain:
+    """Counts quick presses and routes each one. `route(now)` is the whole per-press policy."""
+
+    def __init__(self):
+        self.chain = 0
+        self.last = None
+
+    def route(self, now):
+        quick = self.last is not None and (now - self.last) < DOUBLE_TAP_S
+        self.chain = self.chain + 1 if quick else 1
+        self.last = now
+        if self.chain >= CYCLE_PRESSES:
+            self.chain, self.last = 0, None     # a fourth press starts a new chain
+            if in_gamemode():
+                handle_cycle()                  # replaces the press's own action
+            else:
+                handle_press(False)             # Desktop Mode: the app's reader owns cycling
+            return
+        handle_press(self.chain == 2)
+
+
 def main():
     logging.basicConfig(
         level=logging.INFO,
@@ -157,7 +191,7 @@ def main():
         device = find_device()
     logger.info("watching %s for KEY_PROG3 (%d)", device, KEY_PROG3)
 
-    last_press = 0.0
+    presses = PressChain()
     while True:
         try:
             with open(device, "rb") as fd:
@@ -167,10 +201,7 @@ def main():
                         break  # device went away — fall through to reopen
                     _, _, ev_type, code, value = struct.unpack(_EVENT_FORMAT, data)
                     if ev_type == EV_KEY and code == KEY_PROG3 and value == 1:
-                        now = time.monotonic()
-                        is_double = (now - last_press) < DOUBLE_TAP_S
-                        last_press = now
-                        handle_press(is_double)
+                        presses.route(time.monotonic())
         except OSError as exc:
             logger.warning("device read error (%s); reopening in 3s", exc)
             time.sleep(3)
