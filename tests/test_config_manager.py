@@ -23,3 +23,15 @@ def test_dict_config_makes_no_backup(tmp_path):
     path.write_text('{"a": 1}')
     assert ConfigManager(str(path)).get("a") == 1
     assert not list(tmp_path.glob("config.json.corrupt-*"))
+
+
+def test_remove_drops_the_key_and_persists(tmp_path):
+    path = tmp_path / "config.json"
+    cm = ConfigManager(str(path))
+    cm.set("battery_limit", 60)
+    cm.set("brightness", "low")
+    cm.remove("battery_limit")
+    cm.remove("battery_limit")          # absent: no-op
+    reloaded = ConfigManager(str(path))
+    assert reloaded.get("battery_limit") is None
+    assert reloaded.get("brightness") == "low"

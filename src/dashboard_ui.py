@@ -27,25 +27,29 @@ from PyQt6.QtGui import QFont, QIcon, QPainter, QColor, QPixmap, QAction
 
 from hardware_controller import HardwareController
 from sensor_reader import SensorReader
+from telemetry_history import TelemetryHistory
 from config_manager import ConfigManager
 import app_log
 import host
 import install_record
 import max_fans_state
 import platform_support
+import post_update_view
 import profiles
 import update_watch
 from fan_watchdog import FanTrace, FanWatchdog, FanWatchdogRunner
+from display_modes import RefreshControl
 from screen_brightness import ScreenBrightness, MIN_PERCENT
 from apply_worker import ApplyWorker
+import state_authority as authority
+import state_events
 from profile_control import ProfileControl
 from fans_window import FansWindow
-from updates_dialog import UpdatesDialog, UpdateCheckThread
+from updates_dialog import UpdatesDialog, UpdateCheckThread, PostUpdateThread
 from theme import (STYLESHEET, ModeTile, Panel, pill, tip, ECO, STANDARD, TURBO, CUSTOM,
                    ACCENT_FOR_BASE, BORDER)
 from evdev_listener import find_side_button_device, EvdevListener
-
-APP_VERSION = "0.5.1"
+from versions import APP_VERSION
 
 _INPUTPLUMBER_SERVICE      = "org.shadowblip.InputPlumber"
 _INPUTPLUMBER_IFACE        = "org.shadowblip.Input.DBusDevice"
@@ -91,12 +95,15 @@ class DashboardUI(QMainWindow):
     # From app_log listeners, which run on whatever thread logged / crashed.
     _errorLogged = pyqtSignal()
     _crashReported = pyqtSignal(str, str)
+    _refreshChoices = pyqtSignal(object)  # [(Hz, Mode)] from the panel
+    _refreshDone = pyqtSignal(bool, str)
 
     def __init__(self, controller: HardwareController, sensors: SensorReader, config: ConfigManager):
         super().__init__()
         self.controller = controller
         self.sensors = sensors
         self.config = config
+        self.history = TelemetryHistory()     # last hour, memory only (#31)
         max_fans_state.migrate_legacy(config)
 
         self.setWindowTitle("Z13-Helper")
@@ -121,6 +128,7 @@ class DashboardUI(QMainWindow):
         self._sensors = sensors
         self._fan_watchdog = FanWatchdog(sensors, controller,
                                          max_fans_on=max_fans_state.is_enabled,
+                                         suspended=max_fans_state.is_suspended,
                                          may_act=lambda: not self.control._pending
                                          and self.control.writes_allowed(),
                                          active_tdp=lambda: self.control.active().get("tdp"),
@@ -139,6 +147,9 @@ class DashboardUI(QMainWindow):
         self._setup_tray()
         self._refresh_profile_ui()
         self._load_initial_state()
+        self.control.toggle_window.connect(self._toggle_window)
+        self.control.start_events()
+        QApplication.instance().aboutToQuit.connect(self.control.close_events)
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._tick)
@@ -146,6 +157,7 @@ class DashboardUI(QMainWindow):
         self._tick()
 
         QTimer.singleShot(8000, lambda: self._check_updates(force=False))
+        QTimer.singleShot(12000, self._check_post_update)
         self._update_timer = QTimer(self)
         self._update_timer.timeout.connect(lambda: self._check_updates(force=False))
         self._update_timer.start(UPDATE_CHECK_MS)
@@ -269,6 +281,11 @@ class DashboardUI(QMainWindow):
         m.addSeparator()
         fans = m.addAction("Fans + Power…")
         fans.triggered.connect(self._toggle_fans_window)
+        pu = getattr(self, "_post_update_text", None)
+        if pu:
+            m.addSeparator()
+            act = m.addAction(pu + "…")
+            act.triggered.connect(self._open_updates)   # the Updates dialog has the After SteamOS update tab
         m.addSeparator()
         q = m.addAction("Quit")
         q.triggered.connect(self._user_quit)
@@ -398,6 +415,7 @@ class DashboardUI(QMainWindow):
             self._lighting_combos[device] = (mode_combo, color_combo)
         brow = QHBoxLayout()
         brow.setSpacing(6)
+        self.light_target.currentIndexChanged.connect(lambda _index: self._refresh_profile_ui())
         self._bright_tiles = {}
         for label, level in _BRIGHTNESS:
             t = ModeTile(label, STANDARD, height=36)
@@ -424,6 +442,25 @@ class DashboardUI(QMainWindow):
             self.screen_slider.setEnabled(False)
             self.screen_panel.right.setText("no backlight control found")
         col.addWidget(self.screen_panel)
+        col.addWidget(self._sep())
+
+        # 3b. Screen refresh: only the rates the panel advertises (display_modes.py)
+        self._refresh_ctl = RefreshControl()
+        self.refresh_panel = Panel("Screen Refresh")
+        rrow = QHBoxLayout()
+        self.refresh_combo = QComboBox()
+        self.refresh_combo.setEnabled(False)
+        self.refresh_combo.activated.connect(self._refresh_picked)
+        self.refresh_back = QPushButton("Back")
+        self.refresh_back.setToolTip("Return to the refresh rate before the last change")
+        self.refresh_back.setEnabled(False)
+        self.refresh_back.clicked.connect(self._refresh_back)
+        rrow.addWidget(self.refresh_combo, 1)
+        rrow.addWidget(self.refresh_back)
+        self.refresh_panel.body.addLayout(rrow)
+        self._refreshChoices.connect(self._fill_refresh_choices)
+        self._refreshDone.connect(self._refresh_finished)
+        col.addWidget(self.refresh_panel)
         col.addWidget(self._sep())
 
         # 4. Battery Charge Limit
@@ -498,12 +535,22 @@ class DashboardUI(QMainWindow):
             limit = self.controller.get_battery_limit()
             if limit is not None:
                 self.battery_slider.setValue(limit)
-                self.config.set("battery_limit", limit)
         except Exception:
             pass
+        # config.json is migration input only: seed the active profile from an
+        # old limit once, then every change lives in the profile store.
+        # The key is consumed on first sight, so a profile that has no limit on
+        # purpose (Boondock) is not given the old one on every later launch.
+        legacy = self.config.get("battery_limit")
+        if legacy is not None:
+            self.config.remove("battery_limit")
+            active = self.control.active()
+            if isinstance(legacy, int) and active.get("battery_limit") is None:
+                self.control.save(dict(active, battery_limit=legacy), "battery_limit")
         self.batt_100.setChecked(self.battery_slider.value() == 100)
         self._highlight_brightness(self.config.get("brightness", "medium"))
         self._sync_screen_brightness(force=True)
+        self._load_refresh_choices()
         rc, out, _ = host.run(["systemctl", "--user", "is-enabled", _SERVICE], timeout=10)
         self.startup.blockSignals(True)
         self.startup.setChecked(rc == 0 and out.strip() == "enabled")
@@ -556,6 +603,16 @@ class DashboardUI(QMainWindow):
     # ------------------------------------------------------------------
 
     def _refresh_profile_ui(self):
+        state = self.control.backend_state
+        if isinstance(state.get("battery_limit"), int) and not self.battery_slider.isSliderDown():
+            self.battery_slider.blockSignals(True)
+            self.battery_slider.setValue(state["battery_limit"])
+            self.battery_slider.blockSignals(False)
+            self.batt_100.setChecked(state["battery_limit"] == 100)
+        devices = _LIGHT_TARGETS[self.light_target.currentIndex()][1]
+        level = state_events.lighting_level(state, devices[0])
+        if isinstance(level, int) and 0 <= level <= 3:
+            self._highlight_brightness(("off", "low", "medium", "high")[level])
         active = self.control.shown()       # the clicked profile lights up at once
         name = active["name"]
         # Title: "Performance Mode: Balanced+ 20W" — '+' = custom curve, W = custom SPL
@@ -597,7 +654,7 @@ class DashboardUI(QMainWindow):
 
     def _toggle_fans_window(self):
         if self._fans_window is None:
-            self._fans_window = FansWindow(self.control, self.controller, self.sensors, self)
+            self._fans_window = FansWindow(self.control, self.controller, self.sensors, self, history=self.history)
         w = self._fans_window
         if w.isVisible():
             w.hide()
@@ -613,33 +670,7 @@ class DashboardUI(QMainWindow):
     # ------------------------------------------------------------------
 
     def _toggle_max_fans(self, checked):
-        c = self.controller
-
-        def on():
-            try:
-                info = c.get_fancurve()
-                pts = info.get("points") or []
-                if len(pts) == 8 and not all(pwm >= 255 for _, pwm, _ in pts):
-                    max_fans_state.save(saved_curve=[[int(t), int(pwm)] for t, pwm, _ in pts])
-            except Exception:
-                pass
-            c.set_fans_max()
-            max_fans_state.save(enabled=True)
-            return "Max Fans ON — both fans at 100%"
-
-        def off():
-            kind, saved = max_fans_state.restore_plan()
-            curve = self.control.active().get("fan_curve")
-            if kind == "curve":
-                c.set_fancurve_pwm(saved)
-            elif kind == "unknown" and curve:
-                c.set_fancurve(curve)
-            else:
-                c.reset_fancurve()
-            max_fans_state.save(enabled=False)
-            return "Max Fans OFF — profile curve restored"
-
-        self.control._submit("Max Fans", on if checked else off)
+        self.control._submit("Max Fans", lambda: authority.set_max_fans(checked))
 
     # ------------------------------------------------------------------
     # Lighting
@@ -649,8 +680,9 @@ class DashboardUI(QMainWindow):
         devices = _LIGHT_TARGETS[self.light_target.currentIndex()][1]
         self._highlight_brightness(level)
 
+        target = self.control.active_name()
         def go():
-            failed = self.controller.set_brightness(level, devices=devices)
+            failed = authority.set_field("brightness", level, target, devices=devices)
             self.config.set("brightness", level)
             return f"Brightness {label}" + (f" ({', '.join(failed)} not responding)" if failed else "")
         self.control._submit("Brightness", go)
@@ -682,20 +714,9 @@ class DashboardUI(QMainWindow):
         mode_combo, color_combo = self._lighting_combos[device]
         mode = mode_combo.currentData()
         setting = None if mode is None else {"mode": mode, "color": color_combo.currentData()}
-        try:
-            profile = profiles.set_profile_lighting(
-                name, device, setting, brightness=self.config.get("brightness", "medium"))
-        except (OSError, ValueError) as exc:
-            self.status_bar.showMessage(f"Lighting setting failed: {exc}", 8000)
-            self._refresh_lighting_ui(self.control.shown())
-            return
-        self._refresh_lighting_ui(profile)
-        if setting is None:
-            self.control._submit("Lighting", lambda: "profile override cleared; current lighting left unchanged")
-            return
-        brightness = profile.get("brightness") or self.config.get("brightness", "high")
+        brightness = self.config.get("brightness", "medium")
         self.control._submit(f"Lighting → {device}",
-                              lambda: self.controller.set_lighting(device, setting, brightness))
+                             lambda: authority.set_lighting(name, device, setting, brightness))
 
     # ------------------------------------------------------------------
     # Screen brightness
@@ -738,8 +759,8 @@ class DashboardUI(QMainWindow):
     def _apply_battery_limit(self):
         value = self.battery_slider.value()
         self.batt_100.setChecked(value == 100)
-        self.control._submit(f"Battery limit {value}%", lambda: (self.controller.set_battery_limit(value),
-                                                                 self.config.set("battery_limit", value)))
+        profile = self.control.active()
+        self.control.save(dict(profile, battery_limit=value), "battery_limit")
 
     def _battery_100(self):
         self.battery_slider.setValue(100)
@@ -851,6 +872,66 @@ class DashboardUI(QMainWindow):
         self._last_crash_notice = time.monotonic()
         self._tray.showMessage("Z13-Helper", text, QSystemTrayIcon.MessageIcon.Warning, 6000)
 
+    def _check_post_update(self):
+        """Read-only status of the After SteamOS update checks; says "SteamOS updated: N tasks"."""
+        repo = install_record.repo_path(install_record.load())
+        if not repo:
+            return
+        self._pu_thread = PostUpdateThread(repo, False, self)
+        self._pu_thread.done.connect(self._post_update_banner)
+        self._pu_thread.start()
+
+    def _post_update_banner(self, status):
+        text = post_update_view.tray_text(status)
+        self._post_update_text = text
+        if self._tray is not None:
+            self._tray.setToolTip("Z13-Helper" + (f"\n{text}" if text else ""))
+            self._rebuild_tray_menu()
+            if text and text != self.config.get("post_update_notified", ""):
+                self._tray.showMessage("Z13-Helper", text, QSystemTrayIcon.MessageIcon.Warning, 8000)
+                self.config.set("post_update_notified", text)
+
+    # Screen refresh (Desktop Mode, kscreen-doctor; slow calls run off the GUI thread)
+    def _load_refresh_choices(self):
+        threading.Thread(target=lambda: self._refreshChoices.emit(self._refresh_ctl.choices()),
+                         daemon=True).start()
+
+    def _fill_refresh_choices(self, choices):
+        self.refresh_combo.clear()
+        for hz, mode in choices:
+            self.refresh_combo.addItem(f"{hz} Hz", hz)
+            if mode.current:
+                self.refresh_combo.setCurrentIndex(self.refresh_combo.count() - 1)
+        self.refresh_combo.setEnabled(bool(choices))
+        self.refresh_back.setEnabled(self._refresh_ctl.previous is not None)
+        note = getattr(self, "_refresh_note", "")
+        self.refresh_panel.right.setText(note or ("" if choices else "no modes reported"))
+
+    def _run_refresh(self, fn):
+        self._refresh_note = ""
+        self.refresh_combo.setEnabled(False)
+        self.refresh_back.setEnabled(False)
+
+        def go():
+            ok, msg = fn()
+            self._refreshDone.emit(ok, msg)
+        threading.Thread(target=go, daemon=True).start()
+
+    def _refresh_picked(self, _index):
+        hz = self.refresh_combo.currentData()
+        if hz is not None:
+            self._run_refresh(lambda: self._refresh_ctl.set_refresh(hz))
+
+    def _refresh_back(self):
+        self._run_refresh(self._refresh_ctl.back)
+
+    def _refresh_finished(self, ok, msg):
+        # Kept in a note so the reload below does not clear it; a failure or
+        # rollback is marked, a success shows the message as is.
+        self._refresh_note = msg if ok else f"⚠ {msg}"
+        self.refresh_panel.right.setText(self._refresh_note)
+        self._load_refresh_choices()
+
     def _open_updates(self):
         if self._updates_dialog is None:
             self._updates_dialog = UpdatesDialog(self)
@@ -870,18 +951,28 @@ class DashboardUI(QMainWindow):
             except Exception:
                 logging.getLogger("z13.platform").exception("capability reprobe failed")
         try:
-            apu = self.sensors.get_apu_temp()
-            gpu = self.sensors.get_gpu_temp()
+            cpu = self.sensors.get_cpu_temp()
+            gpu = self.sensors.get_gpu_temp_labeled()
             fan1, fan2 = self.sensors.get_fan_speeds()
+            self.history.add(time.monotonic(), cpu[0] if cpu else None,
+                             gpu[0] if gpu else None, fan1, fan2)
+            fw = self._fans_window
+            if fw is not None and fw.isVisible() and hasattr(fw, "history_chart"):
+                fw.history_chart.update()
             parts = []
-            if apu is not None:
-                parts.append(f"CPU {apu:.0f}°C")
-            if gpu is not None:
-                parts.append(f"GPU {gpu:.0f}°C")
+            for name, got in (("CPU", cpu), ("GPU", gpu)):
+                if got is None:
+                    parts.append(f"{name} unavailable")
+                else:
+                    parts.append(f"{name} {got[0]:.0f}°C ({got[1]})")
             if fan1 is not None and fan2 is not None:
                 parts.append(f"Fans {fan1}/{fan2}RPM")   # fan1 = CPU side, fan2 = GPU side
             elif fan1 is not None:
                 parts.append(f"Fan {fan1}RPM")
+            elif fan2 is not None:
+                parts.append(f"Fan {fan2}RPM")
+            else:
+                parts.append("Fans unavailable")
             text = "  ".join(parts)
             self.perf.right.setText(text)
             if self._tray is not None:
@@ -902,13 +993,6 @@ class DashboardUI(QMainWindow):
         self._show_fan_message(self._fan_runner.tick())
         if self.isVisible():
             self._sync_screen_brightness()
-        # The Decky plugin (or z13-profile on the host) may have switched profiles.
-        try:
-            if self.control.shown()["name"] != self.profile_combo.currentText() or \
-                    self.maxfans_pill.isChecked() != self.control.shown_max_fans():
-                self._refresh_profile_ui()
-        except Exception:
-            pass
 
     def _show_fan_message(self, msg):
         if msg:

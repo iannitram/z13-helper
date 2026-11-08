@@ -18,6 +18,8 @@ from PyQt6.QtCore import Qt, QPointF, QRectF, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter, QPen, QBrush, QFont
 from PyQt6.QtWidgets import QWidget, QSizePolicy
 
+from profiles import fan_curve_floor_pct as floor_pct
+
 TEMP_MIN, TEMP_MAX = 20, 110
 PCT_MIN, PCT_MAX = 0, 100
 POINTS = 8
@@ -25,11 +27,6 @@ MARKER_R = 5          # G-Helper MarkerSize 10 → radius 5 px
 HIT_R = 12
 
 DEFAULT_CURVE = [[40, 20], [50, 35], [60, 55], [70, 75], [75, 90], [80, 100], [85, 100], [90, 100]]
-
-
-def floor_pct(temp):
-    """BIOS safety floor from G-Helper: at least (temp-70)*1.2 %, i.e. 36% at 100 °C."""
-    return max(0.0, (temp - 70) * 1.2)
 
 
 class FanCurveWidget(QWidget):
