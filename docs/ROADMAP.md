@@ -38,7 +38,7 @@ suspend/resume, sustained load and soak still need verification; 1.0 remains unf
 - **#16** Decky Profile dropdown showing a state that never applied: ✅ fixed by PR #49 (`decky/src/profileSwitch.ts`), merged 2026-10-26; the on-device check is part of #61.
 - **#58** flaky and environment-dependent tests: partly resolved, including temp-name/store-owner fixtures. Current suites pass; this does not close every environment check in the issue.
 - **#86** fan/power regression: individual fixes are under review; root firmware causality and broader device verification remain open. See the release record for observed behaviour and rejected workarounds.
-- **#30** the reported 43 GB memory spike: open (investigation).
+- **#30** the reported 43 GB memory spike: open (investigation). Source audit and preventive trace/RSS bounds are recorded in [fan-watchdog-memory.md](fan-watchdog-memory.md); no completed 24-hour current-identity sampler result or leak attribution is claimed.
 - Also merged 2026-10-26: PR #3, `tooling/z13_gamemode_report.py` (reads a Game Mode session back from local logs).
 
 ### Fixed today (2026-10-09)
@@ -299,6 +299,18 @@ suspend/resume cycle on a custom curve with the fans checked after; (7) profiles
 watchdog's curve-drop branch once the daemon is proven to re-apply curves itself; use `subscribe`
 events (not in 1.4.2's CLI — check the socket API) instead of polling.
 
+**#66 retirement gate:** retain curve-drop recovery for now. The issue records z13ctl
+1.4.2 as untested on SteamOS 3.9.5's kernel 7.2 (2026-10-26); a version number or
+custom-curve-enabled bit alone is insufficient evidence to remove recovery.
+Before retiring this branch, record #74 step 3 and #80 results: daemon-only curve
+restoration after platform-profile writes and three suspend/resume cycles in
+Desktop Mode and Game Mode, including Valve's ASUS fan-after-wake workaround.
+Correlate restored curve points with sustained fan response and temperatures
+(§12); keep stall, frozen-tach and auto-stall recovery independent of that decision.
+Until then, both inline and queued dropped-curve recoveries recheck intent and
+curve mode before writing, skipping recovery if the daemon has already restored
+the curve or the mode can no longer be read.
+
 ---
 
 ## 9. Phase 13 — Game Mode polish ⏳
@@ -319,7 +331,11 @@ events (not in 1.4.2's CLI — check the socket API) instead of polling.
   installer manifest. The panel EDID advertises Adaptive-Sync 48–180 Hz and DRM reports
   `vrr_capable=1`, but actual Game Mode slider reach and panel response to generated timings
   remain **on-device verification pending**. Do not describe this as hardware-accepted until
-  tested in Game Mode.
+  tested in Game Mode. Run `python tooling/verify_gamescope_vrr.py` from the checkout for
+  a read-only installed-script/EDID/OS/Game Mode preflight and a pending test matrix.
+  With VRR on, check 48, 60, 120 and 180 Hz with **Disable Frame Limiter** both off and on
+  on SteamOS 3.9.5. Record slider reach, panel stability and measured FPS versus the
+  requested limit; a clean preflight does not establish timing acceptance or limiter behavior.
 - **Open since Phase 6:** QAM focus test with a game running (only the owner can do it).
 
 ---
@@ -532,18 +548,21 @@ Not issues (checked, nothing to do): the RDNA1/2 dedicated-GPU resume fix (Strix
 **Pieces:**
 - **Signal language** (#129, #130): the lightbar confirms a profile change, pulses while thermal throttling, glows when charging stops at the limit, and turns amber when a SteamOS update needs attention (Phase 12c). Priorities, a strict rate limit (the lightbar wedges under bursts, Phase 7), restore of the owner's lighting, and an off switch.
 - **Side-button gestures** (#131): hold or double-press cycles profiles (goals, after Phase 15) with a lightbar confirmation, in both modes. InputPlumber stays masked (principle 2).
-- **One touch-first interface** (#132, #133): an ADR picks between hosting the Decky React components in the desktop window and shared tokens with a large-tile Qt layout; then the desktop window is rebuilt to match. This is where the R04 design pass's shared design system lands.
-- **Machine timeline** (#134, #135): every hardware or host change is one append-only entry (principle 7's journal line comes from the same call), with Phase 12c's rollback records; a view compares states and rolls back reversible entries. A SteamOS update shows as one entry listing what it changed.
+- **One touch-first interface** (#132 ✅, #133): [`docs/adr/0002-shared-touch-ui.md`](adr/0002-shared-touch-ui.md) picks **shared JSON design tokens (`src/design_tokens.json`) and a matching large-tile PyQt6 layout** over a desktop web view (which would add +277.3 MB to the 253.7 MB Flatpak, raise resident RAM from 65 MB to 516 MB across 4 processes in offscreen prototype measurements, and still require a custom `@decky/ui` shim). This is where the R04 design pass's shared design system lands.
+- **Machine timeline** (#134, #135): `src/timeline.py` (#134) records every hardware or host change as one append-only entry under `~/.local/state/z13-helper/timeline.jsonl` (principle 7's journal line comes from the same call), with Phase 12c's rollback records; a view (#135) compares states and rolls back reversible entries. A SteamOS update (`BUILD_ID` change) shows as one entry listing what it changed.
 
 | Step | Issue | Blocked by |
 |---|---|---|
 | 16a signal language | #129 | — |
 | 16b signal runner + off switch | #130 | #129 |
 | 16c side-button gestures | #131 | #130 |
-| 16d ADR: shared touch UI | #132 | — |
+| 16d ADR: shared touch UI ✅ | #132 | — |
 | 16e touch-first layout | #133 | #132 |
-| 16f timeline store | #134 | #109 |
+| 16f timeline store (`src/timeline.py`; store + install/Decky/steamos writers done, post-update host wiring pending) | #134 | #109 |
 | 16g timeline view | #135 | #134 |
+
+- **16e (#133) Where:** `src/design_tokens.json`, `src/theme.py`, `src/dashboard_ui.py`, `src/fans_window.py`, `decky/src/tokens.ts` (and token consumers in `decky/src/`), `MAP/README.md`, `MAP/decky.md` (no `PyQt6-WebEngine`, local web bridge, or `@decky/ui` DOM shim).
+- **16e (#133) Done when:** `src/design_tokens.json` defines the shared palette, semantic profile/goal accents, radii, spacing and `>= 44 px` touch-target minimums consumed by both `src/theme.py` and `decky/src/` (checked in `pytest` without `PyQt6`); every interactive control in the desktop app is reachable by touch with targets of at least `44 px` while preserving every control from the current windows; the Decky plugin keeps `@decky/ui` `Focusable` QAM navigation styled from the same tokens; screenshots in tablet (keyboard off) and laptop use are in the PR; Flatpak dependencies remain unchanged. *Pending owner/coordinator action:* sync this Where and Done-when, including the shared-token and Decky acceptance criteria, to #133 on GitHub; it has not been posted. The ADR's prototype timings are offscreen only, with no committed harness, and are not application-level startup costs.
 
 **Done when:** on the Z13, signals run an hour with no lightbar wedge; the gesture cycles profiles in both modes with no double-fire; the desktop window and the QAM share one look in tablet use; a SteamOS update appears in the timeline and a reversible entry rolls back.
 

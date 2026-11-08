@@ -1,0 +1,10 @@
+[Unit]
+Description=Re-pin MT7925 Bluetooth USB autosuspend=on after resume (prevents firmware wedge / trackball drop)
+After=suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/etc/systemd/system/mt7925-bt-resume.sh
+
+[Install]
+WantedBy=suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target multi-user.target

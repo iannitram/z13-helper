@@ -16,10 +16,12 @@ from PyQt6.QtWidgets import (
     QPushButton, QInputDialog, QMessageBox, QFrame, QStackedWidget, QSizePolicy,
 )
 
+import epp
 import power_range
 import profiles
 from theme import ModeTile, Panel, tip, STANDARD, CUSTOM, ACCENT_FOR_BASE, TEXT_DIM
 from fan_curve_widget import FanCurveWidget, DEFAULT_CURVE
+from history_chart import HistoryChartWidget
 from profile_control import ProfileControl
 
 PL_MIN, PL_MAX = 5, 93           # IsZ1325 cap in G-Helper: the outer envelope; the live per-rail range
@@ -31,8 +33,6 @@ PL1_SAFE_MAX = 75
 DEFAULT_TDP = (70, 86, 86)
 UV_MIN, UV_MAX = -40, 0
 BASE_LABELS = [("quiet", "Quiet (Silent)"), ("balanced", "Balanced"), ("performance", "Performance (Turbo)")]
-EPP_LABELS = {"power": "Power", "balance_power": "Balance power",
-              "balance_performance": "Balance performance", "performance": "Performance"}
 
 
 class _SliderRow(QWidget):
@@ -73,13 +73,14 @@ class _SliderRow(QWidget):
 
 
 class FansWindow(QWidget):
-    def __init__(self, control: ProfileControl, controller, sensors, parent=None):
+    def __init__(self, control: ProfileControl, controller, sensors, parent=None, history=None):
         super().__init__(parent, Qt.WindowType.Window)
         self.setObjectName("root")
         self.setWindowTitle("Fans and Power — ROG Flow Z13")
         self.control = control
         self.controller = controller
         self.sensors = sensors
+        self._history = history
         self._uv_available = controller.is_undervolt_available()
         self._selected = control.active_name()
         self._loading = False
@@ -159,6 +160,11 @@ class FansWindow(QWidget):
         self.chart.curveChanged.connect(self._on_curve_dragged)
         rv.addWidget(self.chart, 1)
 
+        if self._history is not None:
+            # The last hour, kept in memory only (telemetry_history.py).
+            self.history_chart = HistoryChartWidget(self._history)
+            rv.addWidget(self.history_chart)
+
         bottom = QHBoxLayout()
         self.btn_defaults = QPushButton("Factory Defaults")
         self.btn_defaults.clicked.connect(self._factory_defaults)
@@ -199,9 +205,7 @@ class FansWindow(QWidget):
         t3.setObjectName("title")
         v.addWidget(t3)
         self.epp_combo = QComboBox()
-        self.epp_combo.addItem("Unchanged", "")
-        for key in self.controller.get_epp_choices():
-            self.epp_combo.addItem(EPP_LABELS.get(key, key), key)
+        epp.fill_combo(self.epp_combo, self.controller.get_epp_choices())
         self.epp_combo.currentIndexChanged.connect(self._on_epp)
         v.addWidget(self.epp_combo)
         self.epp_now = QLabel("")
@@ -290,12 +294,8 @@ class FansWindow(QWidget):
             self.base_combo.setCurrentIndex(max(0, idx))
             self.base_combo.blockSignals(False)
 
-            epp_idx = self.epp_combo.findData(p.get("epp") or "")
-            self.epp_combo.blockSignals(True)
-            self.epp_combo.setCurrentIndex(max(0, epp_idx))
-            self.epp_combo.blockSignals(False)
-            live = self.controller.get_epp()
-            self.epp_now.setText(f"Now: {EPP_LABELS.get(live, live) or 'unavailable'}")
+            epp.show_profile_epp(self.epp_combo, p)
+            self.epp_now.setText(epp.now_text(self.controller.get_epp()))
 
             tdp = p.get("tdp")
             self.apply_power.setChecked(bool(tdp))
@@ -357,9 +357,7 @@ class FansWindow(QWidget):
     def _on_epp(self, _idx):
         if self._loading:
             return
-        p = self._profile()
-        p["epp"] = self.epp_combo.currentData() or None
-        self.control.save(p, "epp")
+        self.control.save(epp.profile_with_epp(self._profile(), self.epp_combo), "epp")
 
     def _on_tdp_moved(self, _val):
         if self._loading:
@@ -437,7 +435,11 @@ class FansWindow(QWidget):
             return
         p = self._profile()
         p["max_fans"] = bool(on)
-        self.control.save(p)     # takes effect on the next switch to/from this profile
+        if on:
+            p["goal"] = {"kind": "max"}      # the checkbox is the Max goal
+        elif (p.get("goal") or {}).get("kind") == "max":
+            p.pop("goal")
+        self.control.save(p)    # takes effect on the next switch to/from this profile
 
     def _on_uv_released(self):
         if self._loading or not self.auto_uv.isChecked():
