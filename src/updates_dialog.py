@@ -22,20 +22,26 @@ _VERSIONS_SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "versio
 
 
 def _installer_source():
-    """Ship the matching host helper with the stdin-fed installer."""
+    """Ship the matching host helper and timeline store with the stdin-fed installer."""
+    import os as _os
     with open(host.__file__) as f:
         helper = f.read()
     with open(_INSTALLERS_SRC) as f:
         installer = f.read()
     with open(_VERSIONS_SRC) as f:
         versions = f.read()
+    with open(_os.path.join(_os.path.dirname(_INSTALLERS_SRC), "timeline.py")) as f:
+        tl = f.read()
     return ("import sys, types\n"
             "_versions = types.ModuleType('versions')\n"
             f"exec({versions!r}, _versions.__dict__)\n"
             "sys.modules['versions'] = _versions\n"
             "_host = types.ModuleType('host')\n"
             "sys.modules['host'] = _host\n"
-            f"exec({helper!r}, _host.__dict__)\n" + installer)
+            f"exec({helper!r}, _host.__dict__)\n"
+            "_timeline = types.ModuleType('timeline')\n"
+            "sys.modules['timeline'] = _timeline\n"
+            f"exec({tl!r}, _timeline.__dict__)\n" + installer)
 
 
 def _installer_cmd(action, target):

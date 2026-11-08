@@ -11,6 +11,7 @@ Nothing here touches hardware, the network, sudo, or the real ~/.config:
   into tmp_path.
 """
 
+import functools
 import importlib.util
 import logging
 import subprocess
@@ -60,10 +61,28 @@ def real_subprocess(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def no_real_install_json(tmp_path, monkeypatch):
-    """install_record's default path (the logging choice, the last install) goes
-    to tmp_path, never the real ~/.config/z13-helper/install.json."""
+    """install_record's default path (the logging choice, the last install) and
+    timeline's default path go to tmp_path, never the real ~/.config or ~/.local/state."""
     import install_record
+    import timeline
     monkeypatch.setattr(install_record, "INSTALL_JSON", str(tmp_path / "install.json"))
+    monkeypatch.setattr(timeline, "TIMELINE_PATH", str(tmp_path / "state" / "z13-helper" / "timeline.jsonl"))
+
+    # Production hands deferred entries to a background writer. Tests look at the
+    # file right after the call, so wait for the writer; the real enqueue stays
+    # reachable as `timeline.enqueue.__wrapped__` for the tests of deferral itself.
+    real_enqueue = timeline.enqueue
+
+    @functools.wraps(real_enqueue)
+    def enqueue_and_wait(*args, **kwargs):
+        rec = real_enqueue(*args, **kwargs)
+        timeline.flush(10)
+        return rec
+
+    monkeypatch.setattr(timeline, "enqueue", enqueue_and_wait)
+    yield
+    if timeline._PENDING.unfinished_tasks:   # (some tests patch time; only call flush when needed)
+        timeline.flush(10)
 
 
 @pytest.fixture(autouse=True)
@@ -106,6 +125,7 @@ def profiles_env(tmp_path, monkeypatch):
         store=cfg / "profiles.json",
         max_fans=cfg / "max-fans.json",
         legacy=tmp_path / "config" / "z13-profiles" / "current-profile",
+        timeline=tmp_path / "state" / "z13-helper" / "timeline.jsonl",
     )
     monkeypatch.setattr(profiles, "STORE_PATH", str(paths.store))
     monkeypatch.setattr(profiles, "MAX_FANS_PATH", str(paths.max_fans))

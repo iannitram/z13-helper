@@ -18,6 +18,8 @@ import re
 import time
 
 import host
+import install_record
+import post_update_state
 from versions import DECKY_MIN, older_than
 
 CACHE_PATH = os.path.expanduser("~/.config/z13-helper/updates.json")
@@ -54,7 +56,21 @@ def _kernel_version():
 def _steamos_version():
     text = host_read("/etc/os-release") or ""
     m = re.search(r'^VERSION_ID="?([^"\n]+)', text, re.M)
-    return m.group(1) if m else None
+    ver = m.group(1) if m else None
+    cur_build = post_update_state.read_build_id(text)
+    rec = install_record.load()
+    prev_build = post_update_state.recorded_build_id(rec)
+    if prev_build and cur_build and prev_build != cur_build:
+        try:
+            post_update_state.record_if_build_id_changed(
+                prev_build,
+                cur_build,
+                before={"steamos": (rec or {}).get("steamos"), "kernel": (rec or {}).get("kernel")},
+                after={"steamos": f"{ver or '?'} ({cur_build})", "kernel": platform.release()},
+            )
+        except Exception:  # noqa: BLE001 - timeline recording is best-effort
+            pass
+    return ver
 
 
 # Order = display order. "installed" is a callable or None (watch-only).

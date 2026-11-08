@@ -71,7 +71,7 @@ def test_keep_list(capsys):
     assert ic.main(["keep-list"]) == 0
     lines = capsys.readouterr().out.splitlines()
     assert lines == ic.KEEP_LIST
-    assert len(lines) == 7
+    assert len(lines) == 8
     assert all(p.startswith("/etc/") for p in lines)
 
 
@@ -310,3 +310,44 @@ def test_report_exit_code(capsys):
     r.add(ic.RED, "c")
     assert r.print() == 1
     assert "1 ok, 1 warning(s), 1 failure(s)" in capsys.readouterr().out
+
+
+def test_epp_permission_rule_is_installed_and_preserved():
+    rel = "packaging/host/tmpfiles/z13-helper-epp.conf"
+    dest = "/etc/tmpfiles.d/z13-helper-epp.conf"
+    assert (rel, dest, "644", True) in ic.MANIFEST
+    assert dest in ic.KEEP_LIST
+    rules = [line.split() for line in (REPO / rel).read_text().splitlines()
+             if line.strip() and not line.startswith("#")]
+    assert rules == [["z", "/sys/devices/system/cpu/cpufreq/policy*/energy_performance_preference",
+                      "0664", "root", "users", "-"]]
+
+
+def test_epp_rule_parses_and_matches_only_epp_in_real_tmpfiles(tmp_path, real_subprocess):
+    binary = shutil.which("systemd-tmpfiles")
+    if binary is None:
+        pytest.skip("systemd-tmpfiles unavailable")
+    help_text = real_subprocess([binary, "--help"], capture_output=True, text=True).stdout
+    if "--dry-run" not in help_text:
+        pytest.skip("systemd-tmpfiles lacks --dry-run")
+    (tmp_path / "etc").mkdir()
+    (tmp_path / "etc/group").write_text("root:x:0:\nusers:x:100:\n")
+    nodes = []
+    for n in (0, 2):
+        policy = tmp_path / f"sys/devices/system/cpu/cpufreq/policy{n}"
+        policy.mkdir(parents=True)
+        node = policy / "energy_performance_preference"
+        node.write_text("power")
+        node.chmod(0o644)
+        nodes.append(node)
+        (policy / "scaling_max_freq").write_text("1")
+    config = REPO / "packaging/host/tmpfiles/z13-helper-epp.conf"
+    p = real_subprocess([binary, "--create", "--dry-run", f"--root={tmp_path}", str(config)],
+                        env=dict(os.environ, SYSTEMD_LOG_LEVEL="debug"),
+                        capture_output=True, text=True)
+    assert p.returncode == 0, p.stderr
+    for node in nodes:
+        assert f'Would change "{node}" to mode 664' in p.stderr
+        assert node.read_text() == "power"
+        assert node.stat().st_mode & 0o777 == 0o644  # dry run stays read-only
+    assert "scaling_max_freq" not in p.stderr

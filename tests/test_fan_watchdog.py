@@ -8,12 +8,15 @@ import types
 
 import pytest
 
-from fan_watchdog import (AUTO_RETRY_S, AUTO_STALL_S, AUTO_STALL_TEMP_C, FAN_RECOVERY_LABEL, FROZEN_S,
-                          MAX_RECOVERY_ATTEMPTS, ONE_FAN_ZERO_S, RETRY_S, STALL_HYSTERESIS_C,
-                          STALL_TICKS, FanWatchdog, FanWatchdogRunner)
+from fan_watchdog import (AUTO_RETRY_S, AUTO_STALL_S, AUTO_STALL_TEMP_C, DROP_GRACE_S,
+                          FAN_RECOVERY_LABEL, FROZEN_S, MAX_RECOVERY_ATTEMPTS, ONE_FAN_ZERO_S,
+                          RETRY_S, STALL_HYSTERESIS_C, STALL_TICKS, FanWatchdog,
+                          FanWatchdogRunner)
 from sensor_reader import SensorReader
 
 TICK = 1.5   # the app's telemetry period
+# The wait starts on the first dropped-curve tick, so it reaches DROP_GRACE_S this many ticks in.
+DROP_TICKS = math.ceil(DROP_GRACE_S / TICK) + 1
 
 MAX_CURVE = [[t, 255] for t in (20, 30, 40, 50, 60, 70, 80, 90)]
 # 100% from 40 C; idles below.
@@ -132,9 +135,102 @@ def assert_recovery_order(ctl):
 
 def test_rule1_reasserts_max_fans_with_profile_rewrite(env):
     ns = env.make(max_fans=True, enabled=False, fans=(2400, 2500))
-    msg = run(ns, 1)[0]
+    msg = run(ns, DROP_TICKS)[-1]
     assert call_names(ns.ctl) == ["rewrite_profile", "set_fans_max"]
     assert "Max Fans re-applied after a profile change" in msg
+
+
+@pytest.mark.parametrize("enabled", [True, None])
+def test_inline_dropped_curve_rechecks_after_permission_gate(env, enabled):
+    """The daemon may restore the curve while may_act checks the host."""
+    ns = env.make(max_fans=True, enabled=False)
+
+    def may_act():
+        ns.sensors.enabled = enabled
+        return True
+
+    ns.wd._may_act = may_act
+    msg = run(ns, DROP_TICKS)[-1]
+
+    assert "skipped" in msg
+    assert ns.ctl.calls == []
+    # If the curve drops again, compatibility recovery is still available.
+    run(ns, 1)
+    ns.wd._may_act = lambda: True
+    ns.sensors.enabled = False
+    assert "Max Fans re-applied" in run(ns, DROP_TICKS)[-1]
+    assert call_names(ns.ctl) == ["rewrite_profile", "set_fans_max"]
+
+
+@pytest.mark.parametrize("enabled", [True, None])
+def test_queued_dropped_curve_skips_when_daemon_restores_curve(env, enabled):
+    """Daemon reconciliation alone supersedes recovery with Max Fans still on."""
+    ns = env.make(max_fans=True, enabled=False)
+    jobs = []
+    runner = FanWatchdogRunner(ns.wd, lambda label, fn: jobs.append(fn))
+    for _ in range(DROP_TICKS):
+        ns.clock.advance(TICK)
+        runner.tick()
+    assert len(jobs) == 1 and runner.pending
+    ns.sensors.enabled = enabled
+
+    msg = jobs[0]()
+    runner.on_done(FAN_RECOVERY_LABEL, msg)
+
+    assert "skipped" in msg
+    assert ns.max_on and not runner.pending
+    assert ns.ctl.calls == []
+
+    # If the curve drops again later, recovery still fires.
+    ns.clock.advance(TICK)
+    runner.tick()
+    ns.sensors.enabled = False
+    for _ in range(DROP_TICKS):
+        ns.clock.advance(TICK)
+        runner.tick()
+    assert len(jobs) == 2 and runner.pending
+
+    msg2 = jobs[1]()
+    runner.on_done(FAN_RECOVERY_LABEL, msg2)
+    assert "Max Fans re-applied" in msg2
+    assert call_names(ns.ctl) == ["rewrite_profile", "set_fans_max"]
+    assert not runner.pending
+
+
+def test_queued_dropped_curve_skips_when_max_fans_turns_off_and_recovers_on_later_stall(env):
+    """Mirror case with Max Fans off: dropped-curve recovery cancels when Max Fans
+    turns off, and subsequent custom-curve recovery re-applies the curve."""
+    ns = env.make(max_fans=True, enabled=False, curve=MAX_CURVE, temp=50.0, fans=(0, 0))
+    jobs = []
+    runner = FanWatchdogRunner(ns.wd, lambda label, fn: jobs.append(fn))
+    for _ in range(DROP_TICKS):
+        ns.clock.advance(TICK)
+        runner.tick()
+    assert len(jobs) == 1 and runner.pending
+
+    # Max Fans intent turns off while recovery is queued -> skip.
+    ns.set_max(False)
+    msg = jobs[0]()
+    runner.on_done(FAN_RECOVERY_LABEL, msg)
+
+    assert "skipped" in msg
+    assert not ns.max_on and not runner.pending
+    assert ns.ctl.calls == []
+
+    # Custom curve is active; fans stall at 0 RPM with Max Fans off -> curve re-apply path.
+    ns.sensors.enabled = True
+    ns.clock.advance(RETRY_S)
+    for _ in range(STALL_TICKS):
+        ns.clock.advance(TICK)
+        runner.tick()
+    assert len(jobs) == 2 and runner.pending
+
+    msg2 = jobs[1]()
+    runner.on_done(FAN_RECOVERY_LABEL, msg2)
+
+    assert "profile and curve re-applied" in msg2
+    assert call_names(ns.ctl) == ["rewrite_profile", "set_fancurve_pwm"]
+    assert not runner.pending
 
 
 @pytest.mark.parametrize("clear_during", ["rewrite_profile", "restore_tdp"])
@@ -156,7 +252,7 @@ def test_max_fans_recovery_cancels_if_flag_turns_off_midflight(env, clear_during
     ns.wd = FanWatchdog(ns.sensors, ns.ctl, max_fans_on=lambda: ns.max_on,
                         may_act=lambda: True, clock=ns.clock)
 
-    msg = run(ns, 1)[0]
+    msg = run(ns, DROP_TICKS)[-1]
 
     assert "Max Fans recovery cancelled" in msg
     assert "set_fans_max" not in call_names(ns.ctl)
@@ -165,7 +261,7 @@ def test_max_fans_recovery_cancels_if_flag_turns_off_midflight(env, clear_during
 
 def test_rule1_throttled_then_retried_after_retry_s(env):
     ns = env.make(max_fans=True, enabled=False)
-    run(ns, 1)
+    run(ns, DROP_TICKS)
     assert run(ns, 1, dt=RETRY_S - 1) == [None]
     assert len(ns.ctl.calls) == 2
     run(ns, 1, dt=1.01)
@@ -185,6 +281,87 @@ def test_unknown_curve_state_is_left_alone(env):
     ns = env.make(max_fans=True, enabled=None, fans=(0, 0))
     assert run(ns, 10) == [None] * 10
     assert ns.ctl.calls == []
+
+
+def test_daemon_reapplies_within_grace(env):
+    ns = env.make(max_fans=True, enabled=False, fans=(8700, 8700))
+    # Max Fans on, curve dropped on one tick
+    assert run(ns, 1) == [None]
+    # Enabled True on the next tick (inside grace)
+    ns.sensors.enabled = True
+    assert run(ns, 1) == [None]
+    # Keep ticking well past DROP_GRACE_S
+    msgs = run(ns, DROP_TICKS * 2)
+    assert all(m is None for m in msgs)
+    assert ns.ctl.calls == []
+
+
+def test_still_dropped_after_grace_recovers_once(env):
+    ns = env.make(max_fans=True, enabled=False, fans=(8700, 8700))
+    # Dropped on every tick; no action before DROP_GRACE_S
+    before = run(ns, DROP_TICKS - 1)
+    assert all(m is None for m in before)
+    assert ns.ctl.calls == []
+    # Exactly one recovery at or after DROP_GRACE_S
+    msg = run(ns, 1)[0]
+    assert msg is not None
+    assert "Max Fans re-applied after a profile change" in msg
+    assert call_names(ns.ctl) == ["rewrite_profile", "set_fans_max"]
+    assert_recovery_order(ns.ctl)
+
+
+def test_dropped_curve_streak_resets_when_reenabled(env):
+    ns = env.make(max_fans=True, enabled=False, fans=(8700, 8700))
+    # Dropped for several ticks inside grace
+    assert run(ns, 3) == [None] * 3
+    # Re-enabled
+    ns.sensors.enabled = True
+    assert run(ns, 1) == [None]
+    # Dropped again: grace restarts from this second drop
+    ns.sensors.enabled = False
+    before = run(ns, DROP_TICKS - 1)
+    assert all(m is None for m in before)
+    assert ns.ctl.calls == []
+    # Recovery fires only after DROP_GRACE_S after the second drop
+    msg = run(ns, 1)[0]
+    assert "Max Fans re-applied after a profile change" in msg
+    assert call_names(ns.ctl) == ["rewrite_profile", "set_fans_max"]
+
+
+def test_resume_gap_defers_action_during_grace_even_if_dropped_since_older(env):
+    ns = env.make(max_fans=True, enabled=False, fans=(8700, 8700))
+    run(ns, 1)
+    # A RESUME gap in ticks:
+    ns.clock.advance(RETRY_S + 5)
+    # tick() enters resume block, grace_until is set to now + RETRY_S
+    assert ns.wd.tick() is None
+    assert ns.ctl.calls == []
+    # Even if _dropped_since is older than DROP_GRACE_S:
+    ns.wd._dropped_since = ns.clock() - DROP_GRACE_S - 10
+    # No action while now < _grace_until:
+    assert ns.clock() < ns.wd._grace_until
+    assert ns.wd.tick() is None
+    assert ns.ctl.calls == []
+    # Action allowed once past _grace_until:
+    ns.clock.advance(RETRY_S)
+    assert ns.clock() >= ns.wd._grace_until
+    msg = ns.wd.tick()
+    assert "Max Fans re-applied after a profile change" in msg
+    assert call_names(ns.ctl) == ["rewrite_profile", "set_fans_max"]
+
+
+def test_max_fans_off_with_dropped_curve_goes_to_rule5(env):
+    # Max Fans off with a dropped curve still goes to rule 5 as today
+    ns = auto(env, tdp=BOONDOCK_TDP)
+    msgs = run(ns, AUTO_TICKS)
+    assert msgs[:-1] == [None] * (AUTO_TICKS - 1)
+    assert "Fans stopped in auto mode" in (msgs[-1] or "")
+    assert call_names(ns.ctl) == ["rewrite_profile", "apply_tdp", "reset_fancurve"]
+
+
+def test_drop_grace_s_mutation_guard():
+    # z13ctl 1.4.2 daemon polls every 2 s; DROP_GRACE_S must be at least 2 daemon polls
+    assert DROP_GRACE_S >= 2 * 2
 
 
 # ----------------------------------------------------------------------
@@ -342,7 +519,7 @@ def test_rule3_jittering_fans_never_trigger(env):
 
 def test_rule3_respects_throttle(env):
     ns = env.make(max_fans=True, enabled=False, curve=MAX_CURVE, temp=55.0, fans=(8700, 6000))
-    run(ns, 1)                                       # rule 1 recovery at t0
+    run(ns, DROP_TICKS)                               # rule 1 recovery at t0
     assert len(ns.ctl.calls) == 2
     ns.sensors.enabled = True
     # Long-frozen fan 1, but only RETRY_S/2 since the last recovery.
@@ -410,7 +587,7 @@ def test_refused_stall_recovers_on_first_allowed_tick(env):
 def test_refused_dropped_curve_recovers_on_first_allowed_tick(env):
     ns = env.make(max_fans=True, enabled=False)
     ns.allowed = False
-    run(ns, 3)
+    run(ns, DROP_TICKS + 2)
     assert ns.ctl.calls == []
     ns.allowed = True
     assert "Max Fans re-applied" in run(ns, 1)[0]
@@ -439,7 +616,7 @@ def test_max_fans_flag_is_read_every_tick(env):
     run(ns, 2)
     assert ns.ctl.calls == []
     ns.set_max(True)
-    run(ns, 1)
+    run(ns, DROP_TICKS)
     assert call_names(ns.ctl) == ["rewrite_profile", "set_fans_max"]
 
 
@@ -487,7 +664,7 @@ def test_both_fans_flat_out_while_warming_is_not_corroboration(env):
 
 def test_one_fan_zero_waits_out_the_grace_after_our_own_write(env):
     ns = env.make(max_fans=True, enabled=False, curve=MAX_CURVE, temp=80.0)
-    run(ns, 1)                                   # rule 1 recovery writes
+    run(ns, DROP_TICKS)                           # rule 1 recovery writes
     ns.sensors.enabled = True
     n_before = len(ns.ctl.calls)
     alternate(ns, int((RETRY_S + ONE_FAN_ZERO_S) // TICK) - 2)
@@ -614,6 +791,9 @@ def test_timer_callback_returns_at_once_while_recovery_runs_on_worker(env):
     ns.wd.fans = ns.ctl
     w = OneThreadQueue()
     runner = FanWatchdogRunner(ns.wd, w.submit)
+    for _ in range(DROP_TICKS - 1):
+        ns.clock.advance(TICK)
+        runner.tick()
     ns.clock.advance(TICK)
     t0 = time.monotonic()
     msg = runner.tick()                 # what the dashboard's timer callback does
@@ -634,18 +814,20 @@ def test_second_recovery_not_enqueued_while_one_is_pending(env):
     ns.wd.fans = ns.ctl
     w = OneThreadQueue()
     runner = FanWatchdogRunner(ns.wd, w.submit)
-    ns.clock.advance(TICK)
-    runner.tick()
+    for _ in range(DROP_TICKS):
+        ns.clock.advance(TICK)
+        runner.tick()
     assert runner.pending
-    ns.clock.advance(RETRY_S + 5)       # retry gap long past, recovery still running
-    runner.tick()
-    runner.tick()
+    for _ in range(int((RETRY_S + 5) // TICK)):
+        ns.clock.advance(TICK)
+        runner.tick()
     assert w.submitted == [FAN_RECOVERY_LABEL]
     w.wait(1)
     runner.on_done(*w.done[0])
     assert not runner.pending
-    ns.clock.advance(RETRY_S + 5)       # curve still dropped: a new recovery is due
-    runner.tick()
+    for _ in range(int((RETRY_S + 5) // TICK)):
+        ns.clock.advance(TICK)
+        runner.tick()
     assert w.submitted == [FAN_RECOVERY_LABEL] * 2
 
 
@@ -653,8 +835,9 @@ def test_failed_recovery_result_is_reported_and_clears_pending(env):
     ns = env.make(max_fans=True, enabled=False, fail_on="set_fans_max")
     w = OneThreadQueue()
     runner = FanWatchdogRunner(ns.wd, w.submit)
-    ns.clock.advance(TICK)
-    runner.tick()
+    for _ in range(DROP_TICKS):
+        ns.clock.advance(TICK)
+        runner.tick()
     w.wait(1)
     assert runner.on_done(*w.done[0]).startswith("Fan recovery failed")
     assert not runner.pending
@@ -662,7 +845,7 @@ def test_failed_recovery_result_is_reported_and_clears_pending(env):
 
 def test_plain_tick_still_recovers_inline_for_decky(env):
     ns = env.make(max_fans=True, enabled=False)
-    assert "Max Fans re-applied" in run(ns, 1)[0]
+    assert "Max Fans re-applied" in run(ns, DROP_TICKS)[-1]
     assert call_names(ns.ctl) == ["rewrite_profile", "set_fans_max"]
 
 
@@ -672,8 +855,9 @@ def test_queued_recovery_rereads_max_fans_when_it_runs(env):
     ns = env.make(max_fans=True, enabled=False)
     jobs = []
     runner = FanWatchdogRunner(ns.wd, lambda label, fn: jobs.append(fn))
-    ns.clock.advance(TICK)
-    runner.tick()
+    for _ in range(DROP_TICKS):
+        ns.clock.advance(TICK)
+        runner.tick()
     ns.set_max(False)
     ns.sensors.enabled = True
     msg = jobs[0]()
@@ -914,7 +1098,7 @@ def test_queued_auto_recovery_skips_when_suspended(env):
 
 
 def test_queued_stalled_recovery_skips_when_suspended(env):
-    ns = env.make(max_fans=False, enabled=True, temp=60.0, fans=(0, 0))
+    ns = env.make(max_fans=False, enabled=True, curve=MAX_CURVE, temp=60.0, fans=(0, 0))
     jobs = []
     runner = FanWatchdogRunner(ns.wd, lambda label, fn: jobs.append(fn))
     for _ in range(STALL_TICKS):
@@ -927,4 +1111,19 @@ def test_queued_stalled_recovery_skips_when_suspended(env):
 
     assert "skipped" in msg
     assert ns.ctl.calls == []
+    assert not runner.pending
+
+    # Once no longer suspended, advance past retry window and recover on curve re-apply path.
+    ns.suspended = False
+    ns.clock.advance(RETRY_S)
+    for _ in range(STALL_TICKS):
+        ns.clock.advance(TICK)
+        runner.tick()
+    assert len(jobs) == 2 and runner.pending
+
+    msg2 = jobs[1]()
+    runner.on_done(FAN_RECOVERY_LABEL, msg2)
+    assert "profile and curve re-applied" in msg2
+    assert call_names(ns.ctl) == ["rewrite_profile", "set_fancurve_pwm"]
+    assert not runner.pending
 

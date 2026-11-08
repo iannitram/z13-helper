@@ -6,12 +6,16 @@ Only this module hands hardware commands to the host seam.
 """
 from contextlib import contextmanager
 import functools
+import json
+import logging
 import os
 import threading
 
 import host
 from z13ctl_client import Z13CtlClient, Z13CtlError
 from z13ctl_profiles import profile_target_supported
+
+logger = logging.getLogger(__name__)
 
 _MUTEX = threading.RLock()
 _local = threading.local()
@@ -117,6 +121,34 @@ def run(argv, timeout=30, *, as_deck=False, input=None):
             return host.Result(1, str(exc), False)
 
 
+def _read_saved_brightness():
+    paths = [
+        os.path.expanduser("~/.config/z13-helper/config.json"),
+        os.path.expanduser("~/homebrew/settings/z13-helper/state.json"),
+        "/home/deck/homebrew/settings/z13-helper/state.json",
+    ]
+    try:
+        import sys
+        if "decky" in sys.modules:
+            d = getattr(sys.modules["decky"], "DECKY_PLUGIN_SETTINGS_DIR", None)
+            if d:
+                paths.insert(0, os.path.join(d, "state.json"))
+    except Exception:
+        pass
+
+    for p in paths:
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                v = data.get("brightness")
+                if v is not None:
+                    return v
+        except Exception:
+            pass
+    return None
+
+
 @serialized
 def edit(profile, field, *, devices=None):
     """Store an edit; push it live only when the profile is active."""
@@ -125,7 +157,10 @@ def edit(profile, field, *, devices=None):
     if client is not None:
         profiles.sync_active_from_backend(client.get_state())
     current = profiles.get_profile(profile['name'])
+    before_value = None
     if current is not None:
+        raw = current.get(field)
+        before_value = dict(raw) if isinstance(raw, dict) else raw
         # A slider owns one field, never the other values in its stale widget copy.
         current[field] = profile.get(field)
         profile = current
@@ -137,7 +172,7 @@ def edit(profile, field, *, devices=None):
     previous = getattr(_local, 'profile', None)
     _local.profile = profile
     try:
-        return _push_field(profile, field, devices=devices)
+        return _push_field(profile, field, devices=devices, before=before_value)
     finally:
         _local.profile = previous
 
@@ -149,15 +184,56 @@ def apply_profile(name, **kw):
     return profiles.apply_by_name(name, **kw)
 
 
-def _push_field(profile, field, *, devices=None):
+def _push_field(profile, field, *, devices=None, before=None):
     import profiles
     from hardware_controller import HardwareController
     # Use the same full ordered apply for clearing overrides and base changes.
     # Targeted writes avoid a fan dip on ordinary slider releases.
     c = HardwareController()
     value = profile.get(field)
+
+    def _record_change(ok):
+        if field not in ("tdp", "battery_limit", "brightness"):
+            return
+        try:
+            import timeline
+            if field == "tdp":
+                summary = (f"TDP {value['pl1']}/{value['pl2']}/{value['pl3']} W"
+                           if (isinstance(value, dict) and "pl1" in value and "pl2" in value and "pl3" in value)
+                           else f"TDP {value}" if value else "TDP off")
+            elif field == "battery_limit":
+                summary = f"Charge limit {value}%"
+            elif field == "brightness":
+                summary = f"Brightness {value}"
+            else:
+                summary = f"{field} {value}"
+
+            b_val = before
+            if field == "brightness" and b_val is None:
+                b_val = _read_saved_brightness()
+
+            before_dict = {field: b_val}
+            after_dict = {field: value} if ok else before_dict
+
+            timeline.record_setting_change(
+                kind=field,
+                summary=summary,
+                before=before_dict,
+                after=after_dict,
+                ok=ok,
+                path=None,
+                defer=True,   # never write the timeline inside a hardware transaction
+            )
+        except Exception as e:
+            logger.warning("timeline recording failed for %s: %s", field, e)
+
     if field == 'tdp' and value:
-        result = c.apply_tdp(value)
+        try:
+            result = c.apply_tdp(value)
+        except Exception:
+            _record_change(ok=False)
+            raise
+        _record_change(ok=True)
     elif field == 'fan_curve' and value:
         import max_fans_state
         if max_fans_state.is_enabled():
@@ -167,11 +243,26 @@ def _push_field(profile, field, *, devices=None):
     elif field == 'undervolt' and value is not None:
         result = c.set_undervolt(value)
     elif field == 'battery_limit' and value is not None:
-        result = c.set_battery_limit(value)
-    elif field == 'epp' and value is not None:
+        try:
+            result = c.set_battery_limit(value)
+        except Exception:
+            _record_change(ok=False)
+            raise
+        _record_change(ok=True)
+    elif field == 'epp':
+        # None is "Unchanged": a no-op, never the full apply below (that rewrites
+        # the platform profile and fan curve and stops the fans for 5-10 s).
+        if value is None:
+            return 'CPU Boost: unchanged'
         result = c.set_epp(value)
     elif field == 'brightness' and value:
-        result = c.set_brightness(value, devices=devices)
+        try:
+            failed = c.set_brightness(value, devices=devices)
+        except Exception:
+            _record_change(ok=False)
+            raise
+        _record_change(ok=not bool(failed))
+        result = failed
     else:
         results = profiles.apply(profile, previous=profile, skip_hooks=True)
         if any(ok for step, ok, _ in results if step == "profile"):
