@@ -94,8 +94,9 @@ The full plan, with reasons and status, is [`docs/ROADMAP.md`](docs/ROADMAP.md).
    recipes so you can add your own tasks without changing the app.
 2. **Settle the frozen-tach question** from the fan trace, and tune or narrow the rule.
 3. **Game Mode polish** (§9):
-   - make Steam's own TDP, charge-limit and profile controls work on the Z13, through a small
-     steamos-manager service backed by z13ctl
+   - Steam's own TDP, charge-limit and profile controls are not created on the Z13: steamos-manager
+     only makes them from a built-in device config the Z13 lacks, and only root may own its system-bus
+     name. Whether `remotes.d` could supply them is untested. Options and measurements: [`docs/steamos-manager.md`](docs/steamos-manager.md)
    - a 48–180 Hz VRR display profile for gamescope
 4. **Lean on z13ctl 1.4** (§8):
    - mirror profiles into z13ctl's named profiles, with AC/battery autoswitch

@@ -190,7 +190,7 @@ flowchart LR
 | `flatpak/` | Flatpak manifest (`io.github.iannitram.Z13Helper.yml`), `build.sh`, the in-sandbox `launch.sh`, desktop file and AppStream metadata. |
 | `docs/adr/` | Architecture decision records: root-owned `py_modules/` copies for the Decky plugin (`0001-decky-imports-root-owned-copies.md`), and shared JSON design tokens with a large-tile PyQt6 layout rather than a desktop web view (`0002-shared-touch-ui.md`, #132); its timings are offscreen prototype measurements, and the #133 issue sync is a pending owner/coordinator action). |
 
-`z13ctl` is the sole hardware command backend. Decky Loader provides the Game Mode QAM surface; G-Helper informs the desktop layout and interaction model. The device verification checklist is in [`docs/ROADMAP.md`](../docs/ROADMAP.md); automated tests do not replace pending on-device checks.
+`z13ctl` is the sole hardware command backend. Decky Loader provides the Game Mode QAM surface; G-Helper informs the desktop layout and interaction model. The device verification checklist is in [`docs/ROADMAP.md`](../docs/ROADMAP.md); automated tests do not replace pending on-device checks. Measured `steamos-manager` interfaces on the Z13: [`docs/steamos-manager.md`](../docs/steamos-manager.md).
 
 Decky's file watcher must be stopped before changing installed plugin files: otherwise every
 individual copy can trigger a reload against a partial bundle (#100). `install.sh` quiesces the loader, stages and byte-verifies the files, then restarts it (`quiesce_loader`, `start_loader`, `resume_loader`). It leaves an

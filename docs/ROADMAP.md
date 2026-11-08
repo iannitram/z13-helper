@@ -315,10 +315,14 @@ the curve or the mode can no longer be read.
 
 ## 9. Phase 13 — Game Mode polish ⏳
 - **Steam's own TDP / charge-limit / profile controls.** steamos-manager reports `DeviceModel "unknown"`
-  here, so the QAM Performance tab lacks them. A small system-bus service implementing
-  `com.steampowered.SteamOSManager1.{TdpLimit1,BatteryChargeLimit1,PerformanceProfile1}` registered
-  via `/etc/steamos-manager/remotes.d/*.toml` (the ROG Ally ships one) would bring them back. Must call
-  z13ctl, not sysfs (principle 1).
+  here, so the QAM Performance tab lacks them. **Not shown to come back through `remotes.d`:** the measured gate is the device config, and a remote's ability to serve these interfaces is untested.
+  `TdpLimit1`, `BatteryChargeLimit1` and `PerformanceProfile1` are created only from a per-device
+  config in `/usr/share/steamos-manager/devices/` matched by DMI, and `GZ302EA` has none. `remotes.d`
+  adds no device config, and the system-bus policy lets only `root` own the
+  `com.steampowered.SteamOSManager1` name, so a third-party service cannot take that name itself. Options (owner's decision): replace the package's service with a shim that calls
+  z13ctl (principle 1), ship a device TOML into the immutable image (re-applied after every update,
+  joining the post-update repair list, #27), or ask Valve for a `GZ302EA` entry. Measurements and
+  open decisions: [`steamos-manager.md`](steamos-manager.md) (#29).
 - **48–180 Hz VRR profile for gamescope** (`~/.config/gamescope/scripts/`, modelled on
   `asus.rogally.lcd.lua`). The repository now includes a Gamescope display script matched only
   to EDID vendor `TMA`, product `0x0803`, model `TL134ADXP03`; it derives 48–180 Hz fixed-clock
