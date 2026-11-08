@@ -23,7 +23,7 @@ only own a different name or replace the package's service.
 
 `Manager2.DeviceModel` reports `("unknown", "unknown")`. The manager picks per-device config by DMI
 (`/usr/share/steamos-manager/devices/*.toml`, matched on `sys_vendor` and `board_name`); `GZ302EA`
-appears in none of the 25 files, so the optional interfaces are never created:
+appears in none of the 26 files, so the optional interfaces are never created:
 
 | Wanted control | Interface Steam would use | On this Z13 |
 |---|---|---|
@@ -39,11 +39,15 @@ charge limit through `acpi_sb`. The Z13 exposes the same kernel nodes this app a
 `z13ctl`), so a device entry would be small, but it would live in `/usr/share`, the immutable
 image: a SteamOS update replaces it. No user-writable override directory was found: `/etc/steamos-manager`
 holds only `remotes.d`, and `~/.config/steamos-manager/state.toml` is session state, not device config.
+The user service exposes `RemoteInterface1.RemoteInterfaces`, which is empty on this Z13 (no remote
+loaded). That is the remote mechanism `remotes.d` feeds. Whether a remote can serve `TdpLimit1`,
+`BatteryChargeLimit1` or `PerformanceProfile1` was not tested and is the one route this measurement
+leaves open.
 
 ## Consequence for #29
 
 - Steam's Performance tab cannot show TDP, charge limit or profile on the Z13 with the installed
-  device configs. Our repo could change that by shipping a device TOML into the immutable image
+  device configs. Whether a `remotes.d` remote could supply them is untested. Our repo could change that by shipping a device TOML into the immutable image
   (re-applied after every update) or by replacing Valve's service. Valve could also ship a
   `GZ302EA` entry.
 - Decky stays the front end for these controls (as in Phase 13 of the roadmap).
