@@ -118,3 +118,31 @@ def test_no_input_emulation_or_inputplumber_unmask():
 
 def test_main_handles_the_cycle_command():
     assert 'cmd == "cycle"' in (REPO / "main.py").read_text()
+
+
+def test_game_mode_cycle_starts_the_app_when_absent(watcher, monkeypatch):
+    started = []
+    monkeypatch.setattr(watcher, "app_command", lambda cmd: False)
+    monkeypatch.setattr(watcher, "start_app", lambda then: started.append(then))
+    watcher.handle_cycle()
+    assert started == ["cycle"]
+
+
+def test_started_app_gets_the_cycle_not_a_window(watcher, monkeypatch):
+    sent, runs = [], []
+    monkeypatch.setattr(watcher.subprocess, "run", lambda argv, **kw: runs.append(argv))
+    monkeypatch.setattr(watcher.time, "sleep", lambda s: None)
+    monkeypatch.setattr(watcher, "app_command", lambda cmd: sent.append(cmd) or len(sent) > 1)
+
+    class Now:
+        def __init__(self, target, daemon):
+            self.target = target
+
+        def start(self):
+            self.target()
+    monkeypatch.setattr(watcher.threading, "Thread", Now)
+    watcher._starting.clear()
+    watcher.start_app("cycle")
+    assert runs and runs[0][:4] == ["systemctl", "--user", "start", "--no-block"]
+    assert sent == ["cycle", "cycle"] and "show" not in sent
+    assert not watcher._starting.is_set()

@@ -81,10 +81,15 @@ def app_command(cmd):
 
 def start_desktop_app():
     """Desktop Mode, app not running: start its unit, then show the window once it's up."""
+    start_app("show")
+
+
+def start_app(then):
+    """App not running: start its unit, then send `then` once it answers."""
     if _starting.is_set():
         return
     _starting.set()
-    logger.info("app not running: starting %s", APP_UNIT)
+    logger.info("app not running: starting %s (then %s)", APP_UNIT, then)
 
     def run():
         try:
@@ -92,8 +97,8 @@ def start_desktop_app():
             deadline = time.monotonic() + APP_START_WAIT_S
             while time.monotonic() < deadline:
                 time.sleep(0.5)
-                if app_command("show"):
-                    logger.info("app up; window shown")
+                if app_command(then):
+                    logger.info("app up; sent %s", then)
                     return
             logger.warning("app didn't come up within %ds", APP_START_WAIT_S)
         except (OSError, subprocess.SubprocessError) as exc:
@@ -152,9 +157,10 @@ def handle_press(is_double):
 
 def handle_cycle():
     """Game Mode triple press: ask the resident app (it keeps running in the tray) for the
-    next profile; its apply also flashes the lightbar. Never sends a second command."""
+    next profile; its apply also flashes the lightbar. If the app isn't running, start it
+    (no window over the game) and cycle once it is up (owner decision 2026-11-07)."""
     if not app_command("cycle"):
-        logger.warning("cycle: the app is not running, nothing to switch")
+        start_app("cycle")
 
 
 class PressChain:

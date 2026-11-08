@@ -129,8 +129,9 @@ The gate is the same live check on both sides, `systemctl --user is-active games
 (`in_gamemode()` in `tooling/z13-button-watcher` and in `src/evdev_listener.py`; not an env var, which
 goes stale across a session switch). The app side asks only when a gesture completes, so ordinary
 presses cost nothing. `tests/test_button_gesture.py` runs one triple press through both readers in each
-mode and asserts exactly one cycle. In Game Mode the app must be resident (it keeps running in the
-tray); if it is not, the watcher logs it and nothing cycles. A session switch between presses 1 and 3 is
+mode and asserts exactly one cycle. In Game Mode the cycle goes through the resident app (it keeps
+running in the tray); if it is not running, the watcher starts `z13-helper.service` and sends `cycle`
+once the app answers, without showing its window (owner decision 2026-11-07). A session switch between presses 1 and 3 is
 the one window where the two checks could disagree; it is not worth guarding.
 
 The cycle goes through `ProfileControl.cycle()` -> `switch()`, the normal profile apply, so the
