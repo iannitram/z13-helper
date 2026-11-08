@@ -51,19 +51,23 @@ def env(tmp_path, real_subprocess):
     ctl_log = tmp_path / "z13ctl.txt"
     (stubs / "runuser").write_text(RUNUSER_STUB)
     (stubs / "logger").write_text(f'#!/bin/sh\necho "$*" >> "{logger_log}"\n')
-    (stubs / "sleep").write_text("#!/bin/sh\nexit 0\n")
+    sleep_log = tmp_path / "sleep.txt"
+    (stubs / "sleep").write_text(f'#!/bin/sh\necho "$*" >> "{sleep_log}"\nexit 0\n')
+    (stubs / "timeout").write_text('#!/bin/sh\nshift\nexec "$@"\n')
     for f in stubs.iterdir():
         f.chmod(0o755)
 
-    def write_ctl(rc=0, log=ctl_log):
+    def write_ctl(rc=0, version="z13ctl version 1.4.2", version_rc=0, log=ctl_log):
         p = home / ".local" / "bin" / "z13ctl"
-        p.write_text(executable_stub("Z13CTL_LOG", "z13ctl") + f"exit {rc}\n")
+        p.write_text(executable_stub("Z13CTL_LOG", "z13ctl") +
+                     f'if [ "$1" = "--version" ]; then echo "{version}"; exit {version_rc}; fi\nexit {rc}\n')
         p.chmod(0o755)
         return p
 
-    def write_profile(rc=0, log=None):
+    def write_profile(rc=0, owner_rc=0, log=None):
         p = home / ".local" / "bin" / "z13-profile"
-        p.write_text(executable_stub("PROFILE_LOG", "z13-profile") + f"exit {rc}\n")
+        p.write_text(executable_stub("PROFILE_LOG", "z13-profile") +
+                     f'if [ "$1" = "resume-owner" ]; then exit {owner_rc}; fi\nexit {rc}\n')
         p.chmod(0o755)
         (home / ".config" / "z13-helper" / "profiles.json").write_text("{}")
         return p
@@ -76,12 +80,14 @@ def env(tmp_path, real_subprocess):
             "RUNUSER_LOG": str(tmp_path / "runuser.txt"),
             "Z13CTL_LOG": str(ctl_log),
             "PROFILE_LOG": str(tmp_path / "profile.txt"),
+            "SLEEP_LOG": str(sleep_log),
         }
         return real_subprocess(["sh", str(SCRIPT)], env=e, capture_output=True, text=True, timeout=20)
 
     run.home, run.stubs = home, stubs
     run.write_ctl, run.write_profile = write_ctl, write_profile
     run.logger_log = logger_log
+    run.sleep_log = sleep_log
     run.runuser_log = tmp_path / "runuser.txt"
     run.ctl_log, run.profile_log = ctl_log, tmp_path / "profile.txt"
     return run
@@ -98,6 +104,68 @@ def test_profile_restore_runs_as_deck_not_root(env):
     assert "ran as deck via runuser" in env.profile_log.read_text()
     assert "ran DIRECTLY" not in env.profile_log.read_text()
     assert "re-applied active profile" in env.logger_log.read_text()
+
+
+@pytest.mark.parametrize("version", [
+    "z13ctl version 1.4.2",
+    "z13ctl version 1.4.10",
+    "z13ctl version 1.5.0",
+    "z13ctl version 2.0.0",
+])
+def test_resume_owner_defers_without_restore_or_sleep(env, version):
+    env.write_ctl(version=version)
+    env.write_profile(owner_rc=10)
+    p = env()
+    assert p.returncode == 0, p.stderr
+    assert "resume-owner" in env.profile_log.read_text()
+    assert " restore" not in env.profile_log.read_text()
+    assert "z13ctl 1.4.2+ owns the resume restore; hook deferred" in env.logger_log.read_text()
+    assert not env.ctl_log.read_text().count("fancurve")
+    assert not env.sleep_log.exists()
+
+
+@pytest.mark.parametrize("version,owner_rc", [
+    ("z13ctl version 1.4.1", 10),
+    ("z13ctl version 1.3.12", 10),
+    ("garbage version", 10),
+    ("z13ctl version 1.4", 10),
+    ("z13ctl version v1.4.2", 10),
+    ("z13ctl version 1.4.2-rc1", 10),
+    ("foo version 1.4.2", 10),
+    ("z13ctl version 0.4.2", 10),
+    ("z13ctl version 0.5.2", 10),
+    ("z13ctl version 1.5.0-beta", 10),
+    ("z13ctl version 2.0.0x", 10),
+    ("z13ctl version 1.4.2.", 10),
+    ("z13ctl version .1.4.2", 10),
+    ("z13ctl version 1.4.2 extra", 10),
+    ("z13ctl version", 10),
+    ("z13ctl version 1.4.2", 0),
+    ("z13ctl version 1.4.2", 2),
+    ("z13ctl version 1.4.2", 124),
+])
+def test_unproven_resume_owner_keeps_restore_path(env, version, owner_rc):
+    env.write_ctl(version=version)
+    env.write_profile(rc=0, owner_rc=owner_rc)
+    p = env()
+    assert p.returncode == 0, p.stderr
+    if owner_rc == 10:
+        assert "resume-owner" not in env.profile_log.read_text()
+    assert "restore" in env.profile_log.read_text()
+    assert "re-applied active profile" in env.logger_log.read_text()
+    assert "hook deferred" not in env.logger_log.read_text()
+    assert env.sleep_log.read_text().strip() == "3"
+
+
+def test_failed_version_check_keeps_restore_path(env):
+    env.write_ctl(version="z13ctl version 1.4.2", version_rc=1)
+    env.write_profile(rc=0, owner_rc=10)
+    p = env()
+    assert p.returncode == 0, p.stderr
+    assert "resume-owner" not in env.profile_log.read_text()
+    assert "restore" in env.profile_log.read_text()
+    assert "re-applied active profile" in env.logger_log.read_text()
+    assert env.sleep_log.read_text().strip() == "3"
 
 
 def test_fallback_never_writes_pwm_enable_sysfs():

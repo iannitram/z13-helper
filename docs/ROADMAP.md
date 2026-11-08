@@ -299,6 +299,18 @@ suspend/resume cycle on a custom curve with the fans checked after; (7) profiles
 watchdog's curve-drop branch once the daemon is proven to re-apply curves itself; use `subscribe`
 events (not in 1.4.2's CLI — check the socket API) instead of polling.
 
+**#66 retirement gate:** retain curve-drop recovery for now. The issue records z13ctl
+1.4.2 as untested on SteamOS 3.9.5's kernel 7.2 (2026-10-26); a version number or
+custom-curve-enabled bit alone is insufficient evidence to remove recovery.
+Before retiring this branch, record #74 step 3 and #80 results: daemon-only curve
+restoration after platform-profile writes and three suspend/resume cycles in
+Desktop Mode and Game Mode, including Valve's ASUS fan-after-wake workaround.
+Correlate restored curve points with sustained fan response and temperatures
+(§12); keep stall, frozen-tach and auto-stall recovery independent of that decision.
+Until then, both inline and queued dropped-curve recoveries recheck intent and
+curve mode before writing, skipping recovery if the daemon has already restored
+the curve or the mode can no longer be read.
+
 ---
 
 ## 9. Phase 13 — Game Mode polish ⏳
@@ -314,7 +326,11 @@ events (not in 1.4.2's CLI — check the socket API) instead of polling.
   installer manifest. The panel EDID advertises Adaptive-Sync 48–180 Hz and DRM reports
   `vrr_capable=1`, but actual Game Mode slider reach and panel response to generated timings
   remain **on-device verification pending**. Do not describe this as hardware-accepted until
-  tested in Game Mode.
+  tested in Game Mode. Run `python tooling/verify_gamescope_vrr.py` from the checkout for
+  a read-only installed-script/EDID/OS/Game Mode preflight and a pending test matrix.
+  With VRR on, check 48, 60, 120 and 180 Hz with **Disable Frame Limiter** both off and on
+  on SteamOS 3.9.5. Record slider reach, panel stability and measured FPS versus the
+  requested limit; a clean preflight does not establish timing acceptance or limiter behavior.
 - **Open since Phase 6:** QAM focus test with a game running (only the owner can do it).
 
 ---
@@ -528,7 +544,7 @@ Not issues (checked, nothing to do): the RDNA1/2 dedicated-GPU resume fix (Strix
 - **Signal language** (#129, #130): the lightbar confirms a profile change, pulses while thermal throttling, glows when charging stops at the limit, and turns amber when a SteamOS update needs attention (Phase 12c). Priorities, a strict rate limit (the lightbar wedges under bursts, Phase 7), restore of the owner's lighting, and an off switch.
 - **Side-button gestures** (#131): hold or double-press cycles profiles (goals, after Phase 15) with a lightbar confirmation, in both modes. InputPlumber stays masked (principle 2).
 - **One touch-first interface** (#132 ✅, #133): [`docs/adr/0002-shared-touch-ui.md`](adr/0002-shared-touch-ui.md) picks **shared JSON design tokens (`src/design_tokens.json`) and a matching large-tile PyQt6 layout** over a desktop web view (which would add +277.3 MB to the 253.7 MB Flatpak, raise resident RAM from 65 MB to 516 MB across 4 processes in offscreen prototype measurements, and still require a custom `@decky/ui` shim). This is where the R04 design pass's shared design system lands.
-- **Machine timeline** (#134, #135): every hardware or host change is one append-only entry (principle 7's journal line comes from the same call), with Phase 12c's rollback records; a view compares states and rolls back reversible entries. A SteamOS update shows as one entry listing what it changed.
+- **Machine timeline** (#134, #135): `src/timeline.py` (#134) records every hardware or host change as one append-only entry under `~/.local/state/z13-helper/timeline.jsonl` (principle 7's journal line comes from the same call), with Phase 12c's rollback records; a view (#135) compares states and rolls back reversible entries. A SteamOS update (`BUILD_ID` change) shows as one entry listing what it changed.
 
 | Step | Issue | Blocked by |
 |---|---|---|
@@ -537,7 +553,7 @@ Not issues (checked, nothing to do): the RDNA1/2 dedicated-GPU resume fix (Strix
 | 16c side-button gestures | #131 | #130 |
 | 16d ADR: shared touch UI ✅ | #132 | — |
 | 16e touch-first layout | #133 | #132 |
-| 16f timeline store | #134 | #109 |
+| 16f timeline store (`src/timeline.py`; store + install/Decky/steamos writers done, post-update host wiring pending) | #134 | #109 |
 | 16g timeline view | #135 | #134 |
 
 - **16e (#133) Where:** `src/design_tokens.json`, `src/theme.py`, `src/dashboard_ui.py`, `src/fans_window.py`, `decky/src/tokens.ts` (and token consumers in `decky/src/`), `MAP/README.md`, `MAP/decky.md` (no `PyQt6-WebEngine`, local web bridge, or `@decky/ui` DOM shim).

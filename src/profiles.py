@@ -61,6 +61,10 @@ if (__name__ == "__main__" and os.path.basename(__file__) == "z13-profile"
 if __name__ == "__main__":
     sys.modules["profiles"] = sys.modules[__name__]
 import host  # noqa: E402
+try:
+    import timeline  # noqa: E402
+except ImportError:
+    timeline = None
 import state_authority as authority  # noqa: E402
 from state_events import lighting_level  # noqa: E402
 
@@ -85,7 +89,7 @@ LIGHTING_COLORS = ("red", "orange", "yellow", "green", "cyan", "blue", "purple",
 # CPU Boost: amd-pstate energy_performance_preference, display order. Same list as
 # src/epp.py (the app's copy); kept here too because z13-profile runs without it.
 EPP_CHOICES = ("power", "balance_power", "balance_performance", "performance")
-EPP_SYSFS = "/sys/devices/system/cpu/cpu{n}/cpufreq/energy_performance_preference"
+EPP_SYSFS_GLOB = "/sys/devices/system/cpu/cpufreq/policy*/energy_performance_preference"
 
 # Max Fans = every point at 100%. Must match the desktop app and the Decky plugin.
 MAX_FAN_TEMPS = (20, 30, 40, 50, 60, 70, 80, 90)   # Low anchor; firmware response still needs verification.
@@ -140,7 +144,7 @@ LIGHTBAR_DAEMON_RESTART_WAIT_S = 2  # wait for the daemon socket before retrying
 def _profile(name, base, *, builtin=False, tdp=None, fan_curve=None,
              undervolt=None, brightness=None, battery_limit=None,
              max_fans=False, enter="", exit_=""):
-    return {
+    p = {
         "name": name, "builtin": builtin, "base": base,
         "tdp": tdp, "fan_curve": fan_curve, "undervolt": undervolt,
         "brightness": brightness, "battery_limit": battery_limit,
@@ -149,6 +153,67 @@ def _profile(name, base, *, builtin=False, tdp=None, fan_curve=None,
         "max_fans": max_fans,
         "hooks": {"enter": enter, "exit": exit_},
     }
+    if max_fans:
+        p["goal"] = {"kind": "max"}     # max_fans is the back-compat mirror of this goal
+    return p
+
+
+# ----------------------------------------------------------------------
+# Goal (Phase 15b): optional {"kind": ..., <target>} on a profile
+# ----------------------------------------------------------------------
+
+# kind -> (target key, low, high); Max has no target. A profile without a goal
+# keeps today's fixed curve and TDP. `max_fans` stays on the profile as the
+# back-compat mirror of goal "max" (older readers, the apply engine).
+GOAL_TARGETS = {
+    "quiet": ("max_rpm", 1000, 10000),
+    "comfort": ("target_c", 25, 60),
+    "fps": ("target_fps", 20, 240),
+    "max": None,
+}
+
+
+def validate_goal(goal):
+    if goal is None:
+        return
+    kind = goal.get("kind") if isinstance(goal, dict) else None
+    if not isinstance(kind, str) or kind not in GOAL_TARGETS:
+        raise ValueError(f"goal needs a kind: one of {tuple(GOAL_TARGETS)}")
+    target = GOAL_TARGETS[kind]
+    if target is None:
+        return
+    key, low, high = target
+    v = goal.get(key)
+    if isinstance(v, bool) or not isinstance(v, int) or not low <= v <= high:
+        raise ValueError(f"goal {goal['kind']} needs {key} {low}..{high}")
+
+
+def goal_kind(p):
+    """The profile's goal kind, treating a bare max_fans profile as "max"."""
+    goal = p.get("goal")
+    kind = goal.get("kind") if isinstance(goal, dict) else None
+    if isinstance(kind, str) and kind in GOAL_TARGETS:
+        return kind
+    return "max" if p.get("max_fans") else None
+
+
+def _sync_goal(p):
+    """Keep goal and max_fans consistent: max_fans -> goal max, and back.
+
+    The `goal` key is only ever written when a goal is set; an invalid one
+    from a hand-edited file is dropped (the profile keeps its fixed values).
+    """
+    try:
+        validate_goal(p.get("goal"))
+    except ValueError as e:
+        print(f"z13-profile: ignoring invalid goal on {p.get('name')!r}: {e}", file=sys.stderr)
+        p.pop("goal", None)
+    if p.get("goal") is None:
+        p.pop("goal", None)
+        if p.get("max_fans"):
+            p["goal"] = {"kind": "max"}
+    else:
+        p["max_fans"] = p["goal"]["kind"] == "max"
 
 
 def default_profiles():
@@ -482,6 +547,8 @@ def _sanitize_store(store):
     good, seen = [], set()
     curve_migrated = False
     for p in store["profiles"]:
+        if isinstance(p, dict):
+            _sync_goal(p)   # a bad goal is dropped, not the whole profile
         if _loaded_profile_ok(p) and p["name"] not in seen:
             seen.add(p["name"])
             curve_migrated = _migrate_builtin_fan_curve(p) or curve_migrated
@@ -559,6 +626,7 @@ def load_store(create=True):
     for p in store["profiles"]:
         if "max_fans" not in p:
             p["max_fans"] = bool(p.get("builtin") and shipped.get(p["name"], {}).get("max_fans"))
+        _sync_goal(p)
         _migrate_boondock_hooks(p)
     if create:
         _migrate_enabled_max_fans_snapshot(store)
@@ -566,6 +634,9 @@ def load_store(create=True):
 
 
 def save_store(store):
+    for p in store.get("profiles", []):
+        if isinstance(p, dict):
+            _sync_goal(p)
     _write_json(STORE_PATH, store)
 
 
@@ -581,8 +652,12 @@ def get_profile(name, store=None):
     return None
 
 
-def active_name():
-    return load_store().get("active")
+def active_name(create=True):
+    return load_store(create=create).get("active")
+
+
+def active_name_readonly():
+    return load_store(create=False).get("active")
 
 
 def sync_active_from_backend(state):
@@ -760,6 +835,7 @@ def validate(p):
         if tdp["pl1"] > 75 and not tdp.get("force"):
             raise ValueError("PL1 above 75 W needs force=true")
     validate_curve(p.get("fan_curve"))
+    validate_goal(p.get("goal"))
     uv = p.get("undervolt")
     if uv is not None and (not isinstance(uv, int) or not -40 <= uv <= 0):
         raise ValueError("undervolt must be 0..-40")
@@ -1047,29 +1123,33 @@ def apply_undervolt(profile, *, z13ctl=Z13CTL):
              if "ryzen_smu" in out else out)]
 
 
-def epp_argv(value, cpu_count):
-    """Host command that writes one EPP value to every CPU's cpufreq node.
+def epp_argv(value):
+    """Host command that writes one EPP value to every cpufreq policy node.
 
     z13ctl has no EPP command, so this goes through host.run like the rest of the
-    host seam. The value is checked against EPP_CHOICES and travels as an argv item
-    (never spliced into the script). Offline CPUs have no node and are skipped; the
-    script stops at the first write that fails and fails when no node was written
-    (e.g. a kernel without amd-pstate), so that never reads as success.
+    host seam. install.sh installs z13-helper-epp.conf to grant the users group
+    write access to these policy nodes; no runtime elevation is needed.
+    The policy directories are globbed on the host (a policy is not a CPU number, so
+    nothing assumes policy{n} == cpu{n}). The value is checked against EPP_CHOICES
+    and travels as an argv item (never spliced into the script). The script stops
+    at the first write that fails and fails when no node matched (e.g. a kernel
+    without amd-pstate), so that never reads as success. A failed write stops the
+    loop, so policies can end up mixed (some written, some not), and the UI shows "mixed".
     """
     if value not in EPP_CHOICES:
         raise ValueError(f"epp must be one of {EPP_CHOICES}")
-    paths = [EPP_SYSFS.format(n=i) for i in range(cpu_count)]
-    script = ('v=$1; shift; n=0; for f in "$@"; do [ -e "$f" ] || continue; '
+    script = (f'v=$1; n=0; for f in {EPP_SYSFS_GLOB}; do [ -e "$f" ] || continue; '
               'printf %s "$v" > "$f" || exit 1; n=$((n+1)); done; [ "$n" -gt 0 ]')
-    return ["sh", "-c", script, "sh", value, *paths]
+    return ["sh", "-c", script, "sh", value]
 
 
-def write_epp(value, *, cpu_count=None):
-    """(ok, message): write `value` to every CPU's energy_performance_preference."""
-    n = cpu_count if cpu_count is not None else (os.cpu_count() or 0)
-    if n < 1:
-        return False, "no CPUs found"
-    rc, out, timed_out = authority.run(epp_argv(value, n), timeout=Z13CTL_WRITE_TIMEOUT_S)
+def write_epp(value):
+    """(ok, message): write `value` to every cpufreq policy's energy_performance_preference.
+
+    Callers must hold the state_authority transaction (all current callers do:
+    set_epp via _push_field, apply_epp via the serialized apply paths).
+    """
+    rc, out, timed_out = host.run(epp_argv(value), timeout=Z13CTL_WRITE_TIMEOUT_S)
     if rc == 0:
         return True, value
     if timed_out:
@@ -1077,13 +1157,13 @@ def write_epp(value, *, cpu_count=None):
     return False, out or f"rc={rc}"
 
 
-def apply_epp(profile, *, cpu_count=None):
+def apply_epp(profile):
     """The CPU Boost step of apply(): [] when the profile sets no EPP (the firmware
     profile's choice stands), else one (step, ok, message)."""
     value = profile.get("epp")
     if value is None:
         return []
-    ok, message = write_epp(value, cpu_count=cpu_count)
+    ok, message = write_epp(value)
     return [("cpu boost", ok, message)]
 
 
@@ -1112,6 +1192,32 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
     Returns a list of (step, ok, message). `previous` is the profile we are
     leaving (its exit hook runs first).
     """
+    before_max_fans = bool(_max_fans_state().get("enabled"))
+    results = _apply_steps(
+        profile,
+        previous=previous,
+        z13ctl=z13ctl,
+        skip_hooks=skip_hooks,
+        login_battery_default=login_battery_default,
+    )
+    if timeline is not None:
+        try:
+            timeline.record_profile_apply(
+                profile=profile,
+                previous=previous,
+                results=results,
+                before_max_fans=before_max_fans,
+                after_max_fans=bool(_max_fans_state().get("enabled")),
+                defer=True,   # queued; never written inside this hardware transaction
+            )
+        except Exception as exc:  # noqa: BLE001 - timeline recording is best-effort
+            logging.getLogger(__name__).warning(
+                "timeline recording failed for profile apply: %s: %s", type(exc).__name__, str(exc)[:200])
+    return results
+
+
+def _apply_steps(profile, *, previous=None, z13ctl=Z13CTL,
+                 skip_hooks=False, login_battery_default=None):
     results = []
     try:
         named_client = authority.named_client()
@@ -1168,7 +1274,7 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
     if not skip_hooks and previous and previous.get("name") != profile["name"]:
         exit_cmd = (previous.get("hooks") or {}).get("exit") or ""
         if exit_cmd.strip():
-            step("exit hook", ["bash", "-lc", exit_cmd], f"ran: {exit_cmd}",
+            step("exit hook", ["bash", "-lc", exit_cmd], "hook ran",
                  timeout=HOOK_TIMEOUT_S)
 
     # Compute the desired state now, but suspend the shared Max Fans flag for
@@ -1179,9 +1285,12 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
     switching = previous is None or previous.get("name") != profile["name"]
     planned_max_fans_on = initial_max_fans_on
     released = False
-    if switching and profile.get("max_fans"):
+    # A goal profile's runner (Phase 15c) is not built yet, so every goal is
+    # applied as its fixed values; goal "max" is Max Fans.
+    wants_max = goal_kind(profile) == "max"
+    if switching and wants_max:
         planned_max_fans_on = True
-    elif switching and previous and previous.get("max_fans") and not profile.get("max_fans") \
+    elif switching and previous and goal_kind(previous) == "max" and not wants_max \
             and initial_max_fans_on:
         planned_max_fans_on = False
         released = True
@@ -1367,7 +1476,7 @@ def apply(profile, *, previous=None, z13ctl=Z13CTL,
     if not skip_hooks:
         enter_cmd = (profile.get("hooks") or {}).get("enter") or ""
         if enter_cmd.strip():
-            step("enter hook", ["bash", "-lc", enter_cmd], f"ran: {enter_cmd}",
+            step("enter hook", ["bash", "-lc", enter_cmd], "hook ran",
                  timeout=HOOK_TIMEOUT_S)
 
     return finish(results)
@@ -1409,8 +1518,19 @@ def main(argv=None):
     s.add_argument("--no-hooks", action="store_true", help="skip enter/exit hooks")
     s = sub.add_parser("restore", help="re-apply the active profile (login / resume)")
     s.add_argument("--no-hooks", action="store_true")
+    sub.add_parser("resume-owner", help="check whether z13ctl owns resume restore")
     sub.add_parser("watch", help="stream z13ctl state changes as JSON lines")
     args = ap.parse_args(argv)
+
+    if args.cmd == "resume-owner":
+        try:
+            if _z13ctl_owns_resume_restore():
+                print("z13ctl owns it")
+                return 10
+        except Exception:
+            pass
+        print("hook must restore")
+        return 0
 
     if args.cmd == "watch":
         try:
@@ -1470,6 +1590,99 @@ def main(argv=None):
             return 1
         return _print_results(results)
     return 2
+
+
+def _z13ctl_owns_resume_restore():
+    """Return true only when file snapshots prove z13ctl can restore this profile.
+
+    Deliberately file-only: resume must not query the daemon or read live hardware.
+    Any malformed, missing, or incomplete state is an affirmative reason for the
+    system resume hook to perform its existing full restore.
+    """
+    from z13ctl_client import Z13CtlClient
+
+    raw_store = _read_json(STORE_PATH)
+    if (not isinstance(raw_store, dict) or "active" not in raw_store
+            or not isinstance(raw_store.get("profiles"), list)):
+        return False
+    active = raw_store.get("active")
+    raw_profile = next((p for p in raw_store["profiles"]
+                        if isinstance(p, dict) and p.get("name") == active), None)
+    if not isinstance(raw_profile, dict):
+        return False
+
+    store = load_store(create=False)
+    active = store.get("active")
+    profile = get_profile(active, store) if isinstance(active, str) else None
+    if not isinstance(profile, dict):
+        return False
+
+    max_fans = _read_json(MAX_FANS_PATH)
+    if not isinstance(max_fans, dict) or type(max_fans.get("enabled")) is not bool:
+        return False
+
+    state_home = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
+    state = _read_json(os.path.join(state_home, "z13ctl", "state.json"))
+    if not isinstance(state, dict):
+        return False
+    name = Z13CtlClient.mapped_profile_name(profile)
+    if state.get("profile") != name:
+        return False
+    custom_profiles = state.get("custom_profiles")
+    if not isinstance(custom_profiles, dict) or name not in custom_profiles:
+        return False
+    backend = custom_profiles[name]
+    if not isinstance(backend, dict):
+        return False
+
+    app_curve = profile.get("fan_curve")
+    if not isinstance(app_curve, list) or len(app_curve) != 8:
+        return False
+    curve = backend.get("fan_curve")
+    if not isinstance(curve, dict) or type(curve.get("mode")) is not int or curve["mode"] != 1:
+        return False
+    points = curve.get("points")
+    if not isinstance(points, list) or len(points) != 8:
+        return False
+    try:
+        temps = [point["temp"] for point in points]
+        pwms = [point["pwm"] for point in points]
+        if len(set(temps)) != 8:
+            return False
+        if max_fans["enabled"]:
+            if any(type(pwm) is not int or pwm != 255 for pwm in pwms):
+                return False
+        else:
+            if any(not isinstance(point, (list, tuple)) or len(point) != 2 for point in app_curve):
+                return False
+            expected = {temp: round(pct * 255 / 100) for temp, pct in app_curve}
+            if len(expected) != 8 or set(expected) != set(temps):
+                return False
+            if any(type(pwm) is not int or abs(pwm - expected[temp]) > 1
+                   for temp, pwm in zip(temps, pwms)):
+                return False
+    except (KeyError, TypeError, ValueError):
+        return False
+
+    app_tdp = profile.get("tdp")
+    backend_tdp = backend.get("tdp")
+    if app_tdp is not None:
+        if not isinstance(app_tdp, dict) or not isinstance(backend_tdp, dict):
+            return False
+        for source, target in (("pl1", "pl1_spl"), ("pl2", "pl2_sppt"), ("pl3", "fppt")):
+            if source not in app_tdp or backend_tdp.get(target) != app_tdp[source]:
+                return False
+    elif backend_tdp is not None:
+        return False
+
+    if profile.get("epp") is not None:
+        return False
+    if "battery_limit" not in profile:
+        return False
+    battery_limit = profile["battery_limit"]
+    if battery_limit is None:
+        battery_limit = 80
+    return state.get("battery_limit") == battery_limit
 
 
 if __name__ == "__main__":

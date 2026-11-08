@@ -1,8 +1,14 @@
 """Post-update runner: read-only checks and an ordered, backed-up apply (#110)."""
 
 import logging
+import os
+import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+
+_SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "src")
+if os.path.isdir(_SRC) and _SRC not in sys.path:
+    sys.path.insert(0, _SRC)
 
 _log = logging.getLogger(__name__)
 
@@ -15,6 +21,35 @@ class Env:
     restore: "Callable[[str, str | None], None] | None" = None  # put a backup back; None = remove path
     record: "Callable[[dict], None] | None" = None              # persist one rollback record entry
     readonly_tool: str = "steamos-readonly"                     # named in log messages
+    # One timeline.jsonl `post_update` entry for the whole run, called once at the end of
+    # run_plan as timeline(ordered, results, backups, before_checks); best-effort.
+    timeline: "Callable[[Sequence, list, dict, dict], object] | None" = None
+
+
+def make_timeline_recorder(*, backup_dir: str | None = None,
+                           path: str | None = None,
+                           journal_fn: Callable[[str, str], None] | None = None):
+    """Build an `Env.timeline` callback that writes one `post_update` timeline entry
+    with its Phase 12c file-backup rollback record and Principle 7 journal line.
+
+    `backups` is built by `run_plan` from the per-recipe rollback entries (`{path: backup
+    copy}`, only for files that existed). No production code builds an `Env` yet (that is
+    #109/#110's host wiring), so nothing passes this to `Env(timeline=...)` outside tests.
+    The Env builder must use `make_timeline_recorder()` when it lands."""
+    import timeline
+
+    def _record(ordered: Sequence, results: list, backups: dict, before_checks: dict):
+        return timeline.record_post_update(
+            recipes=ordered,
+            results=results,
+            backups=backups,
+            before_checks=before_checks,
+            backup_dir=backup_dir,
+            path=path,
+            journal_fn=journal_fn,
+        )
+
+    return _record
 
 
 def check_all(recipes: Sequence) -> dict:
@@ -73,6 +108,8 @@ def _save(env: Env, entry: dict) -> None:
 def run_plan(ordered: Sequence, env: Env) -> list:
     """Apply recipes in order; return [(id, "done"|"failed"|"skipped")]. Never raises."""
     results = []
+    backups: dict = {}        # for the timeline entry: path -> backup copy
+    before_checks: dict = {}  # for the timeline entry: recipe id -> its check before apply
     state = {"disabled": False}
     failed = False
     try:
@@ -83,7 +120,9 @@ def run_plan(ordered: Sequence, env: Env) -> list:
             entry = {"id": recipe.id, "status": "planned", "backups": {}, "created": [],
                      "undo": "", "rollback": ""}
             try:
-                if recipe.check() == "na":
+                chk = recipe.check()
+                before_checks[recipe.id] = chk
+                if chk == "na":
                     results.append((recipe.id, "skipped"))
                     continue
                 _apply_one(recipe, env, state, entry)
@@ -95,6 +134,9 @@ def run_plan(ordered: Sequence, env: Env) -> list:
                 entry["error"] = str(exc)
                 _roll_back(env, entry)
                 results.append((recipe.id, "failed"))
+            for path, bak in entry["backups"].items():
+                if isinstance(bak, str) and bak:
+                    backups[path] = bak
             _save(env, entry)
     finally:
         if state["disabled"]:
@@ -102,4 +144,9 @@ def run_plan(ordered: Sequence, env: Env) -> list:
                 env.readonly_enable()
             except Exception:  # noqa: BLE001 - run_plan never raises
                 _log.exception("could not re-enable %s", env.readonly_tool)
+        if env.timeline is not None:
+            try:
+                env.timeline(ordered, results, backups, before_checks)
+            except Exception:  # noqa: BLE001 - run_plan never raises
+                _log.exception("could not record post-update timeline entry")
     return results
