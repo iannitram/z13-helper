@@ -51,7 +51,8 @@ from updates_dialog import UpdatesDialog, UpdateCheckThread, PostUpdateThread
 from timeline_dialog import TimelineDialog
 from theme import (STYLESHEET, ModeTile, Panel, pill, tip, ECO, STANDARD, TURBO, CUSTOM,
                    ACCENT_FOR_BASE, BORDER, TOUCH_TARGET_MIN)
-from evdev_listener import find_side_button_device, EvdevListener
+from evdev_listener import (find_side_button_device, EvdevListener, GestureDetector,
+                           gesture_for_app)
 from versions import APP_VERSION
 
 _INPUTPLUMBER_SERVICE      = "org.shadowblip.InputPlumber"
@@ -94,6 +95,7 @@ SCREEN_FOLLOW_GRACE_S = 1.5     # after our own write, don't snap the slider bac
 
 class DashboardUI(QMainWindow):
     sideButtonPressed = pyqtSignal()
+    sideButtonCycle = pyqtSignal()    # triple press in Desktop Mode: next profile (#131)
     # From app_log listeners, which run on whatever thread logged / crashed.
     _errorLogged = pyqtSignal()
     _crashReported = pyqtSignal(str, str)
@@ -177,6 +179,7 @@ class DashboardUI(QMainWindow):
         self._host_reader_proc = None
         self._evdev_listener = None
         self.sideButtonPressed.connect(self._toggle_window)
+        self.sideButtonCycle.connect(self.cycle_profile)
         self._start_side_button_listener()
 
         # Error log: badge on errors, notice on crashes (app_log.py).
@@ -306,6 +309,13 @@ class DashboardUI(QMainWindow):
     def _on_tray_activated(self, reason):
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
             self._toggle_window()
+
+    def cycle_profile(self):
+        """Side-button triple press / `cycle` command: switch to the next profile. The apply
+        raises PROFILE_CHANGED through the normal hardware-signal wiring (#130)."""
+        name = self.control.cycle()
+        if name:
+            self.status_bar.showMessage(f"Side button: next profile, {name}", 5000)
 
     def _toggle_window(self):
         if self.isVisible():
@@ -1168,8 +1178,16 @@ class DashboardUI(QMainWindow):
         else:
             device, code = find_side_button_device()
             if device:
-                self._evdev_listener = EvdevListener(
-                    device, lambda ev: self.sideButtonPressed.emit() if ev == code else None)
+                gestures = GestureDetector()
+
+                def on_key(ev):
+                    if ev != code:
+                        return
+                    if gesture_for_app(gestures, time.monotonic()) == "cycle":
+                        self.sideButtonCycle.emit()
+                    else:
+                        self.sideButtonPressed.emit()
+                self._evdev_listener = EvdevListener(device, on_key)
                 self._evdev_listener.start()
                 self.button_label.setText(f"Side button: evdev {os.path.basename(device)}")
                 return
@@ -1209,6 +1227,8 @@ class DashboardUI(QMainWindow):
                 for line in proc.stdout:
                     if line.strip() == "PRESS":
                         self.sideButtonPressed.emit()
+                    elif line.strip() == "CYCLE":
+                        self.sideButtonCycle.emit()
             except Exception:
                 logging.getLogger("z13.button").exception("Side-button reader pipe failed")
             rc = proc.poll()

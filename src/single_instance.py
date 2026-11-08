@@ -11,6 +11,7 @@ listens on a Unix socket next to it. A later launch finds the lock taken, sends
 the primary a one-line command over the socket, and exits:
 
     show  -- raise the existing window (desktop launcher / `--show`)
+    cycle -- switch to the next profile (the Game Mode side-button watcher's triple press)
     ping  -- no-op (a plain hidden launch while one is already resident)
     quit  -- primary quits cleanly; the client waits until it has exited
              (`--quit`, used by the unit's ExecStop; and `--resident`, the
