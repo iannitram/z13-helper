@@ -601,6 +601,10 @@ class DashboardUI(QMainWindow):
         self._tick_hardware_signals()
 
     def _on_hardware_signal_source_done(self, label, result):
+        if label == f"Lighting → {hw_signals.DEVICE}":
+            # The signal rate limit must see every lightbar write, not only signal writes.
+            self._signals_last_write = time.monotonic()
+            return
         if label == "Hardware signal lightbar":
             pending = self._signals_pending
             self._signals_pending = None
