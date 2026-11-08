@@ -162,3 +162,29 @@ def test_backend_argv_tolerates_none_inputs():
     assert autoswitch.backend_argv({}, None) == ["autoswitch", "--clear"]
     assert autoswitch.backend_argv(None, None) == ["autoswitch", "--clear"]
     assert autoswitch.backend_argv({}, {}) == ["autoswitch", "--clear"]
+
+
+def test_string_flags_do_not_enable_or_hold_autoswitch():
+    # A hand-edited JSON "false" is truthy in Python; it must not enable switching.
+    cfg = autoswitch.normalize(
+        {"ac": "Turbo", "battery": "Silent", "enabled": "false", "hold": "false"}, NAMES
+    )
+    assert cfg["enabled"] is False
+    assert cfg["hold"] is False
+    assert autoswitch.decision(cfg, True) is None
+    assert autoswitch.backend_argv(cfg, {"Turbo": "t", "Silent": "s"})[-1] == "--off"
+    raw = {"ac": "Turbo", "enabled": "true"}
+    assert autoswitch.decision(raw, True) is None
+    assert autoswitch.describe(raw) == "Autoswitch off"
+
+
+def test_backend_argv_drops_non_string_or_empty_targets():
+    # Non-str daemon targets must never reach argv (host.run expects strings).
+    targets = {"Turbo": 5, "Silent": {"x": 1}, "Balanced": ""}
+    cfg = {"ac": "Turbo", "battery": "Silent", "enabled": True}
+    assert autoswitch.backend_argv(cfg, targets) == ["autoswitch", "--clear"]
+    cfg = {"ac": "Turbo", "battery": "Balanced", "enabled": True}
+    argv = autoswitch.backend_argv(cfg, {**targets, "Turbo": "z13h-turbo-1"})
+    assert all(isinstance(arg, str) for arg in argv)
+    assert argv[:3] == ["autoswitch", "--ac", "z13h-turbo-1"]
+    assert "--battery" in argv and argv[argv.index("--battery") + 1] == ""

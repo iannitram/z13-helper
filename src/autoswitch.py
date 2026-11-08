@@ -27,8 +27,9 @@ def normalize(config, names):
         value = config.get(source)
         if isinstance(value, str) and value in known:
             out[source] = value
-    out["hold"] = bool(config.get("hold"))
-    out["enabled"] = bool(config.get("enabled"))
+    # Strict bools: a hand-edited "false" string must not switch autoswitch on.
+    out["hold"] = config.get("hold") is True
+    out["enabled"] = config.get("enabled") is True
     return out
 
 
@@ -41,7 +42,7 @@ def decision(config, on_ac):
     """
     if not isinstance(on_ac, bool):
         return None
-    if not isinstance(config, dict) or not config.get("enabled") or config.get("hold"):
+    if not isinstance(config, dict) or config.get("enabled") is not True or config.get("hold") is True:
         return None
     target = config.get("ac" if on_ac else "battery")
     return target if isinstance(target, str) and target else None
@@ -59,8 +60,11 @@ def has_hardware_overrides(profile):
 
 
 def _target(targets, name):
-    """The daemon target for an app profile name; anything but a str has none."""
-    return targets.get(name) if isinstance(name, str) else None
+    """The daemon target for an app profile name; anything but a non-empty str has none."""
+    if not isinstance(name, str):
+        return None
+    target = targets.get(name)
+    return target if isinstance(target, str) and target else None
 
 
 def backend_argv(config, targets):
@@ -79,7 +83,7 @@ def backend_argv(config, targets):
     if not ac and not battery:
         return ["autoswitch", "--clear"]
     argv = ["autoswitch", "--ac", ac or "", "--battery", battery or ""]
-    off = not config.get("enabled") or config.get("hold")
+    off = config.get("enabled") is not True or config.get("hold") is True
     argv.append("--off" if off else "--on")
     return argv
 
@@ -88,11 +92,11 @@ def describe(config):
     """One line for the status bar."""
     if (
         not isinstance(config, dict)
-        or not config.get("enabled")
+        or config.get("enabled") is not True
         or not (config.get("ac") or config.get("battery"))
     ):
         return "Autoswitch off"
     ac = config.get("ac") or "leave unchanged"
     battery = config.get("battery") or "leave unchanged"
-    held = " (held)" if config.get("hold") else ""
+    held = " (held)" if config.get("hold") is True else ""
     return f"Autoswitch: {ac} on AC, {battery} on battery{held}"
