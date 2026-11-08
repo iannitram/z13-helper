@@ -534,10 +534,14 @@ class DashboardUI(QMainWindow):
         return f
 
     def _load_initial_state(self):
+        # #22: the charge limit is read through z13ctl only on a supported machine that has one.
         try:
-            limit = self.controller.get_battery_limit()
-            if limit is not None:
-                self.battery_slider.setValue(limit)
+            support = self._support
+            if (support and support["supported"]
+                    and support["capabilities"]["battery_limit"]["available"]):
+                limit = self.controller.get_battery_limit()
+                if limit is not None:
+                    self.battery_slider.setValue(limit)
         except Exception:
             pass
         # config.json is migration input only: seed the active profile from an
@@ -578,11 +582,23 @@ class DashboardUI(QMainWindow):
                 log.info("Unsupported machine, controls disabled: %s", support["reason"])
         # Profile, fan, lighting and brightness writes are Z13-only; on any other
         # machine none of them may be offered or issued.
-        for w in (*self._tiles.values(), self.fans_tile, self.profile_combo,
-                  self.maxfans_pill, self.light_target, *self._bright_tiles.values(),
+        caps = support["capabilities"]
+
+        def usable(*names):
+            return ok and all(caps[n]["available"] for n in names)
+
+        for w in self._tiles.values():
+            w.setEnabled(usable("platform_profile"))
+        self.profile_combo.setEnabled(usable("platform_profile"))
+        self.fans_tile.setEnabled(usable("platform_profile") or usable("tdp")
+                                  or usable("fan_curve") or usable("undervolt"))
+        self.maxfans_pill.setEnabled(usable("fan_curve"))
+        for w in (self.light_target, *self._bright_tiles.values(),
                   *(c for pair in self._lighting_combos.values() for c in pair)):
-            w.setEnabled(ok)
-        self._refresh_lighting_ui(self.control.shown())   # colour combos follow their mode
+            w.setEnabled(usable("keyboard_backlight"))
+        self._refresh_lighting_ui(self.control.shown())   # lighting combos follow keyboard_backlight and their mode
+        if self._fans_window is not None:
+            self._fans_window.apply_capabilities(support)
         if not ok:
             self.perf.setToolTip(support["reason"])
             self.light.setToolTip(support["reason"])
@@ -591,7 +607,7 @@ class DashboardUI(QMainWindow):
             self.light.setToolTip("")
         # Battery: no battery at all hides the controls; a missing threshold only disables them.
         cap = support["capabilities"]["battery_limit"]
-        has_battery = support["battery_present"] or not ok
+        has_battery = support["battery_present"]
         for w in (self.batt, self._batt_sep):
             w.setVisible(has_battery)
         on = cap["available"]
@@ -678,6 +694,8 @@ class DashboardUI(QMainWindow):
     def _toggle_fans_window(self):
         if self._fans_window is None:
             self._fans_window = FansWindow(self.control, self.controller, self.sensors, self, history=self.history)
+            if self._support is not None:
+                self._fans_window.apply_capabilities(self._support)
         w = self._fans_window
         if w.isVisible():
             w.hide()
@@ -761,7 +779,10 @@ class DashboardUI(QMainWindow):
             color_combo.blockSignals(True)
             mode_combo.setCurrentIndex(max(0, mode_combo.findData(mode)))
             color_combo.setCurrentIndex(max(0, color_combo.findData(color)))
-            color_combo.setEnabled(mode is not None and bool(self._support and self._support['supported']))
+            kb = bool(self._support and self._support["supported"]
+                      and self._support["capabilities"]["keyboard_backlight"]["available"])
+            mode_combo.setEnabled(kb)
+            color_combo.setEnabled(mode is not None and kb)
             mode_combo.blockSignals(False)
             color_combo.blockSignals(False)
         self._lighting_syncing = False

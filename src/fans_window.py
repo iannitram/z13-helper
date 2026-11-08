@@ -86,6 +86,7 @@ class FansWindow(QWidget):
         self._loading = False
         # Per-rail kernel range from sysfs metadata (no live PPT reads, no z13ctl).
         self._ranges = power_range.detect_ranges()
+        self._support = None          # platform_support.detect() result (#22), set by the dashboard
         self.resize(675, 560)
         self._build()
         self.control.changed.connect(self.refresh)
@@ -263,6 +264,34 @@ class FansWindow(QWidget):
         self.btn_cpu.setChecked(idx == 0)
         self.btn_adv.setChecked(idx == 1)
 
+    def apply_capabilities(self, support):
+        """Enable only the controls this machine can run (#22). Each control needs one
+        capability; a disabled control's tooltip says why. Called again on every refresh,
+        because refresh() enables the power rows by the profile's own values."""
+        self._support = support
+        supported = support["supported"]
+        caps = support["capabilities"]
+
+        def gate(widget, *names, tooltip=True):
+            missing = [n for n in names if not caps[n]["available"]]
+            ok = supported and not missing
+            widget.setEnabled(ok)
+            if tooltip:
+                widget.setToolTip("" if ok else (caps[missing[0]]["reason"] if missing
+                                                 else support["reason"]))
+            return ok
+
+        gate(self.base_combo, "platform_profile")
+        gate(self.epp_combo, "platform_profile")
+        tdp_ok = gate(self.apply_power, "tdp")
+        for row in (self.spl, self.sppt, self.fppt):
+            row.setEnabled(tdp_ok and self.apply_power.isChecked())
+        gate(self.apply_curve, "fan_curve")
+        gate(self.chart, "fan_curve", tooltip=False)
+        gate(self.max_fans_cb, "fan_curve", tooltip=False)
+        gate(self.uv, "undervolt", tooltip=False)
+        gate(self.auto_uv, "undervolt")
+
     # ------------------------------------------------------------------
     # Refresh from store
     # ------------------------------------------------------------------
@@ -317,6 +346,8 @@ class FansWindow(QWidget):
             self.power_note.setVisible(bool(note))
             for row in (self.spl, self.sppt, self.fppt):
                 row.setEnabled(bool(tdp))
+            if self._support is not None:
+                self.apply_capabilities(self._support)   # the profile's values never override the hardware gate
 
             self.max_fans_cb.setChecked(bool(p.get("max_fans")))
             curve = p.get("fan_curve")
