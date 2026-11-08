@@ -569,3 +569,96 @@ def test_decky_plugin_dry_run_only_prints_loader_lifecycle(tmp_path, real_subpro
     assert "(dry run) sudo systemctl stop/kill plugin_loader.service" in p.stdout
     assert "(dry run) sudo systemctl start plugin_loader.service" in p.stdout
     assert "Decky frontend: not checked — dry run" in p.stdout
+
+
+def _run_flags(tmp_path, real_subprocess, *args):
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    env = {"HOME": str(home), "PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"}
+    return real_subprocess(["bash", str(SCRIPT), *args], env=env, stdin=open(os.devnull),
+                           capture_output=True, text=True, timeout=60)
+
+
+@needs_bash[0]
+@needs_bash[1]
+@pytest.mark.parametrize("args, message", [
+    (("--only", "x"), "--only needs --post-update"),
+    (("--post-update", "--only"), "--only needs a value"),
+    (("--post-update", "--only", "--dry-run"), "--only needs a value"),
+    (("--post-update", "--only", "nope-task", "--dry-run"), "unknown task: nope-task"),
+])
+def test_post_update_flag_errors_exit_2_before_any_install_step(tmp_path, real_subprocess, args, message):
+    p = _run_flags(tmp_path, real_subprocess, *args)
+    assert p.returncode == 2, p.stdout + p.stderr
+    assert message in p.stdout + p.stderr
+    assert "preflight" not in p.stdout.lower()
+
+
+@needs_bash[0]
+@needs_bash[1]
+def test_post_update_only_runs_just_the_runner_in_a_dry_run(tmp_path, real_subprocess):
+    p = _run_flags(tmp_path, real_subprocess, "--post-update", "--only", "etc-snapshot", "--dry-run")
+    out = p.stdout + p.stderr
+    assert p.returncode == 0, out
+    assert "Plan: 1 task" in out and "etc-snapshot" in out
+    assert "preflight" not in out.lower() and "Summary" not in out
+
+
+@needs_bash[0]
+@needs_bash[1]
+def test_repair_ends_with_the_pending_post_update_list(tmp_path, real_subprocess):
+    out = dry_run(tmp_path, real_subprocess, "--repair")
+    tail = out[out.rindex("Post-update tasks"):]
+    assert "Post-update tasks pending:" in tail
+    assert tail.index("Post-update tasks pending") < tail.index("log:")
+@pytest.mark.parametrize("changed,dry,apply_rc", [(False, False, 0), (True, False, 0),
+                                                  (False, False, 1), (True, True, 0)])
+def test_etc_applies_epp_permissions_only_when_the_rule_changed(
+        tmp_path, real_subprocess, changed, dry, apply_rc):
+    source = SCRIPT.read_text()
+    start = source.index("apply_epp_permissions() {")
+    end = source.index("# 8. verify + record", start)
+    functions = tmp_path / "etc-functions.sh"
+    functions.write_text(source[start:end])
+    # Every host interaction is a shell function: never install to real /etc.
+    harness = r'''
+source "$FUNCTIONS"
+DRY=$TEST_DRY
+CHANGED=()
+FAILED=()
+REPO=/fixture
+CHECK=/fixture/check
+PY=manifest_stub
+manifest_stub() {
+    if [[ $1 == "$CHECK" && $2 == manifest && $TEST_CHANGED == 1 ]]; then
+        printf 'packaging/host/tmpfiles/z13-helper-epp.conf\t/etc/tmpfiles.d/z13-helper-epp.conf\t644\t1\n'
+    fi
+}
+say() { :; }
+info() { :; }
+warn() { :; }
+same_root() { return 1; }
+systemctl() { echo enabled; }
+ask() { return 0; }
+backup() { :; }
+logger() { :; }
+fail() { FAILED+=("$*"); }
+sudo() {
+    printf '%s\n' "$*"
+    if [[ $1 == systemd-tmpfiles ]]; then return "$APPLY_RC"; fi
+}
+act() { if ((DRY)); then printf 'DRY %s\n' "$*"; else "$@"; fi; }
+etc_files
+printf 'FAILURES %s\n' "${FAILED[*]}"
+'''
+    env = dict(os.environ, FUNCTIONS=str(functions), TEST_CHANGED=str(int(changed)),
+               TEST_DRY=str(int(dry)), APPLY_RC=str(apply_rc))
+    p = real_subprocess(["bash", "-c", harness], env=env, capture_output=True, text=True)
+    assert p.returncode == 0, p.stderr
+    command = "systemd-tmpfiles --create /etc/tmpfiles.d/z13-helper-epp.conf"
+    assert (command in p.stdout) == changed
+    if changed:
+        assert p.stdout.index("install -D -m 644") < p.stdout.index(command)
+    if dry:
+        assert "DRY sudo " + command in p.stdout
+    assert ("FAILURES apply EPP sysfs permissions" in p.stdout) == (changed and bool(apply_rc))

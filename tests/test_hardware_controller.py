@@ -176,6 +176,14 @@ def test_apply_tdp_takes_a_profiles_tdp_dict(fake_host):
     ]
 
 
+@pytest.mark.parametrize("args", [(20, None, None), (20, 30, None), (None, 30, 40)])
+def test_set_tdp_rejects_partial_calls(fake_host, args):
+    c = HardwareController(z13ctl_path="z13ctl")
+    with pytest.raises(ValueError, match="pl1, pl2 and pl3"):
+        c.set_tdp(*args)
+    assert fake_host.argvs == []
+
+
 @pytest.mark.parametrize("device", ["keyboard", "lightbar"])
 @pytest.mark.parametrize("mode", profiles.LIGHTING_MODES)
 def test_set_lighting_builds_per_device_argv(device, mode):
@@ -186,3 +194,50 @@ def test_set_lighting_builds_per_device_argv(device, mode):
     assert c.calls == [(["--device", device, "apply", "--mode", mode,
                          "--color", "cyan", "--brightness", "low"],
                         Z13CTL_WRITE_TIMEOUT_S)]
+
+
+@pytest.mark.parametrize("given,want", [(10, "40"), (39, "40"), (40, "40"),
+                                        (80, "80"), (100, "100"), (150, "100")])
+def test_set_battery_limit_clamps_40_100(fake_host, given, want):
+    HardwareController(z13ctl_path="z13ctl").set_battery_limit(given)
+    assert fake_host.argvs == [["z13ctl", "batterylimit", "--set", want]]
+
+
+def test_set_tdp_passes_ordered_rails(fake_host):
+    HardwareController(z13ctl_path="z13ctl").set_tdp(20, 30, 40)
+    assert fake_host.argvs == [
+        ["z13ctl", "tdp", "--set", "20", "--pl2", "30", "--pl3", "40"]
+    ]
+
+
+@pytest.mark.parametrize("given", [
+    (40, 20, 30),      # PL2 below PL1
+    (40, 50, 30),      # PL3 below PL2
+    (0, 30, 40),
+    (-5, 30, 40),
+    (20, 30, 200),
+    (4, 30, 40),
+    (20, 94, 94),
+    (20, "invalid", 40),
+    (20, 30, "invalid"),
+])
+def test_set_tdp_rejects_bad_rails_without_writing(fake_host, given):
+    with pytest.raises(ValueError):
+        HardwareController(z13ctl_path="z13ctl").set_tdp(*given)
+    assert fake_host.argvs == []
+
+
+def test_set_fancurve_clamps_percent_0_100(fake_host):
+    curve = [(20, -5), (30, 0), (40, 50), (50, 100), (60, 101),
+             (70, 200), (80, 100), (90, 100)]
+    HardwareController(z13ctl_path="z13ctl").set_fancurve(curve)
+    spec = fake_host.argvs[0][-1]
+    assert spec == "20:0%,30:0%,40:50%,50:100%,60:100%,70:100%,80:100%,90:100%"
+
+
+def test_set_fancurve_pwm_clamps_0_255(fake_host):
+    curve = [(20, -1), (30, 0), (40, 128), (50, 255), (60, 256),
+             (70, 300), (80, 255), (90, 255)]
+    HardwareController(z13ctl_path="z13ctl").set_fancurve_pwm(curve)
+    spec = fake_host.argvs[0][-1]
+    assert spec == "20:0,30:0,40:128,50:255,60:255,70:255,80:255,90:255"

@@ -227,7 +227,7 @@ def test_transport_matches_shared_drop_protocol_and_timeout(monkeypatch):
     name = "z13-helper-linux-20261102T000000Z-1234abcd.zip"
     cr.upload_report({**BUILD, "token": "test token/+"}, name, b"zip bytes")
     request = opener.open.call_args.args[0]
-    assert request.full_url == (BUILD["base"] + "/public.php/dav/files/test%20token%2F%2B/" + name)
+    assert request.full_url == (BUILD["base"] + "/public.php/dav/files/test%20token%2F%2B/z13-helper/" + name)
     assert request.get_method() == "PUT" and request.data == b"zip bytes"
     assert request.get_header("Content-type") == "application/zip"
     assert request.get_header("If-none-match") == "*"
@@ -369,6 +369,23 @@ def test_decky_packaging_includes_helpers_and_replaces_missing_config_with_empty
     assert install_check.decky_source("py_modules/_crash_build.json") == str(generated)
 
 
+def test_missing_account_without_home_still_uploads(wiring, monkeypatch):
+    import pwd
+
+    for name in ("HOME", "USER", "LOGNAME", "LNAME", "USERNAME"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(pwd, "getpwuid", mock.Mock(side_effect=KeyError))
+
+    reporter = wiring.start()
+    reporter.capture(ValueError("anonymous uid without home"))
+    reporter.worker.join(timeout=3)
+
+    assert not reporter.worker.is_alive()
+    assert len(wiring.sent) == 1
+    report, _ = unpack(wiring.sent[0])
+    assert report["message"] == "anonymous uid without home"
+
+
 def test_disk_failures_and_missing_account_do_not_escape_or_echo_credentials(wiring, monkeypatch, caplog):
     import pwd
 
@@ -382,3 +399,22 @@ def test_disk_failures_and_missing_account_do_not_escape_or_echo_credentials(wir
         reporter.capture(ValueError("disk full"))
         reporter.events.join()
     assert "unavailable" in caplog.text and BUILD["token"] not in caplog.text
+
+
+def _put_url(monkeypatch, build, name):
+    response = mock.MagicMock()
+    response.__enter__.return_value.status = 201
+    opener = mock.Mock()
+    opener.open.return_value = response
+    monkeypatch.setattr(urllib.request, "build_opener", mock.Mock(return_value=opener))
+    cr.upload_report(build, name, b"zip bytes")
+    return opener.open.call_args.args[0].full_url
+
+
+def test_upload_folder_segment_precedes_quoted_file_name(monkeypatch):
+    assert cr.DROP_FOLDER == "z13-helper"
+    url = _put_url(monkeypatch, BUILD, "z13-helper-linux-1234abcd.zip")
+    parts = url.split("/")
+    assert parts[-2] == "z13-helper" and parts[-1] == "z13-helper-linux-1234abcd.zip"
+    url = _put_url(monkeypatch, BUILD, "odd name/+#?.zip")
+    assert url.endswith("/z13-helper/odd%20name%2F%2B%23%3F.zip")

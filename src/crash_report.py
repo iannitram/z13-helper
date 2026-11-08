@@ -22,9 +22,17 @@ from crash_scrub import scrub
 
 APP_ID = "z13-helper"
 LOG_LINES = 500
+MAX_LOG_LINE_CHARS = 2048
+RAW_LINE_CAP_BYTES = 8 * 1024   # 500 lines x 8 KiB = 4 MiB worst case (see #30)
+MAX_FATAL_BYTES = 256 * 1024
+MAX_FATAL_READ_BYTES = 1024 * 1024
+MESSAGE_CAP = 4096
+DROP_FOLDER = "z13-helper"   # reports sort into this folder of the shared drop
+REPORT_CAP_BYTES = 512 * 1024
 SETTING = "send_crash_reports"
 BUILD_CONFIG = Path(__file__).with_name("_crash_build.json")
 UPLOAD_TIMEOUT = 10
+TRUNCATION_MARK = "\n... [cut] ...\n"
 
 
 def reporting_enabled(config_path: str) -> bool:
@@ -58,12 +66,43 @@ def set_reporting(config_path: str, enabled: bool) -> None:
 
 
 class _LogTail(logging.Handler):
-    def __init__(self):
+    def __init__(self, max_line_len: int = MAX_LOG_LINE_CHARS):
         super().__init__()
         self.lines = collections.deque(maxlen=LOG_LINES)
+        self.max_line_len = max_line_len
 
     def emit(self, record):
-        self.lines.append(self.format(record))
+        # Kept unredacted, so the reporter redacts before the 2048-byte cap. This raw cap
+        # only bounds memory (#30) and sits far past that final window.
+        self.lines.append(_cap_bytes(self.format(record), RAW_LINE_CAP_BYTES))
+
+
+def _cap_bytes(text: str, limit: int) -> str:
+    """Limit text to limit UTF-8 bytes without splitting a multi-byte character."""
+    data = text.encode("utf-8")
+    if len(data) <= limit:
+        return text
+    return data[:limit].decode("utf-8", errors="ignore")
+
+
+def read_fatal(fatal: Path | str, max_bytes: int = MAX_FATAL_BYTES) -> str:
+    """Read a fatal crash log, capping its size in UTF-8 bytes and marking truncation."""
+    p = Path(fatal)
+    try:
+        if p.exists() and p.is_file():
+            size = p.stat().st_size
+            with p.open("rb") as f:
+                data = f.read(max_bytes)
+                text = data.decode("utf-8", errors="ignore")
+                if size > max_bytes or f.read(1):
+                    return text + "\n... [cut] ...\n"
+                return text
+    except (OSError, ValueError):
+        pass
+    text = str(fatal)
+    if len(text.encode("utf-8")) > max_bytes:
+        return _cap_bytes(text, max_bytes) + "\n... [cut] ...\n"
+    return text
 
 
 class FatalError(RuntimeError):
@@ -271,12 +310,26 @@ class CrashReporter:
             kernel=platform.release(), python=platform.python_version(), now=now,
             install_id=install_file.read_text().strip(),
         )
-        report["traceback"] = (Path(fatal_text).read_text() if fatal_text else
-                               "".join(traceback.format_exception(type(exc), exc, tb)))
-        identities = {"home": str(Path.home()), "hostname": socket.gethostname(), "user": getpass.getuser()}
+        tb_text = (read_fatal(fatal_text, max_bytes=MAX_FATAL_READ_BYTES) if fatal_text else
+                   "".join(traceback.format_exception(type(exc), exc, tb)))
+        # A uid with no passwd entry and no USER/LOGNAME makes this raise; the report
+        # must still go out, just without that identifier to scrub.
+        try:
+            login = getpass.getuser()
+        except Exception:  # noqa: BLE001 -- a failed lookup only loses a scrub target
+            login = None
+        try:
+            home = str(Path.home())
+        except Exception:  # noqa: BLE001 -- a failed lookup only loses a scrub target
+            home = ""
+        try:
+            host = socket.gethostname()
+        except Exception:  # noqa: BLE001
+            host = None
+        identities = {"home": home, "hostname": host, "user": login}
         try:
             account = pwd.getpwuid(os.getuid())
-        except KeyError:
+        except Exception:  # noqa: BLE001
             account = None
 
         def clean(text):
@@ -285,14 +338,25 @@ class CrashReporter:
                 text = text.replace(self.build[key], "<redacted>")
             text = scrub(text, **identities)
             if account:
-                text = scrub(text, home=account.pw_dir, user=account.pw_name)
-                text = scrub(text, home="", user=account.pw_gecos.split(",")[0] or None)
+                text = scrub(text, home=getattr(account, "pw_dir", None),
+                             user=getattr(account, "pw_name", None))
+                gecos = getattr(account, "pw_gecos", "")
+                text = scrub(text, home="", user=gecos.split(",")[0] or None)
             return text
 
+        # Redact before the size caps: a cut landing inside an identifier would
+        # otherwise leave a partial one that clean() no longer matches.
+        tb_text = clean(tb_text)
+        if len(tb_text.encode("utf-8")) > MAX_FATAL_BYTES:
+            tb_text = _cap_bytes(tb_text, MAX_FATAL_BYTES) + "\n... [cut] ...\n"
+        report["traceback"] = tb_text
         report = {key: clean(value) for key, value in report.items()}
+        if len(report["message"].encode("utf-8")) > MESSAGE_CAP:
+            marker = " ... [cut]"
+            report["message"] = _cap_bytes(report["message"], MESSAGE_CAP - len(marker)) + marker
         logs = self.log_text() if self.log_text else "\n".join(list(self.tail.lines))
         return (drop_filename(sys.platform, now, secrets.token_hex(4)),
-                build_zip(report, clean(log_tail(logs))))
+                build_zip(report, clean(logs)))
 
 
 def upload_report(build, name, data):
@@ -300,9 +364,13 @@ def upload_report(build, name, data):
 
     No immediate retry: a timeout may have reached the server already. A queued
     retry on next start uses the same filename and refuses to overwrite it.
+
+    The PUT goes to <base>/public.php/dav/files/<token>/DROP_FOLDER/<name>; the
+    drop creates the folder on first upload, so no MKCOL is needed.
     """
     url = (build["base"].rstrip("/") + "/public.php/dav/files/" +
-           urllib.parse.quote(build["token"], safe="") + "/" + urllib.parse.quote(name, safe=""))
+           urllib.parse.quote(build["token"], safe="") + "/" + DROP_FOLDER + "/" +
+           urllib.parse.quote(name, safe=""))
     request = urllib.request.Request(url, data=data, method="PUT", headers={
         "Content-Type": "application/zip", "If-None-Match": "*",
     })
@@ -386,12 +454,13 @@ def drop_filename(platform: str, now: datetime, rand_hex: str) -> str:
     return f"{APP_ID}-{cleaned_platform}-{stamp}-{rand_hex}.zip"
 
 
-def log_tail(text: str, n: int = LOG_LINES) -> str:
+def log_tail(text: str, n: int = LOG_LINES, max_line_len: int = MAX_LOG_LINE_CHARS) -> str:
     """Get the last n lines of text, each ending with a newline.
 
     Args:
         text: The input text
         n: Number of lines to return (default: LOG_LINES)
+        max_line_len: Maximum UTF-8 bytes per line (default: MAX_LOG_LINE_CHARS)
 
     Returns:
         The last n lines, each ending with \n
@@ -400,7 +469,12 @@ def log_tail(text: str, n: int = LOG_LINES) -> str:
         return ""
 
     lines = text.splitlines()
-    return "".join(line + "\n" for line in lines[-n:])
+    out = []
+    for line in lines[-n:]:
+        if max_line_len and len(line.encode("utf-8")) > max_line_len:
+            line = _cap_bytes(line, max_line_len) + " ... [cut]"
+        out.append(line + "\n")
+    return "".join(out)
 
 
 def build_report(
@@ -453,6 +527,9 @@ def build_report(
 def build_zip(report: dict, log_text: str) -> bytes:
     """Build a zip file containing report.json and app.log.
 
+    The uncompressed entries stay under REPORT_CAP_BYTES: the oldest log lines
+    are dropped first (one line kept), then the traceback is cut.
+
     Args:
         report: The crash report dictionary
         log_text: The log text
@@ -460,18 +537,27 @@ def build_zip(report: dict, log_text: str) -> bytes:
     Returns:
         Bytes of the zip file
     """
+    lines = [line + "\n" for line in log_tail(log_text).splitlines()]
+    line_sizes = [len(line.encode("utf-8")) for line in lines]
+    log_size = sum(line_sizes)
+    report_json = json.dumps(report, indent=2, sort_keys=True)
+    while len(lines) > 1 and len(report_json.encode("utf-8")) + log_size > REPORT_CAP_BYTES:
+        log_size -= line_sizes.pop(0)
+        lines.pop(0)
+    while len(report_json.encode("utf-8")) + log_size > REPORT_CAP_BYTES:
+        tb = report.get("traceback") or ""
+        body = tb.removesuffix(TRUNCATION_MARK)
+        if not body:
+            break
+        cut = _cap_bytes(body, len(body.encode("utf-8")) * 3 // 4) + TRUNCATION_MARK
+        report["traceback"] = cut
+        report_json = json.dumps(report, indent=2, sort_keys=True)
     # Create zip in memory
     zip_buffer = io.BytesIO()
 
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-        # Add report.json
-        report_json = json.dumps(report, indent=2, sort_keys=True)
         zip_file.writestr("report.json", report_json)
+        zip_file.writestr("app.log", "".join(lines))
 
-        # Add app.log with tail
-        log_tail_content = log_tail(log_text)
-        zip_file.writestr("app.log", log_tail_content)
-
-    # Return the zip bytes
     zip_buffer.seek(0)
     return zip_buffer.read()

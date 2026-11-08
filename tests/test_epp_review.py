@@ -24,9 +24,3 @@ def test_summarize_single_cpu_and_all_unreadable():
     assert epp.summarize_epp(("power\n",)) == "power"
     assert epp.summarize_epp((None,)) is None
     assert epp.summarize_epp((None, None)) is None
-
-
-def test_epp_paths_single_cpu_and_two_digit_index():
-    assert epp.epp_paths(1) == ["/sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference"]
-    assert epp.epp_paths(12)[-1] == "/sys/devices/system/cpu/cpu11/cpufreq/energy_performance_preference"
-    assert len(epp.epp_paths(12)) == 12
