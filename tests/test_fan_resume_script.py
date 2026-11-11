@@ -221,3 +221,19 @@ def test_missing_z13ctl_fallback_does_not_crash(env):
     p = env()
     assert p.returncode == 0, p.stderr
     assert "WARN curve re-apply FAILED" in env.logger_log.read_text()
+
+
+def test_fallback_curve_is_20c_anchored_turbo_shape():
+    """#86: the fallback curve starts at <= 20 C and equals TURBO_CURVE in PWM."""
+    import re
+    import sys
+
+    sys.path.insert(0, str(SCRIPT.parent.parent.parent.parent.parent / "src"))
+    import profiles
+
+    spec = re.search(r'^CURVE="([^"]+)"', SCRIPT.read_text(), re.M).group(1)
+    points = [tuple(int(v) for v in p.split(":")) for p in spec.split(",")]
+    assert len(points) == 8
+    assert points[0][0] <= 20
+    expected = [(t, round(p * 255 / 100)) for t, p in profiles.TURBO_CURVE]
+    assert points == expected
