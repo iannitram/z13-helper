@@ -49,6 +49,19 @@ def _refuse(what):
 _REAL_RUN, _REAL_POPEN = subprocess.run, subprocess.Popen
 
 
+@pytest.fixture(autouse=True)
+def pinned_tdp_ranges(monkeypatch):
+    """Profile applies and named-profile mirrors clamp TDP into the detected
+    ranges (#203). Pin those to the 5-93 W envelope so no test reads this
+    machine's asus-armoury metadata; a test that needs the firmware floors
+    patches profiles._tdp_ranges / z13ctl_client._tdp_ranges itself."""
+    import power_range
+    import profiles
+    import z13ctl_client
+    monkeypatch.setattr(profiles, "_tdp_ranges", lambda: dict(power_range.DEFAULT_RANGES))
+    monkeypatch.setattr(z13ctl_client, "_tdp_ranges", lambda: dict(power_range.DEFAULT_RANGES))
+
+
 @pytest.fixture
 def real_subprocess(monkeypatch):
     """Opt-in for the few tests that run one of the repo's own shell scripts
