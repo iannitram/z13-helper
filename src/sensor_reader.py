@@ -259,12 +259,20 @@ class SensorReader:
             raw = self._read_int(os.path.join(hwmon, "temp1_input")) if hwmon else None
             return raw / 1000.0 if raw is not None else None
 
-        battery = self._read_int("/sys/class/power_supply/BAT0/temp")   # tenths of °C
+        # power_supply/BAT0/temp (tenths of °C) where the driver has it; else a
+        # temp1_input on the BAT0 hwmon node. Some firmware offers neither, so None.
+        battery = self._read_int("/sys/class/power_supply/BAT0/temp")
+        if battery is not None:
+            battery = battery / 10.0
+        else:
+            node = self._find_hwmon("BAT0")
+            raw = self._read_int(os.path.join(node, "temp1_input")) if node else None
+            battery = raw / 1000.0 if raw is not None else None
         return {
             "tctl": hwmon_temp("k10temp"),
             "acpitz": self.get_apu_temp(),
             "nvme": hwmon_temp("nvme"),
-            "battery": battery / 10.0 if battery is not None else None,
+            "battery": battery,
             "gpu_edge": self.get_gpu_temp(),
         }
 

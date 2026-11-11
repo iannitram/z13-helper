@@ -66,3 +66,27 @@ def test_sample_command_reads_hwmon_and_writes_one_row(tmp_path, monkeypatch, ca
     rows = probe.read_rows(out)
     assert len(rows) == 1 and rows[0]["phase"] == "game" and rows[0]["external_c"] == "36.5"
     assert rows[0]["tctl"] == "52.0" and rows[0]["nvme"] == ""
+
+
+def test_battery_falls_back_to_bat0_hwmon_node(tmp_path, monkeypatch):
+    import sensor_reader
+    reader = make_reader(tmp_path, monkeypatch)
+    real = reader._read_int
+    root = tmp_path / "hwmon"
+    d = root / "hwmon9"
+    d.mkdir()
+    (d / "name").write_text("BAT0\n")
+    (d / "temp1_input").write_text("31200\n")
+    # no power_supply temp file, as on the Z13: the hwmon node supplies it
+    monkeypatch.setattr(reader, "_read_int",
+                        lambda p: None if p.endswith("power_supply/BAT0/temp") else real(p))
+    assert reader.get_comfort_candidates()["battery"] == 31.2
+    monkeypatch.setattr(reader, "_read_int",
+                        lambda p: 305 if p.endswith("power_supply/BAT0/temp") else real(p))
+    assert reader.get_comfort_candidates()["battery"] == 30.5
+
+
+def test_battery_none_when_no_source(tmp_path, monkeypatch):
+    reader = make_reader(tmp_path, monkeypatch)
+    monkeypatch.setattr(reader, "_read_int", lambda p: None)
+    assert reader.get_comfort_candidates()["battery"] is None
