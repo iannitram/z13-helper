@@ -178,3 +178,19 @@ def test_stored_20w_pl1_on_armoury_needs_attention_not_silently_applied():
 def test_stored_20w_is_fine_on_legacy():
     st = pr.tdp_status({"pl1": 20, "pl2": 30, "pl3": 40, "force": False}, pr.DEFAULT_RANGES)
     assert not st["needs_attention"] and st["note"] == ""
+
+
+def test_old_and_new_kernel_interfaces_give_different_valid_ranges(tmp_path):
+    """Two fake sysfs trees: asus-nb-wmi (old) allows 5-93 W on every rail;
+    asus-armoury (new) has per-rail limits, so a value valid on one is clamped on the other."""
+    old = tmp_path / "old"
+    new = tmp_path / "new"
+    old.mkdir(); new.mkdir()
+    old_range = pr.detect_ranges(*_tree(old, armoury=False, nbwmi=True))
+    new_range = pr.detect_ranges(*_tree(new, armoury=True, nbwmi=False))
+    assert old_range != new_range
+    assert old_range["pl1"] == (5, 93) and new_range["pl1"] == (28, 80)
+    stored = {"pl1": 10, "pl2": 20, "pl3": 30}
+    assert pr.fit_tdp(stored, old_range)[0] == {"pl1": 10, "pl2": 20, "pl3": 30, "force": False}
+    fitted, note = pr.fit_tdp(stored, new_range)
+    assert (fitted["pl1"], fitted["pl2"], fitted["pl3"]) == (28, 32, 45) and note

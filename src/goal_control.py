@@ -37,8 +37,11 @@ MIN_DWELL_S = 10
 HYSTERESIS_RPM = 150
 HYSTERESIS_C = 2
 HYSTERESIS_FPS = 3
-# Above this APU temperature every goal sheds power. Same default as the
-# archived build/123 Limits; a caller with a better figure passes its own.
+# Above this APU temperature every goal sheds power. Nothing in this repo
+# documents 95 C as a limit for this APU: it is a chosen default, not a
+# sourced figure. The nearest documented number is the G-Helper BIOS fan
+# safety floor in profiles.py, which runs to 100 C. A caller with a sourced
+# figure passes its own apu_temp_limit_c.
 APU_TEMP_LIMIT_C = 95.0
 OVER_LIMIT_REASON = "over APU temperature limit"
 GOAL_SENSORS = {"quiet": ("fan_rpm", "max_rpm"),
@@ -50,14 +53,21 @@ def _reading(value):
     """Return a valid reading as a float, else None (decision 1)."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    if not math.isfinite(value) or value < 0:
+    try:
+        if not math.isfinite(value) or value < 0:
+            return None
+        return float(value)
+    except OverflowError:  # an int too large for a float is not a reading
         return None
-    return float(value)
 
 
 def _finite_number(value):
-    return (not isinstance(value, bool) and isinstance(value, (int, float))
-            and math.isfinite(value))
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
 
 
 def _unchanged(current, reason, state=None):
@@ -153,35 +163,37 @@ def step(goal, readings, current, ranges, *, now_s, state=None,
     (``power_range.detect_ranges()``). ``state`` carries ``last_change_at``
     between calls, and ``now_s`` is a monotonic timestamp supplied by the
     caller. ``apu_temp_limit_c`` is the over-temperature limit in degrees C.
-    Output state is safe to feed back unchanged. Invalid goal/input shapes
-    raise ``ValueError``; invalid reading values never do.
+    Output state is safe to feed back unchanged. Invalid readings/current shapes
+    raise ``ValueError``; invalid reading values never do. A malformed goal
+    does not raise: the over-temperature shed still applies, otherwise power
+    is held.
 
     Every step changes TDP or curve by at most its per-tick limit. A deadband
     provides hysteresis; the caller-supplied timestamp enforces dwell, except
     for an over-temperature shed, which happens on every tick it applies.
     Missing or invalid required readings yield unchanged power and a reason.
     """
-    if not isinstance(goal, dict) or not isinstance(readings, dict) or not isinstance(current, dict):
-        raise ValueError("goal, readings, and current must be mappings")
-    kind = goal.get("kind")
-    if kind not in ("quiet", "comfort", "fps", "max"):
-        raise ValueError("goal kind must be quiet, comfort, fps, or max")
+    if not isinstance(readings, dict) or not isinstance(current, dict):
+        raise ValueError("readings and current must be mappings")
     if not _finite_number(now_s):
         raise ValueError("now_s must be a finite monotonic timestamp")
     if not _finite_number(apu_temp_limit_c) or apu_temp_limit_c <= 0:
         raise ValueError("apu_temp_limit_c must be a finite positive number")
-    target = None
-    if kind != "max":
-        sensor, target_key = GOAL_SENSORS[kind]
-        target = goal.get(target_key)
-        if not _finite_number(target) or target < 0:
-            raise ValueError(f"{target_key} must be a finite number >= 0")
     state = dict(state or {})
     bounds = _limits(ranges)
     tdp = _ordered_tdp(current.get("tdp") or {}, bounds)
     curve = _curve(current.get("fan_curve"))
     full = [[temp, 100] for temp in MAX_FAN_TEMPS]
     apu = _reading(readings.get("apu_temp_c"))
+    # A malformed goal never raises: it still gets the over-temperature shed
+    # below, then holds power.
+    kind = goal.get("kind") if isinstance(goal, dict) else None
+    target = None
+    malformed = kind not in ("quiet", "comfort", "fps", "max")
+    if not malformed and kind != "max":
+        sensor, target_key = GOAL_SENSORS[kind]
+        target = goal.get(target_key)
+        malformed = not _finite_number(target) or target < 0
 
     # Decision 2: over-temperature first, for every goal, ignoring dwell and
     # the goal's own reading.
@@ -193,6 +205,9 @@ def step(goal, readings, current, ranges, *, now_s, state=None,
             new_state["last_change_at"] = now_s
         return {"tdp": next_tdp, "fan_curve": next_curve,
                 "reason": OVER_LIMIT_REASON, "state": new_state}
+
+    if malformed:
+        return _unchanged(current, "Malformed goal; holding power", state)
 
     if kind == "max":
         # Max is the explicit safety override: request full speed immediately.
