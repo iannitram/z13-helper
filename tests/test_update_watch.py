@@ -103,3 +103,64 @@ def test_install_treats_rc7_no_update_as_up_to_date(monkeypatch, capsys):
     monkeypatch.setattr(installers, "run", fake_run)
     assert installers.install_steamos() == 0
     assert ["sudo", "-n", "steamos-update"] not in calls
+
+
+# ---- own release source (issue 202): fake HTTP, no network ----
+
+def _own(monkeypatch, tmp_path, status, body="", cached=None):
+    import json as _json
+    monkeypatch.setattr(update_watch, "CACHE_PATH", str(tmp_path / "updates.json"))
+    calls = []
+
+    def fake_get(url, etag=None):
+        calls.append(url)
+        return status, "etag1", body
+
+    monkeypatch.setattr(update_watch, "_get", fake_get)
+    monkeypatch.setattr(update_watch, "SOURCES",
+                        [s for s in update_watch.SOURCES if s["id"] == "z13-helper"])
+    if cached:
+        (tmp_path / "updates.json").write_text(_json.dumps(cached))
+    rows = update_watch.check(force=True)
+    assert calls and "iannitram/z13-helper/releases/latest" in calls[0]
+    return rows[0]
+
+
+def _release(tag):
+    import json as _json
+    return _json.dumps({"tag_name": tag, "published_at": "2026-12-01T00:00:00Z",
+                        "html_url": "https://example.invalid/r", "body": "notes"})
+
+
+def test_own_release_source_uses_app_version():
+    from versions import APP_VERSION
+    src = next(s for s in update_watch.SOURCES if s["id"] == "z13-helper")
+    assert src["repo"] == "iannitram/z13-helper" and src["installed"]() == APP_VERSION
+
+
+def test_own_release_none_published_is_neutral(monkeypatch, tmp_path):
+    row = _own(monkeypatch, tmp_path, 404, '{"message":"Not Found"}')
+    assert row["error"] is None and row["state"] == "none" and not row["new"]
+    assert "no release published yet" in row["notes"]
+
+
+def test_own_release_newer_is_moved_with_link(monkeypatch, tmp_path):
+    row = _own(monkeypatch, tmp_path, 200, _release("v99.0.0"))
+    assert row["state"] == "moved" and row["new"] and row["url"] == "https://example.invalid/r"
+
+
+def test_own_release_equal_is_current(monkeypatch, tmp_path):
+    from versions import APP_VERSION
+    row = _own(monkeypatch, tmp_path, 200, _release("v" + APP_VERSION))
+    assert row["state"] == "current" and not row["new"] and row["error"] is None
+
+
+def test_own_release_offline_is_neutral_not_error(monkeypatch, tmp_path):
+    row = _own(monkeypatch, tmp_path, 0, "")
+    assert row["error"] is None and row["state"] == "unreachable" and not row["new"]
+
+
+def test_own_release_offline_keeps_cached_release(monkeypatch, tmp_path):
+    cached = {"checked_at": 0, "items": {"z13-helper": {"latest": "99.0.0", "url": "u"}}}
+    row = _own(monkeypatch, tmp_path, 0, "", cached)
+    assert row["latest"] == "99.0.0" and row["error"] is None
