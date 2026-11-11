@@ -1,6 +1,7 @@
 """#86: no fan curve may start above 20 C (the EC can hold its previous duty below
 the first anchor), and the legacy scripts must match the app's built-in curves."""
 
+import ast
 import re
 import sys
 from pathlib import Path
@@ -62,7 +63,10 @@ def test_z13_max_has_no_live_status_read():
 
 
 def test_widget_default_curve_first_anchor_and_shape():
-    import fan_curve_widget
-    curve = fan_curve_widget.DEFAULT_CURVE
+    # Parsed with ast: importing fan_curve_widget needs PyQt6, which CI lacks.
+    tree = ast.parse((ROOT / "src/fan_curve_widget.py").read_text())
+    node = next(n.value for n in tree.body if isinstance(n, ast.Assign)
+                and any(getattr(t, "id", None) == "DEFAULT_CURVE" for t in n.targets))
+    curve = ast.literal_eval(node)
     assert curve[0][0] <= 20
-    assert curve == profiles.BALANCED_CURVE
+    assert [list(p) for p in curve] == [list(p) for p in profiles.BALANCED_CURVE]
