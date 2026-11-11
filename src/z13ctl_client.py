@@ -25,6 +25,12 @@ class Z13CtlError(RuntimeError):
     """The daemon was reached but returned an invalid or failed response."""
 
 
+def _tdp_ranges():
+    """Per-rail limits from kernel range metadata; a seam tests pin."""
+    import power_range
+    return power_range.detect_ranges()
+
+
 class Z13CtlClient:
     def __init__(self, socket_path=None, *, connect_timeout=CONNECT_TIMEOUT_S,
                  request_timeout=REQUEST_TIMEOUT_S):
@@ -163,6 +169,11 @@ s.close()
             self.request("fancurve-reset", profile=name)
         tdp = profile.get("tdp")
         if tdp:
+            # Store only limits the firmware accepts: an out-of-range value is
+            # clamped by the firmware, and the daemon would then report a limit
+            # that never applied (#203).
+            import power_range
+            tdp, _ = power_range.fit_tdp(tdp, _tdp_ranges())
             self.request("tdp", set=str(tdp["pl1"]), pl1=str(tdp["pl1"]), pl2=str(tdp["pl2"]),
                          pl3=str(tdp["pl3"]), force=bool(tdp.get("force")), profile=name)
         # Only an explicit False means no ryzen_smu; an absent key keeps the old writes.
