@@ -23,7 +23,7 @@ Decky package and Flatpak AppStream versions must agree. This release does not c
 `io.github.z13.Controller` → `io.github.iannitram.Z13Helper`, `z13-controller.service` →
 `z13-helper.service`, `~/.config` + `~/.local/state` folders `z13-controller` → `z13-helper`
 (symlinks remain at the old paths), Decky plugin `z13-decky` → `z13-helper`, repo
-`~/dev/z13-controller` → `~/dev/z13-helper` (old path is a symlink), GitHub
+`<dev root>/z13-controller` → `<dev root>/z13-helper` (old path is a symlink), GitHub
 `iannitram/z13-controller` → `iannitram/z13-helper` (published with fresh history the same day).
 Older docs (`docs/plan/`, past CHANGELOG entries) keep the old name.
 
@@ -149,7 +149,7 @@ Mode (not after a deliberate Quit). Note the Decky backend runs as **deck**, not
   `org.kde.Platform//6.10`; pulls PyQt6 from PyPI, needs network). Then restart the app.
 - **Run for debugging without a rebuild:** the sandbox has PyQt6 under `/app`, so you can run the
   repo's fixed source inside it:
-  `flatpak run --filesystem=/home/deck/dev/z13-helper --command=python3 io.github.iannitram.Z13Helper /home/deck/dev/z13-helper/main.py --show`
+  `flatpak run --filesystem=<dev root>/z13-helper --command=python3 io.github.iannitram.Z13Helper <dev root>/z13-helper/main.py --show`
 - **Resident instance:** `systemctl --user {enable,start} z13-helper.service` (unit runs the
   Flatpak hidden; the side button/tray opens it). Fixed unit lives in `packaging/host/systemd/user/`.
 - **Single instance:** Flatpak moves the app out of the unit's cgroup (into `app-flatpak-*.scope`),

@@ -73,7 +73,7 @@ suspend/resume, sustained load and soak still need verification; 1.0 remains unf
 | Doc | Verdict |
 |---|---|
 | `docs/plan/Phase_1…6.md` | Historical. Phases 1–3, 5 (spike), 6 are done; Phase 4 (testing) was never run as written; Phase 5 "full parity" never happened. **Superseded by this file.** |
-| `docs/README-landing.md` | Stale vault landing page (code at `C:/dev`, keycode 579, InputPlumber D-Bus as the button path). **Deleted**; its history table lives in this section. |
+| `docs/README-landing.md` | Stale vault landing page (code under the old dev root, keycode 579, InputPlumber D-Bus as the button path). **Deleted**; its history table lives in this section. |
 | `README.md` | Refreshed 2026-10-09 for the redesign (features, layout, restore path). |
 | `docs/BUTTON-AND-INPUTPLUMBER.md`, `docs/hardware-enablement.md` | Accurate; keep. |
 | Maintainer's notes (outside the repo) | Authoritative for machine behaviour; need a "profiles engine" and "fan stall" section once Phase 8/7 land. |
