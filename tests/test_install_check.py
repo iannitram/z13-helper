@@ -67,6 +67,35 @@ def test_manifest_modes(capsys):
             assert mode == "755", dest
 
 
+def test_post_update_package_installs_whole_and_self_contained(capsys):
+    """The tab and Repair run `python3 -m post_update` from LIB: every module of the package and
+    every src module it imports (transitively) must be installed there (#220)."""
+    import ast
+    dests = {dest: rel for rel, dest, _, _ in manifest_rows(capsys)}
+    pkg = REPO / "tooling" / "post_update"
+    for f in pkg.glob("*.py"):
+        assert os.path.join(ic.LIB, "post_update", f.name) in dests, f.name
+    src_mods = {p.stem for p in (REPO / "src").glob("*.py")}
+
+    def imports(path):
+        found = set()
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.Import):
+                found |= {a.name.split(".")[0] for a in node.names}
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                found.add(node.module.split(".")[0])
+        return found & src_mods
+
+    need, todo = set(), [m for f in pkg.glob("*.py") for m in imports(f)]
+    while todo:
+        m = todo.pop()
+        if m not in need:
+            need.add(m)
+            todo += imports(REPO / "src" / f"{m}.py")
+    missing = sorted(m for m in need if os.path.join(ic.LIB, f"{m}.py") not in dests)
+    assert missing == []
+
+
 def test_keep_list(capsys):
     assert ic.main(["keep-list"]) == 0
     lines = capsys.readouterr().out.splitlines()
