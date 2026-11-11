@@ -86,7 +86,8 @@ ARM = "/sys/class/firmware-attributes/asus-armoury/attributes"
 
 def fake_sysfs(armoury, hwmon_names):
     """A fake sysfs tree: (listdir, read) over an armoury listing and hwmon name files."""
-    hw = {f"/sys/class/hwmon/hwmon{i}/name": n + "\n" for i, n in enumerate(hwmon_names)}
+    # A None name models an unreadable name file (read returns None).
+    hw = {f"/sys/class/hwmon/hwmon{i}/name": n + "\n" for i, n in enumerate(hwmon_names) if n is not None}
     listing = {ARM: armoury, "/sys/class/hwmon": [f"hwmon{i}" for i in range(len(hwmon_names))]}
     return (lambda p: listing.get(p, [])), hw.get
 
@@ -96,6 +97,17 @@ def test_armoury_check_healthy_kernel_shape_is_ok():
     arm = ["boot_sound", "charge_mode", "panel_overdrive", "pending_reboot"] + PPT
     assert su.armoury_check(*fake_sysfs(arm, ["acpitz", "asus", "asus_custom_fan_curve"])) == \
         {"state": "ok", "missing": []}
+
+
+def test_armoury_check_finds_the_curve_node_anywhere_in_the_hwmon_list():
+    arm = ["boot_sound"] + PPT
+    ok = {"state": "ok", "missing": []}
+    assert su.armoury_check(*fake_sysfs(arm, ["asus", "asus_custom_fan_curve", "acpitz", "nvme"])) == ok
+    assert su.armoury_check(*fake_sysfs(arm, ["asus_custom_fan_curve", "acpitz"])) == ok
+    # An unreadable name file must not hide the node or raise.
+    assert su.armoury_check(*fake_sysfs(arm, [None, "asus_custom_fan_curve", None])) == ok
+    assert su.armoury_check(*fake_sysfs(arm, [None, "acpitz"])) == \
+        {"state": "needs", "missing": ["fan curve hwmon"]}
 
 
 def test_armoury_check_old_shape_with_fan_attribute_still_needs_the_hwmon_node():
