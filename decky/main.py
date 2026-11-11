@@ -696,6 +696,7 @@ class DeckyFans:
         tdp = (active_profile(_read_store()) or {}).get("tdp")
         if not tdp:
             return None
+        tdp, _ = self.fit_tdp(tdp)
         rc, out = _run(tdp_argv(tdp), timeout=Z13CTL_WRITE_TIMEOUT_S, as_deck=True)
         if rc != 0:
             if out.startswith("z13ctl write timed out after "):
@@ -725,8 +726,14 @@ class DeckyFans:
     def set_fancurve_pwm(self, points):
         self._z13ctl("fancurve", "--set", ",".join(f"{int(t)}:{int(p)}" for t, p in points))
 
+    def fit_tdp(self, tdp):
+        """(written, note): the stored tdp clamped into the detected firmware
+        ranges, so the write and the watchdog's message agree (#203)."""
+        return power_range.fit_tdp(tdp, tdp_ranges())
+
     def apply_tdp(self, tdp):
         # As deck, like apply_tdp() (the TDP slider's write).
+        tdp, _ = self.fit_tdp(tdp)
         self._z13ctl(*tdp_argv(tdp)[1:], as_deck=True)
 
     def reset_fancurve(self):

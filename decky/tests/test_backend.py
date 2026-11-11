@@ -393,6 +393,9 @@ class StalledSensors:
 
 class DeckyFansTest(unittest.TestCase):
     def setUp(self):
+        patch = mock.patch.object(m, "tdp_ranges", return_value=dict(power_range.DEFAULT_RANGES))
+        patch.start()   # not this machine's firmware floors
+        self.addCleanup(patch.stop)
         self._orig = m._current_platform_profile
         m._current_platform_profile = lambda: "performance"
 
@@ -423,6 +426,22 @@ class DeckyFansTest(unittest.TestCase):
         ])
         self.assertEqual([c.as_deck for c in run.calls], [True, False])
 
+    def test_restore_and_apply_tdp_write_the_clamped_values(self):
+        run = fake_host(self)
+        ranges = {"pl1": (28, 80), "pl2": (32, 92), "pl3": (45, 93)}
+        store = {"active": "Boondock", "profiles": [{"name": "Boondock", "tdp":
+                 {"pl1": 20, "pl2": 30, "pl3": 40, "force": False}}]}
+        with mock.patch.object(m, "tdp_ranges", return_value=ranges), \
+                mock.patch.object(m, "_read_store", return_value=store):
+            fans = m.DeckyFans()
+            self.assertIsNone(fans.restore_tdp())
+            fans.apply_tdp({"pl1": 20, "pl2": 30, "pl3": 40, "force": False})
+            written, note = fans.fit_tdp({"pl1": 20, "pl2": 30, "pl3": 40})
+        self.assertEqual([c[0][1:] for c in run.calls],
+                         [["tdp", "--set", "28", "--pl2", "32", "--pl3", "45"]] * 2)
+        self.assertEqual(written["pl1"], 28)
+        self.assertIn("outside the firmware range", note)
+
     def test_watchdog_reads_active_tdp_from_store(self):
         orig = m._read_store
         tdp = {"pl1": 20, "pl2": 30, "pl3": 40, "force": False}
@@ -452,6 +471,9 @@ class RecoveryRestoresTuningTest(unittest.TestCase):
     the active profile's back (TDP, curve, undervolt) and reads them back."""
 
     def setUp(self):
+        patch = mock.patch.object(m, "tdp_ranges", return_value=dict(power_range.DEFAULT_RANGES))
+        patch.start()   # not this machine's firmware floors
+        self.addCleanup(patch.stop)
         self._orig = m._current_platform_profile, m.PROFILES_STORE
         m._current_platform_profile = lambda: "quiet"
         d = tempfile.mkdtemp(prefix="z13-decky-store-")
