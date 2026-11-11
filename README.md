@@ -221,7 +221,7 @@ A profile bundles:
 - an optional enter/exit command
 
 Silent, Balanced and Turbo come built in, and Turbo has Max Fans on. **Boondock** is a built-in
-off-grid profile: quiet, 20/30/40 W, a dimmed screen, and background services stopped. Your own
+off-grid profile: quiet, 28/32/45 W (the firmware floors), a dimmed screen, and background services stopped. Your own
 profiles are made in the Fans + Power window.
 
 One profile store drives the desktop app, the Decky plugin and the host command

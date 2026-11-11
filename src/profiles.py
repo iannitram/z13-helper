@@ -65,6 +65,7 @@ try:
     import timeline  # noqa: E402
 except ImportError:
     timeline = None
+import power_range  # noqa: E402
 import state_authority as authority  # noqa: E402
 from state_events import lighting_level  # noqa: E402
 
@@ -120,6 +121,12 @@ LEGACY_NAMES = {            # z13-* script name  ->  profile name
 LEGACY_NAMES_REV = {v: k for k, v in LEGACY_NAMES.items()}
 
 BOONDOCK_BIN = os.path.expanduser("~/.local/bin/boondock")
+# Boondock's power limits: the asus-armoury floors on the GZ302EA (PL1 28 W,
+# PL2 32 W, PL3 45 W), the lowest the firmware accepts. tooling/boondock keeps
+# the same numbers. Builds before #203 shipped 20/30/40 W, which the firmware
+# clamped up to these floors while the app went on showing 20/30/40 W.
+BOONDOCK_TDP = {"pl1": 28, "pl2": 32, "pl3": 45, "force": False}
+LEGACY_BOONDOCK_TDP = {"pl1": 20, "pl2": 30, "pl3": 40, "force": False}
 
 # Wedged rear lightbar (USB 0b05:18c6): every z13ctl write to it blocks ~5 s and
 # fails with "... write /dev/hidraw5: connection timed out". A root oneshot
@@ -228,7 +235,7 @@ def default_profiles():
         # session half (screen dim, background services), never its power writes,
         # which would overwrite this profile's own settings.
         _profile("Boondock", "quiet", builtin=True,
-                 tdp={"pl1": 20, "pl2": 30, "pl3": 40, "force": False},
+                 tdp=dict(BOONDOCK_TDP),
                  enter=f"{BOONDOCK_BIN} session-on", exit_=f"{BOONDOCK_BIN} session-off"),
     ]
 
@@ -423,6 +430,56 @@ def _migrate_boondock_hooks(p):
                 hooks[key] = f"{parts[0]} {new}"
 
 
+def _migrate_boondock_tdp(p):
+    """Move an unedited built-in Boondock off the old 20/30/40 W limits.
+
+    Those sat below the firmware floors, so the hardware ran at the floors
+    anyway; the new built-in states them. Exact match only: a Boondock whose
+    TDP the user changed keeps it. Returns True when the profile changed.
+    """
+    if p.get("name") != "Boondock" or p.get("builtin") is not True:
+        return False
+    tdp = p.get("tdp")
+    if not isinstance(tdp, dict) or {k: tdp.get(k) for k in LEGACY_BOONDOCK_TDP} \
+            != LEGACY_BOONDOCK_TDP:
+        return False
+    p["tdp"] = dict(BOONDOCK_TDP)
+    return True
+
+
+def stale_mirrors(state, store=None):
+    """App profiles whose z13ctl named profile still holds the old Boondock TDP.
+
+    Pure: reads the given daemon snapshot and the store, writes nothing. A
+    mirror that is the active backend profile is left alone (rebuilding an
+    active named profile is refused; the next apply rewrites it), so only
+    inactive mirrors are returned, for the caller to rebuild.
+    """
+    if not isinstance(state, dict):
+        return []
+    customs = state.get("custom_profiles")
+    if not isinstance(customs, dict):
+        return []
+    try:
+        from z13ctl_client import Z13CtlClient
+    except ImportError:
+        return []
+    store = store or load_store(create=False)
+    legacy = {"pl1_spl": LEGACY_BOONDOCK_TDP["pl1"], "pl2_sppt": LEGACY_BOONDOCK_TDP["pl2"],
+              "fppt": LEGACY_BOONDOCK_TDP["pl3"]}
+    out = []
+    for p in store.get("profiles", []):
+        if p.get("name") != "Boondock" or p.get("builtin") is not True:
+            continue
+        name = Z13CtlClient.mapped_profile_name(p)
+        saved = customs.get(name)
+        tdp = saved.get("tdp") if isinstance(saved, dict) else None
+        if (isinstance(tdp, dict) and state.get("profile") != name
+                and {k: tdp.get(k) for k in legacy} == legacy):
+            out.append(p)
+    return out
+
+
 def _migrate_builtin_fan_curve(p):
     """Add the cold-temperature anchor to an unedited shipped built-in curve.
 
@@ -552,6 +609,7 @@ def _sanitize_store(store):
         if _loaded_profile_ok(p) and p["name"] not in seen:
             seen.add(p["name"])
             curve_migrated = _migrate_builtin_fan_curve(p) or curve_migrated
+            curve_migrated = _migrate_boondock_tdp(p) or curve_migrated
             good.append(p)
     if not good:
         return None, True
@@ -713,6 +771,9 @@ def sync_active_from_backend(state):
             selected["tdp"] = ({"pl1": tdp["pl1_spl"], "pl2": tdp["pl2_sppt"],
                                 "pl3": tdp["fppt"], "force": tdp["pl1_spl"] > 75}
                                if tdp else None)
+            # A mirror an older build saved still says 20/30/40 W; the store
+            # keeps the migrated built-in (snapshot() rebuilds the mirror).
+            _migrate_boondock_tdp(selected)
             uv = custom.get("undervolt")
             selected["undervolt"] = uv.get("cpu_co") if uv else None
             points = (custom.get("fan_curve") or {}).get("points") or []
@@ -1027,19 +1088,41 @@ def curve_spec(curve):
     return ",".join(f"{int(t)}:{int(p)}%" for t, p in curve)
 
 
+def _tdp_ranges():
+    """Per-rail limits from kernel range metadata (never a live PPT value).
+    One seam so tests can pin the ranges instead of reading this machine's."""
+    return power_range.detect_ranges()
+
+
+def fitted_tdp(tdp, ranges=None):
+    """(written, note): the TDP that is actually written for a stored `tdp`
+    dict, clamped into the detected ranges before the write, and the note
+    that says what was asked for when it differs ("" otherwise)."""
+    return power_range.fit_tdp(tdp, ranges or _tdp_ranges())
+
+
+def tdp_message(written, note=""):
+    msg = f"{written['pl1']}/{written['pl2']}/{written['pl3']} W"
+    return f"{msg} ({note})" if note else msg
+
+
 def apply_tdp(profile, *, z13ctl=Z13CTL):
     """The TDP step of apply(): [] when the profile has no TDP (the firmware's
-    limits then stand), else one (step, ok, message). Also used by fan recovery."""
+    limits then stand), else one (step, ok, message). Also used by fan recovery.
+
+    Out-of-range values are clamped before the write and the message names the
+    values written, never the stored ones the firmware would have clamped."""
     tdp = profile.get("tdp")
     if not tdp:
         return []
+    tdp, note = fitted_tdp(tdp)
     argv = [z13ctl, "tdp", "--set", str(tdp["pl1"]),
             "--pl2", str(tdp["pl2"]), "--pl3", str(tdp["pl3"])]
     if tdp.get("force"):
         argv.append("--force")
     rc, out, timed_out = authority.run(argv, timeout=Z13CTL_WRITE_TIMEOUT_S)
     ok = rc == 0
-    message = (f"{tdp['pl1']}/{tdp['pl2']}/{tdp['pl3']} W" if ok else
+    message = (tdp_message(tdp, note) if ok else
                f"z13ctl write timed out after {Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)"
                if timed_out else (out or f"rc={rc}"))
     return [("tdp", ok, message)]
@@ -1300,6 +1383,11 @@ def _apply_steps(profile, *, previous=None, z13ctl=Z13CTL,
     # 2. Base platform profile.
     if named_client is not None:
         backend_profile = dict(profile)
+        tdp_note = ""
+        if tdp:
+            # The named profile gets the written limits, so the daemon's state
+            # (which sync_active_from_backend mirrors back) is what applied.
+            backend_profile["tdp"], tdp_note = fitted_tdp(tdp)
         if planned_max_fans_on:
             backend_profile["fan_curve"] = [[t, 100] for t in MAX_FAN_TEMPS]
         try:
@@ -1314,6 +1402,8 @@ def _apply_steps(profile, *, previous=None, z13ctl=Z13CTL,
             return finish(results + [("profile", False, str(exc))])
         base_ok = True
         results.append(("profile", True, mapped_name))
+        if tdp_note:
+            results.append(("tdp", True, tdp_message(backend_profile["tdp"], tdp_note)))
     else:
         base_ok = step("profile", [z13ctl, "profile", "--set", profile["base"]], profile["base"])
     if timed_out:
