@@ -80,13 +80,32 @@ def test_save_failure_leaves_the_old_file(tmp_path, monkeypatch):
     assert len(list((tmp_path / ".local/share/z13-helper").iterdir())) == 1
 
 
-ALL = ["ppt_pl1_spl", "ppt_pl2_sppt", "ppt_pl3_fppt", "fan_curve_enable"]
+PPT = ["ppt_pl1_spl", "ppt_pl2_sppt", "ppt_pl3_fppt"]
+ARM = "/sys/class/firmware-attributes/asus-armoury/attributes"
 
 
-def test_armoury_check():
-    assert su.armoury_check(lambda p: ALL) == {"state": "ok", "missing": []}
-    assert su.armoury_check(lambda p: []) == {"state": "na", "missing": []}
-    r = su.armoury_check(lambda p: ["ppt_pl1_spl", "ppt_pl2_sppt", "fan_x"])
+def fake_sysfs(armoury, hwmon_names):
+    """A fake sysfs tree: (listdir, read) over an armoury listing and hwmon name files."""
+    hw = {f"/sys/class/hwmon/hwmon{i}/name": n + "\n" for i, n in enumerate(hwmon_names)}
+    listing = {ARM: armoury, "/sys/class/hwmon": [f"hwmon{i}" for i in range(len(hwmon_names))]}
+    return (lambda p: listing.get(p, [])), hw.get
+
+
+def test_armoury_check_healthy_kernel_shape_is_ok():
+    # Real 7.2.7 shape: no armoury attribute mentions fans; the curve is an hwmon node.
+    arm = ["boot_sound", "charge_mode", "panel_overdrive", "pending_reboot"] + PPT
+    assert su.armoury_check(*fake_sysfs(arm, ["acpitz", "asus", "asus_custom_fan_curve"])) == \
+        {"state": "ok", "missing": []}
+
+
+def test_armoury_check_old_shape_with_fan_attribute_still_needs_the_hwmon_node():
+    r = su.armoury_check(*fake_sysfs(PPT + ["fan_curve_enable"], ["asus"]))
+    assert r == {"state": "needs", "missing": ["fan curve hwmon"]}
+
+
+def test_armoury_check_missing_interfaces():
+    assert su.armoury_check(*fake_sysfs([], ["asus_custom_fan_curve"])) == {"state": "na", "missing": []}
+    r = su.armoury_check(*fake_sysfs(["ppt_pl1_spl", "ppt_pl2_sppt"], ["asus_custom_fan_curve"]))
     assert r == {"state": "needs", "missing": ["ppt_pl3_fppt"]}
-    r = su.armoury_check(lambda p: ALL[:3])
-    assert r["missing"] == ["fan attributes"]
+    r = su.armoury_check(*fake_sysfs(["boot_sound"], []))
+    assert r["missing"] == PPT + ["fan curve hwmon"]
