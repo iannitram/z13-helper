@@ -48,7 +48,13 @@ def test_plain_host_runs_argv_as_is():
                             mode="host") == (["systemctl", "--user", "is-active", "x"], None)
 
 
-def test_root_as_deck_hops_with_runuser():
+@pytest.fixture
+def deck_session(monkeypatch):
+    # host._session() resolves the real session user; these tests pin deck's.
+    monkeypatch.setattr(host, "_session", lambda: ("deck", host.DECK_HOME, host.DECK_RUNTIME_DIR, host.DECK_BUS))
+
+
+def test_root_as_deck_hops_with_runuser(deck_session):
     argv, env = host.command(["z13-profile", "list"], as_deck=True, mode="root", environ=LOADER_ENV)
     assert argv[:4] == ["runuser", "-u", "deck", "--"]
     assert argv[4] == "env"
@@ -59,7 +65,7 @@ def test_root_as_deck_hops_with_runuser():
     assert env["XDG_RUNTIME_DIR"] == "/run/user/1000"
 
 
-def test_root_without_as_deck_runs_directly_with_deck_env():
+def test_root_without_as_deck_runs_directly_with_deck_env(deck_session):
     argv, env = host.command(["systemctl", "start", "z13-lightbar-reset.service"], mode="root",
                              environ=LOADER_ENV)
     assert argv == ["systemctl", "start", "z13-lightbar-reset.service"]
@@ -67,7 +73,7 @@ def test_root_without_as_deck_runs_directly_with_deck_env():
     assert env["DBUS_SESSION_BUS_ADDRESS"] == "unix:path=/run/user/1000/bus"
 
 
-def test_decky_as_deck_never_uses_runuser():
+def test_decky_as_deck_never_uses_runuser(deck_session):
     # runuser refuses to run at all when the caller is deck already.
     argv, env = host.command(["z13ctl", "batterylimit", "--set", "80"], as_deck=True,
                              mode="decky", environ=LOADER_ENV)
