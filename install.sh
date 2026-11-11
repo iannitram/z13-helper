@@ -115,7 +115,8 @@ PLUGIN_FILES=(plugin.json package.json main.py dist/index.js dist/index.js.map
               py_modules/hardware_controller.py py_modules/max_fans_state.py py_modules/epp.py
               py_modules/power_range.py py_modules/timeline.py
               py_modules/crash_report.py py_modules/crash_queue.py
-              py_modules/crash_scrub.py py_modules/_crash_build.json)
+              py_modules/crash_scrub.py py_modules/_crash_build.json
+              py_modules/compute_health.py)
 # py_modules/X comes from src/X (shared with the desktop app, installed root-owned:
 # docs/adr/0001-decky-imports-root-owned-copies.md); everything else from decky/.
 plugin_src() {

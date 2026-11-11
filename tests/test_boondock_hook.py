@@ -57,6 +57,7 @@ def env(tmp_path):
         "BOONDOCK_BACKLIGHT": str(bl),
         "BOONDOCK_PPT_DIR": str(ppt),
         "BOONDOCK_PROFILE_SYSFS": str(tmp_path / "platform_profile"),
+        "BOONDOCK_ARMOURY": str(tmp_path / "armoury"),   # absent: no range metadata
     }
 
 
@@ -184,3 +185,53 @@ def test_session_off_clears_old_combined_snapshot(real_subprocess, env):
     st = real_subprocess(["bash", str(SCRIPT), "status"], env=env, capture_output=True,
                          text=True, timeout=30, stdin=subprocess.DEVNULL)
     assert "MODE: normal" in st.stdout
+
+
+def _hardware_on(real_subprocess, env, stored=None):
+    """`boondock hardware-on` with an optional z13-profile stub storing `stored`."""
+    if stored is not None:
+        profile = Path(env["BOONDOCK_STATE"]).parent / "z13-profile"
+        profile.write_text(
+            "#!/bin/sh\n"
+            'case "$1" in\n'
+            "  active) echo Balanced ;;\n"
+            f"  show) printf '{{\"name\":\"Boondock\",\"tdp\":{stored}}}' ;;\n"
+            "esac\n")
+        profile.chmod(0o755)
+        env = {**env, "BOONDOCK_Z13_PROFILE": str(profile)}
+    else:
+        env = {**env, "BOONDOCK_Z13_PROFILE": str(Path(env["HOME"]) / "no-z13-profile")}
+    return real_subprocess(["bash", str(SCRIPT), "hardware-on"], env=env, capture_output=True,
+                           text=True, timeout=30, stdin=subprocess.DEVNULL)
+
+
+def _armoury(env, ranges):
+    root = Path(env["BOONDOCK_ARMOURY"])
+    for attr, (lo, hi) in ranges.items():
+        (root / attr).mkdir(parents=True)
+        (root / attr / "min_value").write_text(f"{lo}\n")
+        (root / attr / "max_value").write_text(f"{hi}\n")
+
+
+def test_hardware_on_defaults_are_the_firmware_floors(real_subprocess, env):
+    p = _hardware_on(real_subprocess, env)
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert "z13ctl tdp --set 28 --pl2 32 --pl3 45" in Path(env["STUB_LOG"]).read_text()
+
+
+def test_hardware_on_clamps_to_range_metadata_and_says_what_it_wrote(real_subprocess, env):
+    """#203: an old stored 20/30/40 W is written, and reported, as the floors."""
+    _armoury(env, {"ppt_pl1_spl": (28, 80), "ppt_pl2_sppt": (32, 92), "ppt_pl3_fppt": (45, 93)})
+    p = _hardware_on(real_subprocess, env, stored='{"pl1":20,"pl2":30,"pl3":40}')
+    assert p.returncode == 0, p.stdout + p.stderr
+    log = Path(env["STUB_LOG"]).read_text()
+    assert "z13ctl tdp --set 28 --pl2 32 --pl3 45" in log
+    assert "TDP → 28W sustained / 32W / 45W boost" in p.stdout
+    assert not any("current_value" in line for line in log.splitlines())
+
+
+def test_hardware_on_keeps_rail_order_after_clamping(real_subprocess, env):
+    _armoury(env, {"ppt_pl1_spl": (28, 80), "ppt_pl2_sppt": (32, 92), "ppt_pl3_fppt": (45, 93)})
+    p = _hardware_on(real_subprocess, env, stored='{"pl1":60,"pl2":40,"pl3":40}')
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert "z13ctl tdp --set 60 --pl2 60 --pl3 60" in Path(env["STUB_LOG"]).read_text()

@@ -33,7 +33,7 @@ def test_threshold_exits_only_plugin_process(main, rss, trips, capfd):
     assert guard.check() is trips
     assert exits == ([1] if trips else [])
     err = capfd.readouterr().err
-    assert ('exiting plugin process' in err) is trips
+    assert ('RSS guard: rss_kib=' in err) is trips
 
 
 def test_cannot_skip_exit_when_stderr_fails(main, monkeypatch):
@@ -96,6 +96,14 @@ def test_plugin_lifecycle_starts_and_stops_guard(main, monkeypatch):
     monkeypatch.setattr(main, 'BackendMemoryGuard', Guard)
     monkeypatch.setattr(main.crash_report, 'install', lambda **kwargs: None)
     monkeypatch.setattr(main, '_load_max_fans', lambda: {})
+    class Stream:
+        def __init__(self, *a, **k):
+            pass
+        def start(self):
+            return self
+        def close(self):
+            pass
+    monkeypatch.setattr(main, 'StateStream', Stream)
     async def idle(self):
         await asyncio.Event().wait()
     monkeypatch.setattr(main.Plugin, '_enforce_max_fans', idle)
@@ -109,16 +117,23 @@ def test_plugin_lifecycle_starts_and_stops_guard(main, monkeypatch):
     assert calls == ['start', 'close']
 
 
-def test_opt_out_trip_is_not_fatal(main, monkeypatch):
-    monkeypatch.setenv('Z13_RSS_GUARD_EXIT', '0')
+def test_default_trip_is_not_fatal(main, monkeypatch):
+    monkeypatch.delenv('Z13_RSS_GUARD_EXIT', raising=False)
     monkeypatch.setattr(main.os, '_exit', lambda c: pytest.fail('unexpected exit'))
     guard = main.BackendMemoryGuard(lambda: main.BACKEND_RSS_LIMIT_KIB)
     assert guard.check()
     assert guard.check()
 
 
-def test_default_termination_is_process_exit(main, monkeypatch):
-    monkeypatch.delenv('Z13_RSS_GUARD_EXIT', raising=False)
+def test_explicit_zero_trip_is_not_fatal(main, monkeypatch):
+    monkeypatch.setenv('Z13_RSS_GUARD_EXIT', '0')
+    monkeypatch.setattr(main.os, '_exit', lambda c: pytest.fail('unexpected exit'))
+    guard = main.BackendMemoryGuard(lambda: main.BACKEND_RSS_LIMIT_KIB)
+    assert guard.check()
+
+
+def test_opt_in_termination_is_process_exit(main, monkeypatch):
+    monkeypatch.setenv('Z13_RSS_GUARD_EXIT', '1')
     exits = []
     monkeypatch.setattr(main.os, '_exit', exits.append)
     guard = main.BackendMemoryGuard(lambda: main.BACKEND_RSS_LIMIT_KIB)

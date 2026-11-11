@@ -1,6 +1,6 @@
 # Decky / Game Mode code map
 
-Refreshed 2026-11-07 from `main` at `84f0b1e`. The shared state owner (#23) and post-update repair (#27) are implemented in the current tree. This describes the Decky source and wiring; it is not a claim that all Game Mode behavior has been verified on the device. The main code map is [`README.md`](README.md); remaining device checks are in [`docs/ROADMAP.md`](../docs/ROADMAP.md).
+Refreshed 2026-11-11 from origin/main 8724767. #153 (state owner) and #154 (post-update repair) are on main (bf7a478 and bf6e412). Open PRs are not reflected; #207 (fan-watchdog comment and test) merged 2026-11-11. This describes the Decky source on `main` as of that commit. It is not a claim that all Game Mode behavior has been verified on the device; dated device evidence (TDP and charge-limit writes in Game Mode, 2026-11-07) is on #74. The current code map is [`README.md`](README.md); the pending verification checklist is in [`docs/ROADMAP.md`](../docs/ROADMAP.md). On the `post-1.0` branch this map also lists the after-1.0 Decky wiring (`hw_signals` profile-change lightbar signal, #129/#130; the `Timeline` component); those parts describe that branch, not `main`.
 
 ## Runtime and data flow
 
@@ -13,6 +13,7 @@ flowchart LR
     Lock --> Authority[py_modules/state_authority.py]
     Authority --> CLI[z13ctl CLI / daemon]
     Plugin --> PowerRange[py_modules/power_range.py]
+    Plugin --> Compute[py_modules/compute_health.py]
     PowerRange --> HostProbe[host.run metadata-only probe]
     Plugin --> Shared[(~/.config/z13-helper/)]
     Profile --> Shared
@@ -21,7 +22,7 @@ flowchart LR
     Sensors[py_modules/sensor_reader.py] --> HW[hwmon reads]
 ```
 
-The backend runs as the `deck` user under Decky Loader. `decky/main.py` imports shared helpers from its `py_modules/` directory; `install.sh` and `tooling/install_check.py` source those files from `src/` and install the copies root-owned. Root ownership protects the code files; it does not mean the backend runs as root. `src/host.py` chooses an execution mode from the process environment. When Decky is already running as `deck`, `as_deck=True` supplies Deck's runtime and session-bus environment without `runuser`; `runuser -u deck` is used only if a root-mode process requests it. Calls to z13ctl go through `host.run()` and use the existing user daemon/socket.
+The backend runs as the `deck` user under Decky Loader. `decky/main.py` imports shared helpers (`crash_report.py`, `host.py`, `compute_health.py`, `state_authority.py`, `state_stream.py`, `state_events.py`, `power_range.py`, `timeline.py`, `fan_watchdog.py`, `sensor_reader.py` and, on `post-1.0`, `hw_signals.py`) from its `py_modules/` directory; `install.sh` and `tooling/install_check.py` source those files from `src/` and install the copies root-owned. Root ownership protects the code files; it does not mean the backend runs as root. `src/host.py` chooses an execution mode from the process environment. When Decky is already running as `deck`, `as_deck=True` supplies Deck's runtime and session-bus environment without `runuser`; `runuser -u deck` is used only if a root-mode process requests it. Calls to z13ctl go through `host.run()` and use the existing user daemon/socket.
 
 The desktop app, installed `z13-profile` CLI and Decky share the same state authority.
 Production field edits, Max Fans and platform-profile changes call `state_authority` from installed
@@ -44,12 +45,13 @@ compatibility test coverage; production setters use the shared authority.
 
 | Path | Responsibility |
 |---|---|
-| `decky/main.py` | Decky backend and callable API. Profile reads/switches, Max Fans (records goal transitions to `timeline.jsonl`), direct performance profile via the shared authority, power, battery limit, brightness (manual TDP, charge-limit and brightness writes each record a `timeline.jsonl` setting entry via `timeline.record_setting_change`, best-effort), telemetry, `get_timeline`, post-update status/repair, desktop-app check and Game Mode watchdog lifecycle. `BackendMemoryGuard` monitors current process RSS on a separate thread every 5 s, exits only this backend at 500 MiB, and stops/joins on unload (sampled threshold; process isolation, respawn and plugin reload after a trip are unverified, needs device check). Each z13ctl write uses `host.Z13CTL_WRITE_TIMEOUT_S` (20 s); a profile apply gets its own 180 s budget (`PROFILE_APPLY_TIMEOUT_S`). Write callables return `{ok, message}`, so a timeout reaches the panel as text. TDP, battery limit, brightness and profile writes route through `state_authority`; the watchdog uses the authority adapter. Key: `Plugin` (callable methods, `_main`/`_unload`), `set_app_profile`, `set_profile`, `set_tdp`, `set_battery_limit`, `set_max_fans`, `set_brightness`, post-update callables, `power_state`, `telemetry`, `DeckyFans`, `DesktopAppCheck`, `fan_watchdog_tick`. Called by Decky Loader. |
-| `decky/src/index.tsx` | QAM panel composition, profile switch flow and `profile_state` event refresh with listener cleanup. Plugin entry (`definePlugin`); uses `backend.ts`, `profileSwitch.ts`, `hooks.ts` and the four components. |
+| `decky/main.py` | Decky backend and callable API. Profile reads/switches, Max Fans (records goal transitions to `timeline.jsonl`), direct performance profile (`set_profile` via the shared authority), power, battery limit, brightness (manual TDP, charge-limit and brightness writes each record a `timeline.jsonl` setting entry via `timeline.record_setting_change`, best-effort), telemetry, `get_timeline`, SteamOS `BUILD_ID` transition check, post-update status/repair callables, `hw_signals` lightbar signal after a successful profile change (post-1.0), desktop-app check and Game Mode watchdog lifecycle. `BackendMemoryGuard` monitors current process RSS on a separate thread every 5 s, logs once over 500 MiB and exits only this backend when `Z13_RSS_GUARD_EXIT=1` is set (since 92839fc), and stops/joins on unload (sampled threshold; process isolation, respawn and plugin reload after a trip are unverified, needs device check). Each z13ctl write uses `host.Z13CTL_WRITE_TIMEOUT_S` (20 s); a profile apply gets its own 180 s budget (`PROFILE_APPLY_TIMEOUT_S`). Write callables (`set_app_profile`, `set_profile`, `set_max_fans`) return `{ok, message}`, so a timeout reaches the panel as text. Every write and the Game Mode watchdog tick are refused unless DMI reports a GZ302 (`_writes_allowed`, #22). TDP, battery limit and brightness edits go only through `state_authority.set_field`; the module keeps no store writer or direct z13ctl write of its own except the Game Mode watchdog adapter (`DeckyFans`). Key: `Plugin` (callable methods, `_main`/`_unload`), `apply_tdp`, `set_battery_limit`, `set_max_fans`, `set_brightness`, `clamp_tdp`, `power_state`, `telemetry`, `DeckyFans`, `DesktopAppCheck`, `fan_watchdog_tick`. Called by Decky Loader; it has its own copies of the store lock, atomic writer, Max Fans state and lightbar recovery. |
+| `decky/src/index.tsx` | QAM panel composition, profile switch flow and `profile_state` event refresh with listener cleanup. Plugin entry (`definePlugin`); uses `backend.ts`, `profileSwitch.ts`, `powerMerge.ts`, `hooks.ts` and the seven components `Telemetry`, `PowerLimits`, `BatteryLimit`, `KeyboardBrightness`, `ComputeHealth`, `PostUpdate` and `Timeline` (post-1.0) (it imports `TelemetryRow` from `Telemetry`). |
 | Installed plugin `py_modules/state_authority.py`, `z13ctl_client.py`, `z13ctl_profiles.py`, `state_stream.py`, `state_events.py` | Root-owned shared authority, socket protocol, pure mapping/dispatch and host event stream. |
 | Installed plugin `py_modules/profiles.py`, `hardware_controller.py`, `max_fans_state.py`, `epp.py` | Root-owned dependencies of shared field edits, Max Fans and fan recovery. |
 | `decky/src/backend.ts` | Typed Decky callable names, results and shared TDP clamping rule. Key: the `callable` bridges (`getProfiles`, `setAppProfile`, `setTdp`, `setBatteryLimit`, `setBrightness`, `getTelemetry`), `clampTdp`, `safely`, `isWriteTimeout`. Called by `index.tsx` and the components. |
 | `decky/src/profileSwitch.ts` | Pure async flow for profile changes: apply, then re-read profile and Max Fans whether apply succeeds or fails. Key: `switchProfile`. Called by `index.tsx`; tested by `decky/tests/profileSwitch.test.ts`. |
+| `decky/src/powerMerge.ts` | Tracks which slider fields (`battery_limit`, `pl1`-`pl3`) hold uncommitted edits (`markDirty`, `clearDirty`, `clearAllDirty`, `dirtySet`, `pendingEdits`) and merges a fresh backend power state into the panel without overwriting them (`mergePowerState`). Called by `index.tsx`; tested by `decky/tests/powerMerge.test.ts`. |
 | `decky/src/hooks.ts` | Slider commit-on-release and visibility polling hooks. Key: `useCommitOnRelease`, `usePollWhileVisible`, `cancelPendingCommits`. Called by the components. |
 | `decky/src/components/PowerLimits.tsx` | Profile-scoped TDP override controls; no override is labeled “Not set” and remains distinct from the displayed fallback slider positions. |
 | `decky/src/components/BatteryLimit.tsx` | Battery charge limit control. |
@@ -57,8 +59,12 @@ compatibility test coverage; production setters use the shared authority.
 | `decky/src/components/Telemetry.tsx` | CPU and GPU temperatures with their source labels, plus fan RPM display. An unreadable value shows as unavailable, and one missing fan does not hide the other. |
 | Installed plugin `py_modules/fan_watchdog.py` | Root-owned installed copy of `src/fan_watchdog.py`; dropped-curve and fan-stall recovery logic; `FanTrace` history is bounded to 120 s and 256 entries. |
 | Installed plugin `py_modules/sensor_reader.py` | Root-owned installed copy of `src/sensor_reader.py`; read-only hwmon collection. |
+| Installed plugin `py_modules/hw_signals.py` (post-1.0) | Root-owned installed copy of `src/hw_signals.py`; pure event → lightbar pattern mapping (priority, expiry, rate limit, saved-light restore). `decky/main.py` raises PROFILE_CHANGED after a successful profile change (#129, #130). |
 | Installed plugin `py_modules/power_range.py` | Root-owned installed copy of `src/power_range.py`; per-rail metadata bounds matching z13ctl backend selection. |
 | Installed plugin `py_modules/host.py` | Root-owned installed copy of `src/host.py`; host command mode and environment handling. |
+| `decky/src/components/PostUpdate.tsx` | "After SteamOS update" section: status, repair plan and confirmed run (`post_update_status`, `post_update_repair_plan`, `post_update_repair_run`; see `MAP/README.md` for the dependency on the repo checkout recorded in `install.json`). |
+| `decky/src/components/ComputeHealth.tsx` | Memory and compute section: memory pools, gfx1151, ROCm/Vulkan status, on-request allocation test (`get_compute_health`, `run_compute_smoke`). |
+| Installed plugin `py_modules/compute_health.py` | Root-owned installed copy of `src/compute_health.py`; memory/compute report and on-request allocation smoke test. |
 | Installed plugin `py_modules/timeline.py` | Root-owned installed copy of `src/timeline.py`; append-only `timeline.jsonl` reader/writer with size-capped rotation and partial-line skipping. |
 | Installed plugin `py_modules/crash_report.py`, `crash_scrub.py`, `crash_queue.py`, `_crash_build.json` | Root-owned shared crash reporting and build configuration. Startup installs Python/thread/asyncio hooks; unload restores them. Reports share the desktop queue and preference; see [`docs/crash-reporting.md`](../docs/crash-reporting.md). |
 | `decky/rollup.config.js`, `decky/tsconfig.json`, `decky/package.json`, `decky/pnpm-lock.yaml` | Bundle build for the plugin front end (`pnpm build` writes `dist/index.js`, which `install.sh` installs). |
@@ -66,6 +72,7 @@ compatibility test coverage; production setters use the shared authority.
 | `decky/README.md` | Plugin-specific notes: what the panel offers, how it is built and installed. |
 | `decky/tests/test_backend.py` | Backend tests, run with `python3 -m unittest discover -s decky/tests`. |
 | `decky/tests/test_crash_entry.py` | Plugin lifecycle test: `_main` and `_unload` install and remove the shared crash-reporting preference, loop and task hooks without real I/O. Part of the unittest suite. |
+| `decky/tests/powerMerge.test.ts` | Node tests for the pure power-state merge helper; run manually with `node --test decky/tests/powerMerge.test.ts` (not part of CI). |
 | `decky/tests/profileSwitch.test.ts` | Node tests for the pure profile switch helper; run manually with `node --test decky/tests/profileSwitch.test.ts` (not part of CI). |
 
 ## Profile, Max Fans and watchdog paths
@@ -90,5 +97,5 @@ Memory investigation: [`docs/fan-watchdog-memory.md`](../docs/fan-watchdog-memor
 
 Named fan recovery uses the authority to restore the same target after its base
 rewrite, without profile hooks. Legacy recovery retains its existing checks and
-also holds the hardware transaction lock. #66's curve-drop retirement still
-requires separate device evidence.
+also holds the hardware transaction lock. The curve-drop branch stays as a 10 s
+daemon-absent backstop (owner decision 2026-11-11, #66).

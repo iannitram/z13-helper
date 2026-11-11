@@ -363,6 +363,8 @@ class UpdatesDialog(QDialog):
         table.setRowCount(len(rows))
         for r, row in enumerate(rows):
             latest = "check failed" if row.get("error") else (row["latest"] or "—")
+            if not row.get("error") and not row["latest"]:
+                latest = {"none": "no release yet", "unreachable": "not reachable"}.get(row.get("state"), latest)
             vals = [row["label"], row["installed"] or "—", latest, row["published"] or "",
                     (row["note"] or "") + (("\n" + (row["notes"] or "")) if row.get("notes") else "")]
             for c, val in enumerate(vals):

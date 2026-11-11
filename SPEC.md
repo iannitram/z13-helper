@@ -6,14 +6,15 @@
 
 A Must or a Won't changed after approval sends the line above back to "not yet".
 
-**Implementation status, 2026-11-07:** Current `main` contains the 0.5.1 fan/power repairs and
-later implementation for #23 (shared state owner/event stream), #27 (post-update repair), #64
-(CPU Boost/EPP), #73 (VRR script/preflight), and #80 (conditional resume ownership). Issues #23 and
-#27 are closed in the tracker; their code is present, but live device acceptance remains pending.
-The approved Musts and Won'ts below are unchanged. #58 and #60 are closed. The current evidence
-and remaining device checks are in [`docs/ROADMAP.md`](docs/ROADMAP.md) and the
-[Nov 7 reconciliation](docs/audit/2026-11-07-plan-reconciliation.md). Non-zero/cached RPM or a
-curve-enabled bit alone is insufficient evidence of fan response.
+**Implementation status, 2026-11-11:** 0.5.1 (2026-10-30) repaired fan/power regressions; it is not 1.0 sign-off.
+The approved Musts and Won'ts below are unchanged. #60 is fixed (PR #83), #58 closed 2026-11-02 (PR #149),
+and #23 and #27 closed 2026-11-04 with their code merged; their on-device acceptance is tracked in #199 (M6)
+and #200 (M7). #74 and #75 (the SteamOS 3.9.5 pass) closed 2026-11-11 with dated device evidence on the issues.
+Still open for 1.0: #30, #61, #66, #73, #80, #86, and #199-#204 (acceptance, own-release update source,
+Boondock TDP, the release). Code merged 2026-11-11: own-release update source (PR #209, #202) and Boondock TDP floors/clamp (PR #213, #203); their device checks are still owed. Per-release evidence is in [`docs/releases/0.5.1.md`](docs/releases/0.5.1.md);
+later evidence is on the issues. Non-zero/cached RPM or curve-enabled state alone is insufficient evidence
+of fan response.
+The Nov 7 plan reconciliation is kept at [`docs/audit/2026-11-07-plan-reconciliation.md`](docs/audit/2026-11-07-plan-reconciliation.md).
 
 ## Musts
 

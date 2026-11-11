@@ -19,14 +19,18 @@ def test_usage_and_comments_do_not_mention_the_vm():
     assert not re.search(r"\bvm\b", _text(), re.I)
 
 
-def test_background_comment_updated():
-    assert "20W keeps background work usable" in _text()
+def test_tdp_defaults_are_the_firmware_floors():
+    # #203: 20/30/40 W sat below the asus-armoury floors and was clamped silently.
+    assert "TDP_PL1=28; TDP_PL2=32; TDP_PL3=45" in _text()
 
 
 def test_never_reads_live_ppt_nodes_or_shows_them_in_status():
     t = _text()
-    assert "ppt_pl1_spl" not in t
-    assert "ppt_pl2_sppt" not in t
+    # Only range metadata (min_value / max_value) is read, through fit_rail.
+    assert "current_value" not in t
+    for name in ("ppt_pl1_spl", "ppt_pl2_sppt", "ppt_pl3_fppt"):
+        assert all(re.search(r'fit_rail "\$tdp\d" ' + name + r"\b", line)
+                   for line in t.splitlines() if name in line)
     assert "ppt_fppt" not in t
     assert "TDP(PL1)" not in t
     assert "z13-profile" in t

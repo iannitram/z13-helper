@@ -18,12 +18,15 @@ Cold-start orientation for Claude Code working in this repo. Read this first.
 **Current repair release: 0.5.1 (2026-10-30).** See [`docs/releases/0.5.1.md`](docs/releases/0.5.1.md)
 for PR dependencies, automated checks, device evidence and remaining verification. Desktop,
 Decky package and Flatpak AppStream versions must agree. This release does not complete the 1.0 spec.
+That record is a snapshot at 0.5.1 (it still says app profiles are not mirrored; they are, since #23
+closed 2026-11-04). Later status is in the "2026-11-11 update" in `docs/ROADMAP.md` §1 and on the
+issues; 1.0 (#204) ships from `main`, and the post-1.0 branch merges after the tag.
 
 **Renamed 2026-10-15 (v0.5.0):** Z13 Controller → **Z13-Helper** (after G-Helper). Flatpak
 `io.github.z13.Controller` → `io.github.iannitram.Z13Helper`, `z13-controller.service` →
 `z13-helper.service`, `~/.config` + `~/.local/state` folders `z13-controller` → `z13-helper`
 (symlinks remain at the old paths), Decky plugin `z13-decky` → `z13-helper`, repo
-`~/dev/z13-controller` → `~/dev/z13-helper` (old path is a symlink), GitHub
+`<dev root>/z13-controller` → `<dev root>/z13-helper` (old path is a symlink), GitHub
 `iannitram/z13-controller` → `iannitram/z13-helper` (published with fresh history the same day).
 Older docs (`docs/plan/`, past CHANGELOG entries) keep the old name.
 
@@ -69,8 +72,8 @@ tooling/                           ← reference copies of host scripts (boondoc
 packaging/host/                    ← the system files the app depends on (install.sh installs the
   systemd/{user,system}/, polkit/,    ones in tooling/install_check.py's MANIFEST; udev rules + perms
   udev/, asusd/, xdg/                 unit are z13ctl setup's, reference only here)
-CHANGELOG.md                       ← per-release changes (app version: APP_VERSION in src/dashboard_ui.py)
-tests/                             ← pytest suite (`python3 -m pytest`); decky/tests is unittest
+CHANGELOG.md                       ← per-release changes (app version: APP_VERSION in src/versions.py)
+tests/                             ← pytest suite (see "Running the tests"); decky/tests is unittest
 decky/                             ← Game Mode QAM plugin (installs to ~/homebrew/plugins/z13-helper)
 ```
 
@@ -91,7 +94,7 @@ decky/                             ← Game Mode QAM plugin (installs to ~/homeb
   `/sys/firmware/acpi/platform_profile`.
 - Profile apply holds shared Max Fans enforcement off during hardware writes and publishes it on
   only after the intended full-speed curve succeeds. Queued recovery rechecks current intent.
-  App profiles and z13ctl named profiles remain separate (#23); fan-only applies probe and safely
+  App profiles are mirrored into z13ctl named profiles (#23, closed 2026-11-04); fan-only applies probe and safely
   clear stale backend default-`custom` TDP before activating curves. Range discovery uses host-side
   permission checks and range metadata, never live Armoury `current_value` reads.
 
@@ -124,6 +127,18 @@ toggles the window; the watcher only steps in when the app isn't running (a pres
 Mode (not after a deliberate Quit). Note the Decky backend runs as **deck**, not root (`"_root"` in
 `plugin.json` isn't Decky's `"root"` flag). Full write-up: [`docs/plan/Phase_6.md`](docs/plan/Phase_6.md).
 
+## Running the tests
+
+The host's Python 3.14 has no `pytest`, so `python3 -m pytest` fails there with "No module named pytest".
+Use a virtualenv that has it (CI installs only `pytest`; the few tests that need PyQt6 skip without it),
+with a throwaway `HOME` and the offscreen Qt platform:
+
+```
+VENV=$(mktemp -d)/z13-venv; python3 -m venv "$VENV"; "$VENV/bin/pip" install pytest      # once
+HOME=$(mktemp -d) QT_QPA_PLATFORM=offscreen "$VENV/bin/python" -m pytest -q               # from the repo root
+python3 -m unittest discover -s decky/tests                                              # Decky backend, stdlib only
+```
+
 ## Deploy + verify
 
 - **Everything at once:** `./install.sh` (asks first; fetches latest z13ctl + Decky Loader) or
@@ -149,7 +164,7 @@ Mode (not after a deliberate Quit). Note the Decky backend runs as **deck**, not
   `org.kde.Platform//6.10`; pulls PyQt6 from PyPI, needs network). Then restart the app.
 - **Run for debugging without a rebuild:** the sandbox has PyQt6 under `/app`, so you can run the
   repo's fixed source inside it:
-  `flatpak run --filesystem=/home/deck/dev/z13-helper --command=python3 io.github.iannitram.Z13Helper /home/deck/dev/z13-helper/main.py --show`
+  `flatpak run --filesystem=<dev root>/z13-helper --command=python3 io.github.iannitram.Z13Helper <dev root>/z13-helper/main.py --show`
 - **Resident instance:** `systemctl --user {enable,start} z13-helper.service` (unit runs the
   Flatpak hidden; the side button/tray opens it). Fixed unit lives in `packaging/host/systemd/user/`.
 - **Single instance:** Flatpak moves the app out of the unit's cgroup (into `app-flatpak-*.scope`),

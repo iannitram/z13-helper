@@ -48,7 +48,13 @@ def test_plain_host_runs_argv_as_is():
                             mode="host") == (["systemctl", "--user", "is-active", "x"], None)
 
 
-def test_root_as_deck_hops_with_runuser():
+@pytest.fixture
+def deck_session(monkeypatch):
+    # host._session() resolves the real session user; these tests pin deck's.
+    monkeypatch.setattr(host, "_session", lambda: ("deck", host.DECK_HOME, host.DECK_RUNTIME_DIR, host.DECK_BUS))
+
+
+def test_root_as_deck_hops_with_runuser(deck_session):
     argv, env = host.command(["z13-profile", "list"], as_deck=True, mode="root", environ=LOADER_ENV)
     assert argv[:4] == ["runuser", "-u", "deck", "--"]
     assert argv[4] == "env"
@@ -59,7 +65,7 @@ def test_root_as_deck_hops_with_runuser():
     assert env["XDG_RUNTIME_DIR"] == "/run/user/1000"
 
 
-def test_root_without_as_deck_runs_directly_with_deck_env():
+def test_root_without_as_deck_runs_directly_with_deck_env(deck_session):
     argv, env = host.command(["systemctl", "start", "z13-lightbar-reset.service"], mode="root",
                              environ=LOADER_ENV)
     assert argv == ["systemctl", "start", "z13-lightbar-reset.service"]
@@ -67,7 +73,7 @@ def test_root_without_as_deck_runs_directly_with_deck_env():
     assert env["DBUS_SESSION_BUS_ADDRESS"] == "unix:path=/run/user/1000/bus"
 
 
-def test_decky_as_deck_never_uses_runuser():
+def test_decky_as_deck_never_uses_runuser(deck_session):
     # runuser refuses to run at all when the caller is deck already.
     argv, env = host.command(["z13ctl", "batterylimit", "--set", "80"], as_deck=True,
                              mode="decky", environ=LOADER_ENV)
@@ -185,6 +191,31 @@ def test_run_normal_exit_with_grandchild_keeps_output_and_threads(real_subproces
         assert r.rc == 0 and r.out == "started" and not r.timed_out
         assert time.monotonic() - t0 < host.PIPE_GRACE_S + 2
     assert threading.active_count() <= before
+
+
+def test_run_noisy_grandchild_does_not_pin_drain_threads(real_subprocess, monkeypatch):
+    """A background grandchild that writes forever on the inherited pipe must not keep
+    a reader thread (or the pipe fd) alive after run() returns (#30 resource bound)."""
+    import os, threading, time
+    monkeypatch.setattr(host, "MODE", "host")
+    monkeypatch.setattr(host, "MAX_OUTPUT_BYTES", 1000)
+    before = threading.active_count()
+    t0 = time.monotonic()
+    r = host.run(["sh", "-c", "yes & echo $!"], timeout=30)
+    grandchild = int(r.out.split()[0])
+    try:
+        assert r.rc == 0 and not r.timed_out
+        assert len(r.out) <= 1000 + 20
+        assert time.monotonic() - t0 < host.PIPE_GRACE_S + 2
+        deadline = time.monotonic() + 2
+        while threading.active_count() > before and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert threading.active_count() <= before
+    finally:
+        try:
+            os.kill(grandchild, 9)
+        except OSError:
+            pass
 
 
 def test_run_thread_start_failure_never_raises(recorded, monkeypatch):

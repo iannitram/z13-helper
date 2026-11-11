@@ -26,6 +26,7 @@ import { TelemetryRow } from "./components/Telemetry";
 import { PowerLimits } from "./components/PowerLimits";
 import { BatteryLimit } from "./components/BatteryLimit";
 import { KeyboardBrightness } from "./components/KeyboardBrightness";
+import { ComputeHealth } from "./components/ComputeHealth";
 import { PostUpdate } from "./components/PostUpdate";
 import { Timeline } from "./components/Timeline";
 
@@ -158,6 +159,7 @@ function Content() {
       <PanelSection title="Keyboard brightness">
         <KeyboardBrightness state={power} />
       </PanelSection>
+      <ComputeHealth />
       <PanelSection title="After SteamOS update">
         <PostUpdate />
       </PanelSection>
