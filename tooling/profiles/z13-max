@@ -14,12 +14,10 @@ for dev in keyboard lightbar; do z13ctl --device "$dev" brightness high >/dev/nu
 # Tightened on 2026-05-05 after a near-miss MES firmware deadlock at 99°C with
 # stuck fans (fan2 PWM channel got disabled by EC; cold-boot recovered + we added
 # amdgpu.cwsr_enable=0 to grub-steamos cmdline as the protective workaround).
-z13ctl fancurve --set "40:50%,50:75%,60:90%,70:100%,75:100%,80:100%,85:100%,90:100%"
+z13ctl fancurve --set "20:50%,40:50%,50:75%,60:90%,70:100%,75:100%,80:100%,90:100%"
 
 mkdir -p "$HOME/.config/z13-profiles"
 printf "maximum-throughput\n" > "$HOME/.config/z13-profiles/current-profile"
 
 echo "Z13 profile set to: Maximum Throughput"
 echo "Use this plugged in. Expect more heat and fan noise."
-echo
-z13ctl status
