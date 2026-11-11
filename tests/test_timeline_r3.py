@@ -160,6 +160,8 @@ def decky_main(tmp_path, monkeypatch):
     m = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(m)
     monkeypatch.setattr(m, "TIMELINE_PATH", str(tmp_path / "timeline.jsonl"))
+    # The write gate needs a GZ302 DMI product name; CI runners are not a Z13.
+    monkeypatch.setattr(m, "_writes_allowed", lambda: True)
     return m
 
 

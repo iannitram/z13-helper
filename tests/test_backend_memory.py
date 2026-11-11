@@ -96,6 +96,14 @@ def test_plugin_lifecycle_starts_and_stops_guard(main, monkeypatch):
     monkeypatch.setattr(main, 'BackendMemoryGuard', Guard)
     monkeypatch.setattr(main.crash_report, 'install', lambda **kwargs: None)
     monkeypatch.setattr(main, '_load_max_fans', lambda: {})
+    class Stream:
+        def __init__(self, *a, **k):
+            pass
+        def start(self):
+            return self
+        def close(self):
+            pass
+    monkeypatch.setattr(main, 'StateStream', Stream)
     async def idle(self):
         await asyncio.Event().wait()
     monkeypatch.setattr(main.Plugin, '_enforce_max_fans', idle)
