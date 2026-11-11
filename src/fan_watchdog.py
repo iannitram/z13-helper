@@ -251,8 +251,12 @@ class FanWatchdog:
         #    profile rewrite + curve, not a bare curve write: after an external
         #    platform-profile write the firmware was seen to ignore bare curve
         #    writes (fans at 0 RPM) until the profile was written again.
-        #    Keep this compatibility branch (#66) until #74 step 3 and #80
-        #    establish daemon curve restoration on the target SteamOS kernel.
+        #    This is the daemon-absent backstop (#66, owner decision 2026-11-11:
+        #    keep it). The z13ctl daemon's curve restoration is recorded in the
+        #    #66 comments (2026-11-06) and the #74 comment (2026-11-08); while
+        #    the daemon restores the curve within DROP_GRACE_S this branch only
+        #    logs WAIT and acts only if the curve is still dropped after it
+        #    (older z13ctl, stopped daemon).
         if max_on and enabled is False:
             self._stall_ticks = 0
             if self._dropped_since is None:
