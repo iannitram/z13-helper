@@ -20,7 +20,7 @@ import time
 import host
 import install_record
 import post_update_state
-from versions import DECKY_MIN, older_than
+from versions import APP_VERSION, DECKY_MIN, older_than
 
 CACHE_PATH = os.path.expanduser("~/.config/z13-helper/updates.json")
 CHECK_INTERVAL_S = 24 * 3600
@@ -53,6 +53,10 @@ def _kernel_version():
     return m.group(1) if m else rel
 
 
+def _app_version():
+    return APP_VERSION
+
+
 def _steamos_version():
     text = host_read("/etc/os-release") or ""
     m = re.search(r'^VERSION_ID="?([^"\n]+)', text, re.M)
@@ -75,6 +79,9 @@ def _steamos_version():
 
 # Order = display order. "installed" is a callable or None (watch-only).
 SOURCES = [
+    {"id": "z13-helper", "label": "Z13-Helper (this app)", "repo": "iannitram/z13-helper",
+     "kind": "release", "installed": _app_version, "quiet": True,
+     "note": "This project's own releases. Neutral until v1.0.0 is published, and when GitHub is unreachable."},
     {"id": "z13ctl", "label": "z13ctl (hardware backend)", "repo": "dahui/z13ctl",
      "kind": "release", "installed": _z13ctl_version, "installer": "z13ctl",
      "note": "Installable here: tarball, sha256-verified, daemon runs --no-button. Backup kept as z13ctl.bak-<ver>."},
@@ -136,10 +143,21 @@ def _get(url, etag=None):
     return status, new_etag, body
 
 
-def _fetch_release(repo, cached):
+NO_RELEASE_NOTE = "no release published yet"
+UNREACHABLE_NOTE = "could not reach GitHub"
+
+
+def _fetch_release(repo, cached, quiet=False):
+    """`quiet` sources (our own repo) never report an error: a 404 means no
+    release exists yet, and a failed request keeps what was cached."""
     status, etag, body = _get(f"{API}/{repo}/releases/latest", cached.get("etag"))
     if status == 304:
         return dict(cached, error=None)
+    if quiet and status == 404:
+        return {"latest": "", "published": "", "url": None, "notes": NO_RELEASE_NOTE,
+                "etag": None, "error": None}
+    if quiet and status != 200:
+        return dict(cached, error=None, unreachable=True)
     if status != 200:
         return dict(cached, error=f"HTTP {status}" if status else (body or "network error")[:120])
     d = json.loads(body)
@@ -264,7 +282,9 @@ def check(force=False):
         cur = items.get(src["id"], {})
         if stale:
             if src["kind"] == "release":
-                cur = _fetch_release(src["repo"], cur)
+                cur = _fetch_release(src["repo"], cur, quiet=src.get("quiet", False))
+                if src.get("quiet") and not cur.get("unreachable"):
+                    cur.pop("unreachable", None)
             elif src["kind"] == "commit":
                 cur = _fetch_commit(src["repo"], cur)
             elif src["kind"] == "kernel":
@@ -298,7 +318,13 @@ def summary(cache=None):
                 new = True
         else:
             new = bool(latest) and latest != seen
-        rows.append({"id": src["id"], "label": src["label"], "repo": src.get("repo"),
+        if not latest:
+            state = "unreachable" if it.get("unreachable") else ("none" if src.get("quiet") else "unknown")
+        elif src.get("installed") and is_newer(latest, installed):
+            state = "moved"
+        else:
+            state = "current"
+        rows.append({"id": src["id"], "label": src["label"], "state": state, "repo": src.get("repo"),
                      "kind": src["kind"], "note": src.get("note", ""), "installer": src.get("installer"),
                      "installed": installed, "latest": latest, "published": it.get("published"),
                      "url": it.get("url"), "notes": it.get("notes"), "error": it.get("error"),
