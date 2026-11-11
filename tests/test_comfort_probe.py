@@ -77,7 +77,7 @@ def test_battery_falls_back_to_bat0_hwmon_node(tmp_path, monkeypatch):
     d.mkdir()
     (d / "name").write_text("BAT0\n")
     (d / "temp1_input").write_text("31200\n")
-    # no power_supply temp file, as on the Z13: the hwmon node supplies it
+    # no power_supply temp file; a BAT0 hwmon node with temp1_input supplies it (the Z13 has no such input, so it reads None there)
     monkeypatch.setattr(reader, "_read_int",
                         lambda p: None if p.endswith("power_supply/BAT0/temp") else real(p))
     assert reader.get_comfort_candidates()["battery"] == 31.2
