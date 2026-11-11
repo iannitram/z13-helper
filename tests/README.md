@@ -5,6 +5,12 @@ python3 -m pytest            # from the repo root; needs only the stdlib + pytes
 python3 -m pytest -k watchdog -v
 ```
 
+On the SteamOS host the system Python 3.14 has no `pytest` (`No module named pytest`), so run the same
+commands from a virtualenv that has it, with a throwaway `HOME`: `AGENTS.md` "Running the tests" gives the
+exact lines. The Decky suite is stdlib only and runs with the host `python3`.
+
+The table below describes the main suites; it does not list every `tests/test_*.py` file (`ls tests` is the full list).
+
 Runs anywhere (CI, a laptop, the Deck itself) without the Z13: no PyQt6, no
 `z13ctl`, no sysfs, no network, no sudo. `conftest.py` puts `src/` and
 `tooling/` on `sys.path` and installs an autouse guard that makes
