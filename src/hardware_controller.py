@@ -288,8 +288,15 @@ class HardwareController:
             args.append("--force")
         return self._run_command(args)
 
+    def fit_tdp(self, tdp):
+        """(written, note): `tdp` clamped into the detected firmware ranges, as
+        profiles.apply_tdp does, so what is written is what gets reported."""
+        return profiles.fitted_tdp(tdp)
+
     def apply_tdp(self, tdp):
-        """Apply a profiles.json tdp dict ({pl1, pl2, pl3, force})."""
+        """Apply a profiles.json tdp dict ({pl1, pl2, pl3, force}), clamped into
+        the detected firmware ranges first (the firmware would clamp silently)."""
+        tdp, _ = self.fit_tdp(tdp)
         return self.set_tdp(tdp["pl1"], tdp["pl2"], tdp["pl3"], force=bool(tdp.get("force")))
 
     def reset_tdp(self):
