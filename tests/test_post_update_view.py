@@ -25,8 +25,8 @@ def test_parse_status_skips_noise_and_rejects_junk():
 
 def test_armoury_line():
     assert v.armoury_line(None) == ""
-    assert "missing ppt_pl1_spl, fan attributes" in v.armoury_line(
-        {"state": "needs", "missing": ["ppt_pl1_spl", "fan attributes"]})
+    assert "missing ppt_pl1_spl, fan curve hwmon" in v.armoury_line(
+        {"state": "needs", "missing": ["ppt_pl1_spl", "fan curve hwmon"]})
     assert "present" in v.armoury_line({"state": "ok", "missing": []})
 
 

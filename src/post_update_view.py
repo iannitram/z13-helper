@@ -88,7 +88,7 @@ def armoury_line(armoury: Optional[dict]) -> str:
     if not armoury:
         return ""
     if armoury["state"] == "ok":
-        return "asus-armoury: the ppt_* and fan attributes z13ctl writes are present"
+        return "asus-armoury: the ppt_* attributes and the fan-curve node z13ctl uses are present"
     if armoury["state"] == "na":
         return "asus-armoury: attributes folder not found"
     return "asus-armoury: missing " + ", ".join(armoury["missing"])
