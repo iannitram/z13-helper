@@ -136,9 +136,40 @@ def test_dwell_blocks_a_second_change_until_ten_seconds_pass():
     {"kind": "fps", "target_fps": float("nan")}, {"kind": "quiet"},
     {"kind": "comfort", "target_c": -1},
 ])
-def test_invalid_goal_raises(goal):
-    with pytest.raises(ValueError):
-        gc.step(goal, {"fps": 50}, CURRENT, RANGES, now_s=0.0)
+def test_malformed_goal_holds_power_without_raising(goal):
+    out = gc.step(goal, {"fps": 50}, CURRENT, RANGES, now_s=0.0)
+    assert out["tdp"] == TDP and out["fan_curve"] == CURVE
+    assert out["reason"] == "Malformed goal; holding power"
+
+
+@pytest.mark.parametrize("goal", [
+    {"kind": "nope"}, None, "fps", {"kind": "fps", "target_fps": True},
+    {"kind": "quiet"}, {"kind": "comfort", "target_c": -1},
+])
+def test_malformed_goal_still_sheds_when_hot(goal):
+    out = gc.step(goal, {"apu_temp_c": 99.0}, CURRENT, RANGES, now_s=0.0)
+    assert out["reason"] == gc.OVER_LIMIT_REASON
+    assert out["tdp"] == SHED
+    assert all(n[1] >= o[1] for n, o in zip(out["fan_curve"], CURVE))
+    assert out["fan_curve"] != CURVE
+
+
+@pytest.mark.parametrize("huge", [10**400, -(10**400)])
+def test_huge_int_reading_is_invalid_not_an_error(huge):
+    assert gc._reading(huge) is None
+    assert not gc._finite_number(huge)
+    out = gc.step({"kind": "fps", "target_fps": 60}, {"fps": huge}, CURRENT, RANGES, now_s=0.0)
+    assert out["tdp"] == TDP and out["reason"] == "Waiting for fps reading"
+    out = gc.step({"kind": "max"}, {"apu_temp_c": huge}, CURRENT, RANGES, now_s=0.0)
+    assert out["tdp"] == TDP and out["fan_curve"] == FULL
+    out = gc.step({"kind": "fps", "target_fps": huge}, {"fps": 50}, CURRENT, RANGES, now_s=0.0)
+    assert out["reason"] == "Malformed goal; holding power"
+
+
+def test_default_limit_is_documented_as_unsourced():
+    src = open(gc.__file__).read()
+    assert gc.APU_TEMP_LIMIT_C == 95.0
+    assert "Nothing in this repo\n# documents 95 C" in src
 
 
 def test_bool_reading_is_missing_not_an_error():
