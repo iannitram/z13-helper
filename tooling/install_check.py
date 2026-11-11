@@ -111,7 +111,6 @@ MANIFEST = [
     ("tooling/post_update/recipe.py", f"{LIB}/post_update/recipe.py", "644", False),
     ("tooling/post_update/registry.py", f"{LIB}/post_update/registry.py", "644", False),
     ("tooling/post_update/runner.py", f"{LIB}/post_update/runner.py", "644", False),
-    ("tooling/post_update/__main__.py", f"{LIB}/post_update/__main__.py", "644", False),
     ("tooling/post_update/cli.py", f"{LIB}/post_update/cli.py", "644", False),
     ("tooling/post_update/driver.py", f"{LIB}/post_update/driver.py", "644", False),
     ("tooling/post_update/local_recipes.py", f"{LIB}/post_update/local_recipes.py", "644", False),
@@ -146,6 +145,8 @@ MANIFEST = [
      f"{LIB}/packaging/host/systemd/system/mt7925-bt-resume.service", "644", False),
     ("packaging/host/systemd/system/mt7925-bt-resume.sh",
      f"{LIB}/packaging/host/systemd/system/mt7925-bt-resume.sh", "755", False),
+    # last LIB row the post-update package needs: the app treats __main__.py as 'install complete'
+    ("tooling/post_update/__main__.py", f"{LIB}/post_update/__main__.py", "644", False),
     ("tooling/diag/z13-memory-check", f"{BIN}/z13-memory-check", "755", False),
     ("tooling/diag/z13-storage-check", f"{BIN}/z13-storage-check", "755", False),
     ("tooling/diag/z13-whereami", f"{BIN}/z13-whereami", "755", False),
