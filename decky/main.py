@@ -1392,19 +1392,30 @@ class Plugin:
     # ---- Machine timeline (Phase 16f, #134) ----
     async def get_timeline(self, limit: int = 50) -> list:
         cap = max(0, int(limit))
-        rows = await asyncio.to_thread(
-            lambda: timeline.read_entries(TIMELINE_PATH, limit=cap, newest_first=True)
-        )
-        for row in rows:
-            row["rollback_supported"] = timeline.rollback_spec(row) is not None
-        return rows
+
+        def read():
+            rows = timeline.read_entries(TIMELINE_PATH, limit=cap, newest_first=True)
+            for row in rows:
+                row["rollback_supported"] = timeline.rollback_spec(row) is not None
+            return rows
+
+        return await asyncio.to_thread(read)
 
     async def rollback_timeline_entry(self, entry_id: str) -> dict:
         """Run one validated, allowlisted rollback through existing APIs."""
         if not isinstance(entry_id, str) or not entry_id:
             return {"ok": False, "message": "Invalid timeline entry."}
-        rows = await self.get_timeline(500)
-        entry = next((row for row in rows if row.get("id") == entry_id), None)
+        if not _writes_allowed():
+            return _unsupported()
+
+        def find():
+            # Read-only lookup in a worker thread, before the write lock is taken:
+            # timeline entries are append-only, so the record cannot change under us,
+            # and a slow disk must not hold the lock that serializes hardware writes.
+            rows = timeline.read_entries(TIMELINE_PATH, limit=500, newest_first=True)
+            return next((row for row in rows if row.get("id") == entry_id), None)
+
+        entry = await asyncio.to_thread(find)
         spec = timeline.rollback_spec(entry)
         if spec is None:
             return {"ok": False, "message": "This rollback record is unsupported."}
