@@ -241,3 +241,14 @@ def test_set_fancurve_pwm_clamps_0_255(fake_host):
     HardwareController(z13ctl_path="z13ctl").set_fancurve_pwm(curve)
     spec = fake_host.argvs[0][-1]
     assert spec == "20:0,30:0,40:128,50:255,60:255,70:255,80:255,90:255"
+
+
+def test_apply_tdp_clamps_into_the_detected_firmware_ranges(fake_host, monkeypatch):
+    import power_range
+    ranges = {"pl1": (28, 80), "pl2": (32, 92), "pl3": (45, 93)}
+    monkeypatch.setattr(profiles, "_tdp_ranges", lambda: ranges)
+    c = HardwareController(z13ctl_path="z13ctl")
+    c.apply_tdp({"pl1": 20, "pl2": 30, "pl3": 40, "force": False})
+    assert fake_host.argvs == [["z13ctl", "tdp", "--set", "28", "--pl2", "32", "--pl3", "45"]]
+    written, note = c.fit_tdp({"pl1": 20, "pl2": 30, "pl3": 40, "force": False})
+    assert written["pl1"] == 28 and "outside the firmware range" in note

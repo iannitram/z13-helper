@@ -18,5 +18,3 @@ mkdir -p "$HOME/.config/z13-profiles"
 printf "balanced-daily-driver\n" > "$HOME/.config/z13-profiles/current-profile"
 
 echo "Z13 profile set to: Balanced Daily Driver"
-echo
-z13ctl status
