@@ -296,6 +296,30 @@ def test_daemon_reapplies_within_grace(env):
     assert ns.ctl.calls == []
 
 
+def test_daemon_restore_within_grace_only_logs_wait_and_never_acts(env):
+    """#66 backstop: while the daemon restores the curve inside the grace the
+    watchdog only logs WAIT; it acts only when the curve stays dropped past it."""
+    ns = env.make(max_fans=True, enabled=False, fans=(8700, 8700))
+    events = []
+    orig = ns.wd._event
+    ns.wd._event = lambda text: (events.append(text), orig(text))[1]
+    run(ns, 1)
+    assert [e.split()[0] for e in events] == ["WAIT"]
+    # Daemon restores the curve just before the grace would expire.
+    run(ns, DROP_TICKS - 2)
+    ns.sensors.enabled = True
+    run(ns, DROP_TICKS * 2)
+    assert [e.split()[0] for e in events] == ["WAIT"]
+    assert ns.ctl.calls == []
+    # Daemon absent: the same drop is acted on only after the grace.
+    ns.sensors.enabled = False
+    events.clear()
+    assert all(m is None for m in run(ns, DROP_TICKS - 1))
+    assert ns.ctl.calls == []
+    assert run(ns, 1)[0] is not None
+    assert [e.split()[0] for e in events] == ["WAIT", "ACT", "RESULT"]
+
+
 def test_still_dropped_after_grace_recovers_once(env):
     ns = env.make(max_fans=True, enabled=False, fans=(8700, 8700))
     # Dropped on every tick; no action before DROP_GRACE_S
