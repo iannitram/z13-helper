@@ -83,11 +83,16 @@ this job did not do. `/etc` is a writable overlay here (it survives image update
 layout; not verified across an update), and no `/etc/dbus-1/system.d` exists yet, so the adapter would
 ship its own bus policy and a root systemd unit.
 
+`TdpLimit1` is not a plain relay: Valve's `register_tdp_limit1` hands the remote to its `TdpManagerService`
+(`SetProxy`) and registers nothing if that service failed to start. The schema also allows
+`method = "remote_interface"` under `[tdp_limit]` in a device TOML, a hybrid of a2 and b2 (device file
+selects the remote-backed TDP manager) that this page did not evaluate.
+
 ## Options (the owner's choice)
 
 | | Route | Feasible | Cost and risk |
 |---|---|---|---|
-| a | GZ302EA device TOML in `/usr/share/steamos-manager/devices`, re-applied by post-update repair (#27) | Yes on paper; schema known | Edits the immutable image (`steamos-readonly` off), wiped by every update until repair runs; Steam then writes the sysfs nodes itself and can fight the single state owner (#23); daemon restart needed |
+| a | GZ302EA device TOML in `/usr/share/steamos-manager/devices`, re-applied by post-update repair (#27) | Yes on paper; schema known | Edits the immutable image (`steamos-readonly` off), wiped by every update until repair runs; Valve's daemon then writes the sysfs nodes itself and can fight the single state owner (#23); daemon restart needed |
 | a2 | Same TOML kept outside the image, passed by `--device-config` in systemd drop-ins (`/etc/systemd/system/steamos-manager.service.d/` and the user unit equivalent) | Yes: flag is in the installed `--help`; not run | No image edit and survives updates if `/etc` does. But Valve's daemon then writes the sysfs nodes itself and fights the single state owner (#23); the flag bypasses DMI matching (Valve says use at own risk); the drop-in must repeat Valve's `ExecStart` and track it when Valve changes the unit; root and user units both need it; restart needed |
 | b | Shim replacing Valve's service | Yes, but heaviest | Re-implements Wi-Fi, session switching, updates; one bug breaks them. Not recommended |
 | b2 | Remote adapter: small system-bus service plus `/etc/steamos-manager/remotes.d/z13.toml`, serving the three interfaces by calling `z13ctl` and the Z13-Helper state owner | Yes per Valve's documented contract; not yet run | No image edit; Valve's service untouched; adapter is the one state owner, so no fight with #23. Needs a root unit, bus policy and a restart; interface is stable by Valve's compatibility rule |
