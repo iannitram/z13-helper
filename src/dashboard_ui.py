@@ -1148,39 +1148,44 @@ class DashboardUI(QMainWindow):
         dialog.exec()
 
     def _rollback_timeline_entry(self, entry):
-        """Apply only a validated rollback through existing profile/state APIs."""
+        """Validate a rollback record, then run it on the hardware worker.
+
+        The apply can take seconds (a profile restore has a long budget), so it
+        never runs on the Qt thread inside the modal dialog; it queues behind
+        any other hardware write like every other control. The dialog gets an
+        immediate (ok, message); the outcome shows in the status bar and the
+        rollback's own entry appears in the timeline.
+        """
         spec = timeline.rollback_spec(entry)
         if spec is None:
             return False, "This rollback record format is not supported."
-        kind = spec["kind"]
-        try:
+        if not self.control.writes_allowed():
+            return False, "Unsupported machine: hardware controls are disabled."
+
+        def go():
+            kind = spec["kind"]
             if kind == "profile":
                 if profiles.get_profile(spec["profile"]) is None:
-                    return False, "The saved profile no longer exists."
-                results = authority.apply_profile(spec["profile"], skip_hooks=True)
-                failed = [step for step, ok, _msg in results if not ok]
-                return bool(results) and not failed, ("Saved profile restored." if results and not failed else "Profile restore failed.")
+                    raise RuntimeError("The saved profile no longer exists.")
+                return authority.apply_profile(spec["profile"], skip_hooks=True)
             if kind == "goal":
                 target = spec["goal"] == "max"
                 before_mf = max_fans_state.load() or {}
                 active_name = profiles.active_name()
-                authority.set_max_fans(target)
+                message = authority.set_max_fans(target)
                 after_mf = max_fans_state.load() or {}
                 before, after = timeline.max_fans_goal_states(before_mf, after_mf, target)
                 timeline.record_goal_change(goal=after["goal"], previous_goal=before["goal"],
                                             before=before, after=after, profile=active_name, defer=True)
-                return True, "Saved fan goal restored."
+                return message
             active = profiles.get_profile(profiles.active_name())
             if active is None:
-                return False, "There is no active profile to restore this setting into."
+                raise RuntimeError("There is no active profile to restore this setting into.")
             active[kind] = spec["value"]
-            result = authority.edit(active, kind)
-            if isinstance(result, list):
-                failed = [step for step, ok, _msg in result if not ok]
-                return not failed, "Saved setting restored." if not failed else "Setting restore failed."
-            return True, "Saved setting restored."
-        except Exception as exc:  # noqa: BLE001
-            return False, f"Rollback failed: {str(exc)[:240]}"
+            return authority.edit(active, kind)
+
+        self.control._submit("Timeline rollback", go)
+        return True, "Rollback queued. The result shows in the status bar and adds a new timeline entry."
 
     # ------------------------------------------------------------------
     # Telemetry tick

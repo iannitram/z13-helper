@@ -591,11 +591,15 @@ def rollback_spec(entry):
             return None
         value = state[kind]
         if kind == "tdp":
-            if value is not None and (not isinstance(value, dict) or set(value) != {"pl1", "pl2", "pl3"}
-                                      or any(type(value[k]) is not int or not 5 <= value[k] <= 93
-                                             for k in ("pl1", "pl2", "pl3"))
-                                      or value["pl1"] > value["pl2"] or value["pl2"] > value["pl3"]):
-                return None
+            if value is not None:
+                # A stored profile TDP carries an optional bool "force" beside the rails.
+                if (not isinstance(value, dict) or set(value) - {"force"} != {"pl1", "pl2", "pl3"}
+                        or ("force" in value and type(value["force"]) is not bool)
+                        or any(type(value[k]) is not int or not 5 <= value[k] <= 93
+                               for k in ("pl1", "pl2", "pl3"))
+                        or value["pl1"] > value["pl2"] or value["pl2"] > value["pl3"]):
+                    return None
+                value = {k: value[k] for k in ("pl1", "pl2", "pl3")} | {"force": value.get("force", False)}
         elif kind == "battery_limit":
             if type(value) is not int or not 40 <= value <= 100:
                 return None
