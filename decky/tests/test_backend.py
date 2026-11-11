@@ -760,8 +760,8 @@ class TimelineTests(unittest.TestCase):
 class PostUpdateTest(unittest.TestCase):
     def test_argv_is_a_list_with_the_repo_on_pythonpath(self):
         self.assertEqual(m.post_update_argv("/r", True),
-                         ["env", "PYTHONPATH=/r/tooling:/r/src", "python3", "-m", "post_update",
-                          "--tab-json", "--ack"])
+                         ["env", "PYTHONPATH=/home/deck/.local/lib/z13-helper:/r/tooling:/r/src", "Z13_REPO=/r",
+                          "python3", "-m", "post_update", "--tab-json", "--ack"])
         with self.assertRaises(ValueError):
             m.post_update_argv("rel")
 
@@ -799,7 +799,7 @@ class PostUpdateTest(unittest.TestCase):
 
 class PostUpdateRepairTest(unittest.TestCase):
     def test_argv_plan_and_run(self):
-        base = ["env", "PYTHONPATH=/r/tooling:/r/src", "python3", "-m", "post_update", "repair", "--json"]
+        base = ["env", "PYTHONPATH=/home/deck/.local/lib/z13-helper:/r/tooling:/r/src", "Z13_REPO=/r", "python3", "-m", "post_update", "repair", "--json"]
         self.assertEqual(m.post_repair_argv("/r"), base)
         self.assertEqual(m.post_repair_argv("/r", ["kernel_args", "permission:/etc/x"]),
                          base + ["--run", "kernel_args,permission:/etc/x"])

@@ -8,8 +8,9 @@ import post_update_view as v
 
 
 def test_tab_argv_is_an_argv_list_with_the_repo_on_the_path():
-    assert v.tab_argv("/home/x/repo") == ["env", "PYTHONPATH=/home/x/repo/tooling:/home/x/repo/src",
-                                          "python3", "-m", "post_update", "--tab-json"]
+    lib = "/home/deck/.local/lib/z13-helper"
+    assert v.tab_argv("/home/x/repo") == ["env", f"PYTHONPATH={lib}:/home/x/repo/tooling:/home/x/repo/src",
+                                          "Z13_REPO=/home/x/repo", "python3", "-m", "post_update", "--tab-json"]
     assert v.tab_argv("/r", ack=True)[-1] == "--ack"
     with pytest.raises(ValueError):
         v.tab_argv("relative")
@@ -41,7 +42,7 @@ def test_row_cells_for_task_off_by_default_and_error_row():
 
 def test_repair_argv_plan_and_run_and_bad_ids():
     from post_update_view import repair_argv
-    base = ["env", "PYTHONPATH=/r/tooling:/r/src", "python3", "-m", "post_update", "repair", "--json"]
+    base = ["env", "PYTHONPATH=/home/deck/.local/lib/z13-helper:/r/tooling:/r/src", "Z13_REPO=/r", "python3", "-m", "post_update", "repair", "--json"]
     assert repair_argv("/r") == base
     assert repair_argv("/r", ["kernel_args", "unit:user:a.service"]) == base + [
         "--run", "kernel_args,unit:user:a.service"]

@@ -40,6 +40,9 @@ def _run_or_raise(io: HostIO, argv: list) -> None:
 
 
 def default_source_root() -> str:
+    hint = os.environ.get("Z13_REPO")   # set when run from the installed copy, which has no packaging/
+    if hint and all(os.path.isfile(os.path.join(hint, src)) for src, _ in BT_FILES):
+        return hint
     here = os.path.abspath(__file__)
     cand_a = os.path.dirname(os.path.dirname(here))
     cand_b = os.path.dirname(cand_a)

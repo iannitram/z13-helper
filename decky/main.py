@@ -113,13 +113,18 @@ Z13CTL_WRITE_TIMEOUT_S = host.Z13CTL_WRITE_TIMEOUT_S
 PROFILE_APPLY_TIMEOUT_S = 180
 
 
+def _post_update_env(repo):
+    """Copy of src/post_update_view._env: installed library first, checkout as the fallback."""
+    return ["env", f"PYTHONPATH={host.DECK_HOME}/.local/lib/z13-helper:{repo}/tooling:{repo}/src",
+            f"Z13_REPO={repo}"]
+
+
 def post_update_argv(repo, ack=False):
     """Host command for the After SteamOS update tab (copy of src/post_update_view.tab_argv:
     this backend runs as root and can't import src/ modules that are not in py_modules/)."""
     if not isinstance(repo, str) or not os.path.isabs(repo) or "\n" in repo:
         raise ValueError("repo path must be absolute")
-    return ["env", f"PYTHONPATH={repo}/tooling:{repo}/src", "python3", "-m", "post_update",
-            "--tab-json"] + (["--ack"] if ack else [])
+    return _post_update_env(repo) + ["python3", "-m", "post_update", "--tab-json"] + (["--ack"] if ack else [])
 
 
 def parse_post_update(out):
@@ -140,8 +145,7 @@ def post_repair_argv(repo, ids=None):
     prints the plan as JSON and changes nothing; with ids it runs exactly those confirmed steps."""
     if not isinstance(repo, str) or not os.path.isabs(repo) or "\n" in repo:
         raise ValueError("repo path must be absolute")
-    argv = ["env", f"PYTHONPATH={repo}/tooling:{repo}/src", "python3", "-m", "post_update",
-            "repair", "--json"]
+    argv = _post_update_env(repo) + ["python3", "-m", "post_update", "repair", "--json"]
     if ids is not None:
         if not isinstance(ids, (list, tuple)) or not ids or not all(
                 isinstance(i, str) and _STEP_ID.fullmatch(i) for i in ids):

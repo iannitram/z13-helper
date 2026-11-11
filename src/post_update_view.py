@@ -8,17 +8,30 @@ import json
 import os
 from typing import Optional
 
+import host
+
 STATE_TEXT = {"needs": "Needs attention", "fine": "Fine", "info": "Info", "na": "Not applicable",
               "reboot": "Reboot pending", "error": "Error", "unknown": "Could not check"}
 EMPTY = {"updated": False, "banner": None, "reason": "", "armoury": None, "rows": []}
+
+
+def host_lib() -> str:
+    """Where install.sh puts the post-update package and the modules it imports (host path)."""
+    return f"{host.DECK_HOME}/.local/lib/z13-helper"
+
+
+def _env(repo: str) -> list:
+    """env words for the runner: the installed copy first, the checkout as the fallback (an install
+    from before the package was copied still works), and the checkout named as the source of the
+    packaged files the Bluetooth recipe compares against."""
+    return ["env", f"PYTHONPATH={host_lib()}:{repo}/tooling:{repo}/src", f"Z13_REPO={repo}"]
 
 
 def tab_argv(repo: str, ack: bool = False) -> list:
     """The host command (argv, no shell) that prints the tab as JSON; `ack` clears the flag."""
     if not os.path.isabs(repo):
         raise ValueError("repo path must be absolute")
-    return ["env", f"PYTHONPATH={repo}/tooling:{repo}/src", "python3", "-m", "post_update",
-            "--tab-json"] + (["--ack"] if ack else [])
+    return _env(repo) + ["python3", "-m", "post_update", "--tab-json"] + (["--ack"] if ack else [])
 
 
 def repair_argv(repo: str, ids=None) -> list:
@@ -26,8 +39,7 @@ def repair_argv(repo: str, ids=None) -> list:
     exactly the confirmed step ids and prints the result as JSON."""
     if not os.path.isabs(repo):
         raise ValueError("repo path must be absolute")
-    argv = ["env", f"PYTHONPATH={repo}/tooling:{repo}/src", "python3", "-m", "post_update",
-            "repair", "--json"]
+    argv = _env(repo) + ["python3", "-m", "post_update", "repair", "--json"]
     if ids is not None:
         ids = list(ids)
         if not ids or not all(isinstance(i, str) and i and "," not in i and " " not in i for i in ids):
