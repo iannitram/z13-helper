@@ -232,3 +232,15 @@ def main(monkeypatch):
     spec.loader.exec_module(mod)
     monkeypatch.setattr(mod, "logging_enabled", lambda: False)   # the user said no logs
     return mod
+
+
+@pytest.fixture(autouse=True)
+def _cli_supported_platform(monkeypatch):
+    """The CLI/MCP write gate (#22) reads the real machine; tests act as a supported Z13.
+
+    tests/test_cli_mcp_gate.py overrides this to prove the refusal.
+    """
+    import z13_helper_cli
+    monkeypatch.setattr(z13_helper_cli, "_unsupported_reason", lambda: "")
+    import platform_support
+    platform_support.reset_version_cache()
