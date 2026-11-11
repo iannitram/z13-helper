@@ -8,6 +8,10 @@ the device but not yet verified on the Z13. Plan and status: `docs/ROADMAP.md`.
 
 ## Pipeline
 
+- 2026-11-11 Docs reconciled with the tracker and the device evidence (#205): PIPELINE notes, SPEC status paragraph (Musts and Won'ts unchanged), ROADMAP status marks and §11 versions, both code-map headers and stale rows, AGENTS.md, tests/README.md. The EPP ADR was renumbered 0002 → 0003 (two files were numbered 0002). Owner decisions 2026-11-11: 1.0 ships from main and the post-1.0 branch merges after the tag; #66 keeps its 10 s daemon-absent backstop.
+- 2026-11-11 Docs follow-up (#205): own-release update source (PR #209, #202) and Boondock TDP 28/32/45 W with clamped writes (PR #213, #203) recorded as merged, device checks still owed; ROADMAP §11 row for this project's releases. Post-update armoury fan-attribute check bug filed as #216.
+- 2026-11-11 CI on main fixed (#198, PR #206): ten tests no longer depend on the session user or the machine model. #74 and #75 closed with device evidence; issues #199-#205 filed (acceptance, own-release update source, Boondock TDP, release, docs).
+- 2026-11-11 Docs: replaced dev-machine paths in AGENTS.md and ROADMAP with placeholders (repo-lint, R01).
 - 2026-11-07 Reconciled roadmap/spec/pipeline and refreshed the code map against `main` 84f0b1e; state owner (#23) and post-update repair (#27) are implemented, while device acceptance remains open. Added a disposition for the Nov 4 code-audit findings.
 - 2026-11-02 Code map (MAP/README.md, MAP/decky.md) refreshed to match main: repair PRs merged, new modules and tooling listed.
 - 2026-11-01 Phases 15 (goal control) and 16 (hardware as the interface) added after 1.0 on the owner's pick: ROADMAP §10a, §10b; code map MAP/README.md "Planned (after 1.0)"; issues #123-#135 filed (`after-1.0`). SPEC unchanged.
@@ -25,7 +29,7 @@ the device but not yet verified on the Z13. Plan and status: `docs/ROADMAP.md`.
 
 - Fan watchdog: Max Fans' dropped-curve recovery waits 10 s for the z13ctl daemon's own re-apply, and no longer fires right after resume (Refs #66).
 
-- **CPU Boost (EPP) per profile (#64; on-device check pending).** The Performance panel and the Fans window share one CPU Boost combo with a live "Now:" readout. Profiles may carry an EPP value, written by the desktop user to every cpufreq policy node (read and write both use `policy*`). `packaging/host/tmpfiles/z13-helper-epp.conf` makes only those nodes group-writable for `users`; why and the scope are in `docs/adr/0002-epp-write-via-tmpfiles-grant.md`.
+- **CPU Boost (EPP) per profile (#64; the tmpfiles grant was checked on the device 2026-11-06, #64 comment: a direct write as the desktop user succeeded and the grant is on the keep-list).** The Performance panel and the Fans window share one CPU Boost combo with a live "Now:" readout. Profiles may carry an EPP value, written by the desktop user to every cpufreq policy node (read and write both use `policy*`). `packaging/host/tmpfiles/z13-helper-epp.conf` makes only those nodes group-writable for `users`; why and the scope are in `docs/adr/0003-epp-write-via-tmpfiles-grant.md`.
   - Crash reports read the account record with `getattr`: the new EPP tests run with partial account records, and the scrubber must not raise on a missing field.
   - The installer tests build their tarball with `TarInfo` instead of `tarfile.add`: `tarfile.add` does an ambient passwd lookup, and other tests mock that lookup with a lightweight owner record.
 - **Restore works on z13ctl 1.4.2 (#179).** Built-in profiles no longer send the capitalized
@@ -33,7 +37,7 @@ the device but not yet verified on the Z13. Plan and status: `docs/ROADMAP.md`.
   names. Undervolt writes are skipped when the daemon reports `undervolt_available: false`, so
   `z13-profile restore` no longer aborts before the saved fan curve is applied.
 
-- **Automatic crash reporting (#82; live upload check pending).** Configured builds
+- **Automatic crash reporting (#82; real-crash upload checked on the device 2026-11-06, #82 comment: one zip in the drop's `z13-helper/` folder; the Decky entry point is covered by unit tests only).** Configured builds
   queue scrubbed exception and fatal reports from the desktop app and Decky plugin
   for background upload to the shared bug drop. Help → Error log has a default-on
   toggle, independent of local logging. Both frontends share the ten-report queue
@@ -46,7 +50,7 @@ the device but not yet verified on the Z13. Plan and status: `docs/ROADMAP.md`.
   tree and start it once. A failed swap restores the previous tree; staging failures leave the
   live plugin untouched. An unchanged repair leaves the loader running. Failures are reported;
   backend startup alone is not evidence that Steam's frontend imported successfully.
-- **Decky repair checks the Steam frontend separately (#122; on-device check pending).**
+- **Decky repair checks the Steam frontend separately (#122, closed 2026-11-02; the live check on the device is still pending and tracked in #201).**
   After a changed-plugin install, check the loader entry URL for HTTP 200 JavaScript and
   the registered plugin component over Steam's CEF debug socket. New buffered dynamic-import
   errors since the repair started or missing registration fail the installer. An absent Steam

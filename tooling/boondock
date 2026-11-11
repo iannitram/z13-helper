@@ -10,7 +10,7 @@
 # `on`/`off` are the two halves together. Profile hooks call only the SESSION half
 # (`session-on` / `session-off`: screen + background services, no power hardware),
 # because the profile engine already applied the profile's own TDP/base/fans.
-# `hardware-on` / `hardware-off` are the standalone power half (quiet + 20/30/40 W).
+# `hardware-on` / `hardware-off` are the standalone power half (quiet + 28/32/45 W).
 #
 # Background services are the only session workload this script pauses.
 #
@@ -26,7 +26,10 @@ STATE=${BOONDOCK_STATE:-/home/deck/.local/state/boondock.state}
 BL=${BOONDOCK_BACKLIGHT:-/sys/class/backlight/amdgpu_bl0}
 BOONDOCK_BRIGHT_PCT=35                 # screen brightness in boondock mode
 DEFAULT_RESTORE_PCT=80                 # brightness if we restore without a snapshot
-TDP_PL1=20; TDP_PL2=30; TDP_PL3=40     # PPT (sustained/short/fast) in W — 20W keeps background work usable
+# PPT (sustained/short/fast) in W: the asus-armoury floors, the lowest the firmware
+# takes. Same numbers as BOONDOCK_TDP in src/profiles.py; keep them together (#203).
+TDP_PL1=28; TDP_PL2=32; TDP_PL3=45
+ARMOURY=${BOONDOCK_ARMOURY:-/sys/class/firmware-attributes/asus-armoury/attributes}
 BG_SERVICES=(llama-swap)               # systemd services safe to stop off-grid
 PROFILE_SYSFS=${BOONDOCK_PROFILE_SYSFS:-/sys/firmware/acpi/platform_profile}
 # ------------------------------
@@ -35,6 +38,19 @@ mkdir -p "$(dirname "$STATE")"
 bright_max() { cat "$BL/max_brightness"; }
 set_bright_pct() { local pct=$1 max; max=$(bright_max); local v=$(( max * pct / 100 )); echo "$v" | sudo tee "$BL/brightness" >/dev/null; }
 say() { printf '  %s\n' "$*"; }
+
+# fit_rail VALUE ATTR: VALUE clamped into ATTR's min_value..max_value range metadata
+# (never the live PPT value, ROADMAP principle 5). The firmware clamps an
+# out-of-range write silently, so writing the fitted value is what lets the
+# message below name the limit that applied. No metadata: VALUE unchanged.
+fit_rail() {
+  local v=$1 lo hi
+  lo=$(cat "$ARMOURY/$2/min_value" 2>/dev/null) || lo=
+  hi=$(cat "$ARMOURY/$2/max_value" 2>/dev/null) || hi=
+  [[ $lo =~ ^[0-9]+$ ]] && [ "$v" -lt "$lo" ] && v=$lo
+  [[ $hi =~ ^[0-9]+$ ]] && [ "$v" -gt "$hi" ] && v=$hi
+  echo "$v"
+}
 
 # The active app profile and its stored TDP: never read live ppt_* values
 # (ROADMAP principle 5). Empty when z13-profile is not installed.
@@ -139,6 +155,10 @@ do_hw_on() {
   tdp1=$(profile_tdp Boondock pl1); tdp1=${tdp1:-$TDP_PL1}
   tdp2=$(profile_tdp Boondock pl2); tdp2=${tdp2:-$TDP_PL2}
   tdp3=$(profile_tdp Boondock pl3); tdp3=${tdp3:-$TDP_PL3}
+  tdp1=$(fit_rail "$tdp1" ppt_pl1_spl); tdp2=$(fit_rail "$tdp2" ppt_pl2_sppt)
+  tdp3=$(fit_rail "$tdp3" ppt_pl3_fppt)
+  [ "$tdp2" -lt "$tdp1" ] && tdp2=$tdp1
+  [ "$tdp3" -lt "$tdp2" ] && tdp3=$tdp2
   if ! "$Z" tdp --set "$tdp1" --pl2 "$tdp2" --pl3 "$tdp3" >/dev/null 2>&1; then
     say "TDP → ${tdp1}/${tdp2}/${tdp3}W FAILED"
     return 1

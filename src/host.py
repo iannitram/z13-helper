@@ -34,6 +34,24 @@ DECK_HOME = "/home/deck"
 DECK_RUNTIME_DIR = "/run/user/1000"
 DECK_BUS = f"unix:path={DECK_RUNTIME_DIR}/bus"
 
+
+
+def _session():
+    """(user, home, runtime_dir, bus) of the desktop session; deck's values by default.
+
+    platform_support resolves the real session when it ships beside this copy (the
+    Flatpak and the desktop app); the standalone copies keep the deck constants.
+    """
+    try:
+        import platform_support
+        s = platform_support.session()
+        if s["user"] != platform_support.UNKNOWN and s["home"] != platform_support.UNKNOWN:
+            return s["user"], s["home"], s["runtime_dir"], s["bus"]
+    except Exception:  # noqa: BLE001 - absent module or odd platform: use deck
+        pass
+    return "deck", DECK_HOME, DECK_RUNTIME_DIR, DECK_BUS
+
+
 RC_TIMEOUT = 124
 RC_NOT_FOUND = 127
 PIPE_GRACE_S = 1.0               # extra wait for pipe EOF after the child exits
@@ -71,8 +89,9 @@ def in_flatpak():
 def deck_env(environ=None):
     """environ with deck's runtime dir and session bus, and the host's library path."""
     env = dict(os.environ if environ is None else environ)
-    env["XDG_RUNTIME_DIR"] = DECK_RUNTIME_DIR
-    env["DBUS_SESSION_BUS_ADDRESS"] = DECK_BUS
+    _user, _home, runtime, bus = _session()
+    env["XDG_RUNTIME_DIR"] = runtime
+    env["DBUS_SESSION_BUS_ADDRESS"] = bus
     env.pop("LD_LIBRARY_PATH", None)
     if env.get("LD_LIBRARY_PATH_ORIG"):
         env["LD_LIBRARY_PATH"] = env["LD_LIBRARY_PATH_ORIG"]
@@ -93,9 +112,10 @@ def command(argv, *, as_deck=False, mode=None, environ=None):
     if mode == "host":
         return argv, None
     if as_deck:
-        pin = ["env", f"HOME={DECK_HOME}", f"XDG_RUNTIME_DIR={DECK_RUNTIME_DIR}",
-               f"DBUS_SESSION_BUS_ADDRESS={DECK_BUS}"]
-        argv = (["runuser", "-u", "deck", "--"] if mode == "root" else []) + pin + argv
+        user, home, runtime, bus = _session()
+        pin = ["env", f"HOME={home}", f"XDG_RUNTIME_DIR={runtime}",
+               f"DBUS_SESSION_BUS_ADDRESS={bus}"]
+        argv = (["runuser", "-u", user, "--"] if mode == "root" else []) + pin + argv
     return argv, deck_env(environ)
 
 
@@ -113,9 +133,9 @@ def holo_or_steamos(name: str) -> str:
 
 
 def _drain(stream, chunks, cap, stop):
-    """Read to EOF or until `stop` is set and nothing is pending; keep at most `cap`
-    bytes, drop the rest. Returns whatever is available instead of waiting for a full
-    block, and polls `stop` so a grandchild holding the pipe cannot pin the thread."""
+    """Read to EOF or until `stop` is set; keep at most `cap` bytes, drop the rest.
+    Returns whatever is available instead of waiting for a full block. `stop` is checked
+    before every read, so a grandchild that keeps the pipe busy cannot pin the thread."""
     kept = 0
     try:
         fd = stream.fileno()
@@ -127,14 +147,12 @@ def _drain(stream, chunks, cap, stop):
             if kept < cap:
                 chunks.append(block[:cap - kept])
                 kept += len(chunks[-1])
-    while True:
+    while not stop.is_set():      # checked per read: a noisy grandchild must not pin the thread
         try:
             ready = select.select([fd], [], [], 0.1)[0]
         except (OSError, ValueError):
             return
         if not ready:
-            if stop.is_set():
-                return
             continue
         try:
             block = os.read(fd, 65536)

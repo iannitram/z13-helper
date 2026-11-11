@@ -388,6 +388,14 @@ def snapshot(client):
     if result.rc == 0 and result.out.strip() in profiles.BASES:
         state['platform_profile'] = result.out.strip()
     profiles.sync_active_from_backend(state)
+    # A named profile an older build mirrored with Boondock's sub-floor limits
+    # (#203): rebuild it while inactive. Save-only, so no live hardware write;
+    # an active one is rewritten by its next apply.
+    for stale in profiles.stale_mirrors(state):
+        try:
+            client.ensure_named_profile(stale)
+        except (OSError, Z13CtlError, ValueError) as exc:
+            logger.warning("could not rebuild the %s named profile: %s", stale.get("name"), exc)
     return state
 
 

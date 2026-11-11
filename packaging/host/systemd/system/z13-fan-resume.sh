@@ -10,7 +10,8 @@ DECK_HOME="${Z13_FAN_RESUME_DECK_HOME:-/home/deck}"
 DECK_USER="${Z13_FAN_RESUME_DECK_USER:-deck}"
 Z13CTL="$DECK_HOME/.local/bin/z13ctl"
 PROFILE="$DECK_HOME/.local/bin/z13-profile"
-CURVE="40:127,50:191,60:229,70:255,75:255,80:255,85:255,90:255"
+# First anchor at 20 C: below the first anchor the EC may hold its previous duty (#86).
+CURVE="20:128,40:128,50:191,60:230,70:255,75:255,80:255,90:255"
 MAXF="$DECK_HOME/.config/z13-helper/max-fans.json"
 
 # Every executable under the deck user's home runs *as* deck, even on the fallback

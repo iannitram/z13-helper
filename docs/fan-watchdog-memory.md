@@ -25,10 +25,11 @@ an actual soak. A valid device run must end with `COMPLETE`, span at least
 
 ## Containment
 
-**To-do 3 (cap or self-restart) is partly done.** The cap is `os._exit` at
-500 MiB, **on by default**. To opt out (a trip then only logs once), run
+**To-do 3 (cap or self-restart) is partly done.** The guard trips at 500 MiB and,
+by default, **only logs** (decided 2026-11-07: log only until a device check
+confirms Decky restarts the backend). To turn on the hard cap (`os._exit`), run
 `sudo systemctl edit plugin_loader.service` and add `[Service]` /
-`Environment=Z13_RSS_GUARD_EXIT=0`, then restart the service. Whether Decky Loader respawns the plugin afterwards is **unverified**
+`Environment=Z13_RSS_GUARD_EXIT=1`, then restart the service. Whether Decky Loader respawns the plugin afterwards is **unverified**
 and needs a device check; until then a trip may leave the Game Mode fan watchdog
 and backend API down until the plugin is reloaded by hand. No restart or recovery
 path is implemented here.
@@ -37,7 +38,7 @@ path is implemented here.
 `/proc/self/status` immediately at startup and then every 5 s on one daemon
 thread. It works independently of the asyncio event loop, hardware write lock
 and thread-pool workers. At **500 MiB or above**, it emits a numeric diagnostic
-to stderr and, unless `Z13_RSS_GUARD_EXIT=0`, calls `os._exit(1)` for this plugin's backend process, **assuming** Decky Loader runs each plugin backend as a separate process. That isolation is unverified: no Decky version or source has been checked, and if a backend ever ran in-process the exit would take the loader down with it.
+to stderr and, only when `Z13_RSS_GUARD_EXIT=1`, calls `os._exit(1)` for this plugin's backend process, **assuming** Decky Loader runs each plugin backend as a separate process. That isolation is unverified: no Decky version or source has been checked, and if a backend ever ran in-process the exit would take the loader down with it.
 The guard holds no sample history. Unload signals and joins the monitor.
 Read failures warn once per failure streak and retry; they never trigger an exit
 based on a missing or malformed reading.

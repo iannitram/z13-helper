@@ -31,6 +31,7 @@ if os.path.isdir(_PY_MODULES) and _PY_MODULES not in sys.path:
     sys.path.insert(0, _PY_MODULES)
 import crash_report
 import host
+import compute_health
 import state_authority as authority
 import hw_signals
 from hardware_controller import HardwareController
@@ -881,7 +882,7 @@ async def fan_watchdog_tick(watchdog):
     """One watchdog tick under the write lock; skipped while a write holds it.
     Returns the watchdog's message (None when it didn't act or was skipped)."""
     lock = _lock()
-    if lock.locked():
+    if lock.locked() or not _writes_allowed():
         return None
     try:
         async with lock:
@@ -895,6 +896,24 @@ async def fan_watchdog_tick(watchdog):
 
 
 _write_lock = None
+
+
+DMI_PRODUCT_NAME = "/sys/class/dmi/id/product_name"
+UNSUPPORTED_MESSAGE = "Unsupported machine: Z13-Helper controls the ROG Flow Z13 (GZ302) only"
+
+
+def _writes_allowed():
+    """False on any machine that is not the Z13 (same rule as src/platform_support.py,
+    which this root-owned backend cannot import). Read-only: DMI product name."""
+    try:
+        with open(DMI_PRODUCT_NAME, encoding="utf-8", errors="replace") as f:
+            return "GZ302" in f.read().upper()
+    except OSError:
+        return False
+
+
+def _unsupported():
+    return {"ok": False, "message": UNSUPPORTED_MESSAGE}
 
 
 def _lock():
@@ -926,12 +945,17 @@ def backend_rss_kib(path="/proc/self/status"):
     raise ValueError("missing VmRSS")
 
 
+def _rss_guard_exits():
+    return os.environ.get("Z13_RSS_GUARD_EXIT") == "1"
+
+
 class BackendMemoryGuard:
     """One stoppable monitor per backend; no sample history or child processes.
 
-    A trip exits this backend (hard cap) unless Z13_RSS_GUARD_EXIT=0 is set in the
-    plugin_loader environment, which makes it log once instead. Exit rather than
-    restarting plugin_loader (which would disrupt all plugins).
+    A trip logs once by default. The hard cap (exit this backend) is opt-in with
+    Z13_RSS_GUARD_EXIT=1 in the plugin_loader environment, until a device check
+    confirms Decky respawns the backend. Exit rather than restarting
+    plugin_loader (which would disrupt all plugins).
     Per-plugin process isolation and any respawn are UNVERIFIED assumptions
     (no Decky version/source cited); reloading this plugin after a trip is a
     device/operator recovery step.
@@ -946,13 +970,13 @@ class BackendMemoryGuard:
         self._thread = threading.Thread(target=self._run, name="z13-rss-guard", daemon=True)
 
     def _default_terminate(self, code):
-        """Exit by default; Z13_RSS_GUARD_EXIT=0 (operator opt-out, see
-        docs/fan-watchdog-memory.md) logs once and keeps the plugin running."""
-        if os.environ.get("Z13_RSS_GUARD_EXIT") != "0":
+        """Log once by default; Z13_RSS_GUARD_EXIT=1 (operator opt-in, see
+        docs/fan-watchdog-memory.md) exits the plugin process instead."""
+        if _rss_guard_exits():
             os._exit(code)
         if not self._tripped:
             self._tripped = True
-            decky.logger.error("Backend RSS over limit; not exiting (Z13_RSS_GUARD_EXIT=0)")
+            decky.logger.error("Backend RSS over limit; not exiting (set Z13_RSS_GUARD_EXIT=1 to exit)")
 
     def start(self):
         self._thread.start()
@@ -975,8 +999,9 @@ class BackendMemoryGuard:
         # os._exit bypasses cleanup that might hang or allocate more memory.
         # Report to stderr first; do not depend on a logging handler's lock.
         try:
+            action = "exiting plugin process" if _rss_guard_exits() else "log only"
             os.write(2, f"z13-helper backend RSS guard: rss_kib={rss} "
-                     f"limit_kib={BACKEND_RSS_LIMIT_KIB}; exiting plugin process\n".encode())
+                     f"limit_kib={BACKEND_RSS_LIMIT_KIB}; {action}\n".encode())
         finally:
             self._terminate(1)
         return True
@@ -1161,6 +1186,8 @@ class Plugin:
         return bool(_load_max_fans().get("enabled", False))
 
     async def set_max_fans(self, enabled: bool) -> dict:
+        if not _writes_allowed():
+            return _unsupported()
         async with _lock():
             try:
                 message = await asyncio.to_thread(_set_max_fans_recorded, bool(enabled))
@@ -1253,6 +1280,8 @@ class Plugin:
             return {"names": [], "active": ""}
 
     async def set_app_profile(self, name: str) -> dict:
+        if not _writes_allowed():
+            return _unsupported()
         # A full apply takes seconds (longer with a wedged lightbar): keep it off the
         # loader's event loop, and serialised with the other writes.
         async with _lock():
@@ -1281,6 +1310,8 @@ class Plugin:
         active profile cannot drift apart the way a bare `profile --set` let
         them. Unknown names never reach z13ctl.
         """
+        if not _writes_allowed():
+            return _unsupported()
         name = PROFILE_BASES.get(profile)
         if name is None:
             return {"ok": False, "message": f"unknown profile {profile!r}"}
@@ -1318,6 +1349,8 @@ class Plugin:
     # `profile` = the profile the user was editing; omitted (older frontend) = the active one.
     async def set_tdp(self, enabled: bool, pl1: int, pl2: int, pl3: int,
                       profile: str = "") -> dict:
+        if not _writes_allowed():
+            return _unsupported()
         async with _lock():
             tdp = clamp_tdp(pl1, pl2, pl3, tdp_ranges()) if enabled else None
             result = await asyncio.to_thread(_edit_field_recorded, 'tdp', tdp, profile)
@@ -1325,6 +1358,8 @@ class Plugin:
             return result
 
     async def set_battery_limit(self, value: int, profile: str = "") -> dict:
+        if not _writes_allowed():
+            return _unsupported()
         async with _lock():
             value = clamp_battery(value)
             result = await asyncio.to_thread(_edit_field_recorded, 'battery_limit', value, profile)
@@ -1332,6 +1367,8 @@ class Plugin:
             return result
 
     async def set_brightness(self, level: str) -> dict:
+        if not _writes_allowed():
+            return _unsupported()
         async with _lock():
             if level not in BRIGHTNESS_LEVELS:
                 return {"ok": False, "message": "bad brightness level", "failed": []}
@@ -1340,6 +1377,14 @@ class Plugin:
             self._signals_last_write = time.monotonic()
             _save_plugin_state(brightness=level)
         return res
+
+    async def get_compute_health(self) -> dict:
+        # Read-only; the host probe can take a few seconds, so off the event loop.
+        return await asyncio.get_event_loop().run_in_executor(None, compute_health.health_report)
+
+    async def run_compute_smoke(self, budget_mib: int = compute_health.SMOKE_DEFAULT_MIB) -> dict:
+        """Only on an explicit button press: allocates `budget_mib` (clamped) of GPU memory."""
+        return await asyncio.get_event_loop().run_in_executor(None, compute_health.smoke_test, budget_mib)
 
     async def get_telemetry(self) -> dict:
         return telemetry()   # a handful of sysfs reads; cheap enough inline

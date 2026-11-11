@@ -26,7 +26,7 @@ POINTS = 8
 MARKER_R = 10         # Visible marker sized for direct touch interaction
 HIT_R = 22            # 44 px Manhattan hit radius for each curve point
 
-DEFAULT_CURVE = [[40, 20], [50, 35], [60, 55], [70, 75], [75, 90], [80, 100], [85, 100], [90, 100]]
+DEFAULT_CURVE = [[20, 20], [40, 20], [50, 35], [60, 55], [70, 75], [75, 90], [80, 100], [90, 100]]
 
 
 class FanCurveWidget(QWidget):

@@ -60,7 +60,14 @@ for _name in ("SHARED_CONFIG", "MAX_FANS_STATE", "PROFILES_STORE", "FAN_TRACE",
 REAL["FAN_TRACE_DIR"] = m.FAN_TRACE_DIR   # read only; never written by the tests
 
 
+_REAL_WRITES_ALLOWED = m._writes_allowed
+
+
 def setUpModule():
+    # These tests run on any machine; the unsupported-machine gate has its own tests.
+    gate = mock.patch.object(m, "_writes_allowed", return_value=True)
+    gate.start()
+    unittest.addModuleCleanup(gate.stop)
     # Backend writes target a fixed owner, independent of the runner's account.
     owner = types.SimpleNamespace(pw_uid=m.DECK_UID, pw_gid=m.DECK_GID,
                                   pw_dir=os.path.join(_HOME, "owner-home"))
@@ -856,3 +863,38 @@ class PostUpdateRepairTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UnsupportedMachineGate(unittest.TestCase):
+    """#22: on a machine that is not the Z13 the backend issues no write."""
+
+    def test_writes_refused_without_running_anything(self):
+        fake = FakeHost()
+        plugin = m.Plugin()
+        with mock.patch.object(m, "_writes_allowed", return_value=False), \
+                mock.patch.object(host, "run", fake.run):
+            results = [
+                asyncio.run(plugin.set_app_profile("Balanced")),
+                asyncio.run(plugin.set_profile("balanced")),
+                asyncio.run(plugin.set_tdp(True, 20, 20, 20)),
+                asyncio.run(plugin.set_battery_limit(80)),
+                asyncio.run(plugin.set_brightness("high")),
+                asyncio.run(plugin.set_max_fans(True)),
+            ]
+        for r in results:
+            self.assertFalse(r["ok"])
+            self.assertIn("Unsupported", r["message"])
+        self.assertEqual(fake.calls, [])
+
+    def test_dmi_check_reads_the_product_name(self):
+        real = _REAL_WRITES_ALLOWED
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "product_name")
+            with mock.patch.object(m, "DMI_PRODUCT_NAME", path):
+                self.assertFalse(real())          # no file: refuse
+                with open(path, "w") as f:
+                    f.write("ROG Flow Z13 GZ302EA\n")
+                self.assertTrue(real())
+                with open(path, "w") as f:
+                    f.write("Jupiter\n")
+                self.assertFalse(real())

@@ -6,7 +6,8 @@ probe runs on the host because the sandbox does not have the host's write-access
 view. It reads each rail's min/max metadata, never a live ``current_value``
 (ROADMAP principle 5: reading Armoury PPT values can hard-lock the EC). The
 profile store keeps validating against the 5-93 W outer envelope; these ranges
-only decide what the sliders offer and what the UI flags.
+decide what the sliders offer, what the UI flags, and (fit_tdp) the limits a
+profile apply actually writes and reports.
 """
 
 import json
@@ -138,3 +139,30 @@ def tdp_status(tdp, ranges):
                 + ". Move a slider to save the shown values.")
     return {"requested": requested, "accepted": accepted, "adjusted": adjusted,
             "needs_attention": bool(adjusted), "note": note}
+
+
+def fit_tdp(tdp, ranges):
+    """The limits a profiles.json `tdp` dict actually gets on this kernel.
+
+    Each rail is clamped into its detected range, then the rail order the
+    firmware needs is kept (sPPT >= SPL, fPPT >= sPPT, each still within its
+    own maximum). This is what gets written, so it is what the app reports:
+    writing a value outside the range would let the firmware clamp it silently
+    and leave the app showing a limit that never applied (SPEC M5).
+
+    Returns (fitted, note): `fitted` is a new tdp dict (``force`` kept only
+    while PL1 stays above 75 W), `note` an empty string when nothing changed,
+    else "requested A/B/C W, outside the firmware range".
+    """
+    fitted = {}
+    for k in RAILS:
+        lo, hi = ranges[k]
+        fitted[k] = max(lo, min(hi, int(tdp[k])))
+    fitted["pl2"] = min(ranges["pl2"][1], max(fitted["pl2"], fitted["pl1"]))
+    fitted["pl3"] = min(ranges["pl3"][1], max(fitted["pl3"], fitted["pl2"]))
+    fitted["force"] = bool(tdp.get("force")) and fitted["pl1"] > 75
+    note = ""
+    if any(fitted[k] != int(tdp[k]) for k in RAILS):
+        note = (f"requested {tdp['pl1']}/{tdp['pl2']}/{tdp['pl3']} W, "
+                "outside the firmware range")
+    return fitted, note
