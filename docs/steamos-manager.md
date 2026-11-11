@@ -37,8 +37,13 @@ The ROG Ally entry (`rog-ally-series.toml`) shows the shape of the missing confi
 `asus-armoury` firmware attributes, performance profile through the `asus-wmi` platform profile,
 charge limit through `acpi_sb`. The Z13 exposes the same kernel nodes this app already writes (via
 `z13ctl`), so a device entry would be small, but it would live in `/usr/share`, the immutable
-image: a SteamOS update replaces it. No user-writable override directory was found: `/etc/steamos-manager`
+image: a SteamOS update replaces it. No user-writable override *directory* was found: `/etc/steamos-manager`
 holds only `remotes.d`, and `~/.config/steamos-manager/state.toml` is session state, not device config.
+There is, however, an override *flag*: the daemon takes `--device-config <path>` ("Force the device
+config. This bypasses DMI matching, so use at your own risk"; shown by the installed
+`/usr/lib/steamos-manager --help`). The packaged units run `ExecStart=/usr/lib/steamos-manager -r`
+(system) and `/usr/lib/steamos-manager` (user), so a systemd drop-in on the writable `/etc` overlay could
+pass a Z13 TOML kept outside the image to both (route a2 below).
 The user service exposes `RemoteInterface1.RemoteInterfaces`, which is empty on this Z13 (no remote
 loaded). That is the remote mechanism `remotes.d` feeds. Whether a remote can serve `TdpLimit1`,
 `BatteryChargeLimit1` or `PerformanceProfile1` was not tested and is the one route this measurement
@@ -51,26 +56,26 @@ Valve's public repository (README, `data/interfaces/*.xml`, `src/hardware.rs`, `
 read on the web. Nothing was installed or written. This supersedes the "source was not read" note at
 the top for the schema and remote questions; the rest of the page is still the 2026-11-04 measurement.
 
-**Device config (route a).** `DeviceConfig::load` reads `*.toml` only from `/usr/share/steamos-manager/devices`
-(a compile-time constant; no `/etc` or user override) and returns the first file whose `[[device]]`
+**Device config (routes a and a2).** `DeviceConfig::load` reads `*.toml` only from `/usr/share/steamos-manager/devices`
+(a compile-time constant; no `/etc` or user directory) and returns the first file whose `[[device]]`
 `dmi.sys_vendor` plus `board_name` or `product_name` matches. Schema, from `rog-ally-series.toml` and the
 struct: `[[device]]` (`dmi.*`, `device`, `variant`, `friendly_name`), `[performance_profile]`
 (`platform_profile_name`, `suggested_default`), `[tdp_limit]` (`method = "firmware_attribute"` plus
 `[tdp_limit.firmware_attribute]` `attribute`, `performance_profile`), `[battery_charge_limit]`
 (`method = "acpi_sb"`, `suggested_minimum_limit`), `[gpu_performance]`, `[gpu_power_profile]`, `[fan_speed]`.
-So a `GZ302EA` file is a small TOML, but it sits in the immutable image and the daemon reads it once at
-start. Unknown: whether the Z13's `asus-armoury` attributes satisfy the `firmware_attribute` method as
+So a `GZ302EA` file is a small TOML. Placed in `/usr/share` it sits in the immutable image; kept elsewhere
+and passed with `--device-config` it does not, but the daemon reads it once at start either way. Unknown: whether the Z13's `asus-armoury` attributes satisfy the `firmware_attribute` method as
 the Ally's do (not probed on the device here).
 
 **Remote (the route the 2026-11-04 page left open).** Valve's README documents it: a daemon puts a TOML in
 `/etc/steamos-manager/remotes.d` (or `/usr/share/.../remotes.d`) with a section per interface plus
 `bus_name` and `object_path`; the user daemon relays that interface's D-Bus traffic. `BatteryChargeLimit1`,
 `PerformanceProfile1` and `TdpLimit1` are all on the remotable list (the user daemon has a
-`#[remote]` owner for each). Limits, all from the README: a remote fills holes only and cannot override a
+`#[remote]` owner for each). Limits, from the README except where marked: a remote fills holes only and cannot override a
 local implementation (the Z13 has none, so that is fine); the remote must be on the **system** bus;
-new remote files are not picked up at runtime (a daemon restart or `Manager2.ReloadConfig`, untested here);
+new remote files are not picked up at runtime (the README implies a daemon restart; `Manager2.ReloadConfig` exists in the interface and sends `DaemonCommand::ReadConfig` in the source, but whether it rescans `remotes.d` is unverified);
 the interface is the public one, so `TdpLimit` (u, with `TdpLimitMin`/`TdpLimitMax`), `MaxChargeLevel`
-(i, -1 resets) and `AvailablePerformanceProfiles` / `PerformanceProfile` /
+(i, -1 resets), `SuggestedMinimumLimit` (i, read, on `BatteryChargeLimit1`) and `AvailablePerformanceProfiles` / `PerformanceProfile` /
 `SuggestedDefaultPerformanceProfile` (as, s, s) are what the adapter must serve. Today
 `RemoteInterface1.RemoteInterfaces` is empty and `/etc/steamos-manager/remotes.d` is empty, as measured.
 Not tested live: that needs a running adapter on the system bus, which means installing files, which
@@ -83,6 +88,7 @@ ship its own bus policy and a root systemd unit.
 | | Route | Feasible | Cost and risk |
 |---|---|---|---|
 | a | GZ302EA device TOML in `/usr/share/steamos-manager/devices`, re-applied by post-update repair (#27) | Yes on paper; schema known | Edits the immutable image (`steamos-readonly` off), wiped by every update until repair runs; Steam then writes the sysfs nodes itself and can fight the single state owner (#23); daemon restart needed |
+| a2 | Same TOML kept outside the image, passed by `--device-config` in systemd drop-ins (`/etc/systemd/system/steamos-manager.service.d/` and the user unit equivalent) | Yes: flag is in the installed `--help`; not run | No image edit and survives updates if `/etc` does. But Valve's daemon then writes the sysfs nodes itself and fights the single state owner (#23); the flag bypasses DMI matching (Valve says use at own risk); the drop-in must repeat Valve's `ExecStart` and track it when Valve changes the unit; root and user units both need it; restart needed |
 | b | Shim replacing Valve's service | Yes, but heaviest | Re-implements Wi-Fi, session switching, updates; one bug breaks them. Not recommended |
 | b2 | Remote adapter: small system-bus service plus `/etc/steamos-manager/remotes.d/z13.toml`, serving the three interfaces by calling `z13ctl` and the Z13-Helper state owner | Yes per Valve's documented contract; not yet run | No image edit; Valve's service untouched; adapter is the one state owner, so no fight with #23. Needs a root unit, bus policy and a restart; interface is stable by Valve's compatibility rule |
 | c | Ask Valve for a GZ302EA entry | Cheap, slow | Not in our control; fixes nothing until a SteamOS release |
@@ -94,7 +100,8 @@ Do not close #29 and do not choose (d). Prefer **b2**, the remote adapter, as a 
 1.0: it is the only route that needs no image edit and no replacement of Valve's service, and it keeps
 Z13-Helper as the single state owner. First, behind an explicit owner go-ahead, prove it on the device
 with a throwaway remote serving only `TdpLimit1` (read the QAM, set a value, confirm it reaches
-`z13ctl`, remove it). Keep (a) as the fallback if the relay misbehaves, and file (c) in parallel since
+`z13ctl`, remove it). Keep (a2) as the fallback if the relay misbehaves: it avoids the image edit that (a) needs, at the cost of
+the #23 conflict and a drop-in that tracks Valve's unit (use (a) only if (a2) proves unworkable), and file (c) in parallel since
 it costs nothing. The adapter is not built until the owner chooses.
 
 ## Consequence for #29
@@ -104,5 +111,6 @@ it costs nothing. The adapter is not built until the owner chooses.
 - Decky stays the front end for these controls (as in Phase 13 of the roadmap) until an adapter exists.
 - Owner decisions before any adapter is built:
   1. Allow the remote prototype (installs a root service, bus policy and an `/etc` file), or only ask Valve?
-  2. If the remote fails, is a device TOML in the immutable image acceptable, re-applied after every
-     update through the post-update repair list (#27)?
+  2. If the remote fails, is a `--device-config` drop-in (a2, no image edit) acceptable, accepting that
+     Valve's daemon then writes the sysfs nodes and the #23 state owner must yield for those controls?
+     Or a device TOML in the immutable image (a), re-applied after every update through #27?
