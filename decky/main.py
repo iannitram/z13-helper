@@ -114,9 +114,13 @@ PROFILE_APPLY_TIMEOUT_S = 180
 
 
 def _post_update_env(repo):
-    """Copy of src/post_update_view._env: installed library first, checkout as the fallback."""
-    return ["env", f"PYTHONPATH={host.DECK_HOME}/.local/lib/z13-helper:{repo}/tooling:{repo}/src",
-            f"Z13_REPO={repo}"]
+    """Copy of src/post_update_view._env: the installed library first only when it is complete
+    (LIB/post_update/__main__.py exists), else the checkout alone."""
+    lib = f"{host.DECK_HOME}/.local/lib/z13-helper"
+    path = f"{repo}/tooling:{repo}/src"
+    if os.path.isfile(os.path.join(lib, "post_update", "__main__.py")):
+        path = f"{lib}:{path}"
+    return ["env", f"PYTHONPATH={path}"]
 
 
 def post_update_argv(repo, ack=False):

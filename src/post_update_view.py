@@ -20,11 +20,19 @@ def host_lib() -> str:
     return f"{host.DECK_HOME}/.local/lib/z13-helper"
 
 
+def _lib_complete(lib: str) -> bool:
+    """True when the installed package can run: __main__.py is the last file an older install lacked.
+    A partial LIB/post_update (no __main__) would shadow the checkout's package, so it is left out."""
+    return os.path.isfile(os.path.join(lib, "post_update", "__main__.py"))
+
+
 def _env(repo: str) -> list:
-    """env words for the runner: the installed copy first, the checkout as the fallback (an install
-    from before the package was copied still works), and the checkout named as the source of the
-    packaged files the Bluetooth recipe compares against."""
-    return ["env", f"PYTHONPATH={host_lib()}:{repo}/tooling:{repo}/src", f"Z13_REPO={repo}"]
+    """env words for the runner: the installed copy first when it is complete, else the checkout only."""
+    lib = host_lib()
+    path = f"{repo}/tooling:{repo}/src"
+    if _lib_complete(lib):
+        path = f"{lib}:{path}"
+    return ["env", f"PYTHONPATH={path}"]
 
 
 def tab_argv(repo: str, ack: bool = False) -> list:

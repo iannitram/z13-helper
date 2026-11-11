@@ -9,6 +9,7 @@ import io
 import json
 import logging
 import os
+import shutil
 import sys
 import tempfile
 import types
@@ -757,13 +758,35 @@ class TimelineTests(unittest.TestCase):
         self.assertEqual(len([c for c in fh.calls if c.argv[0] == "logger"]), 1)
 
 
+def _fake_lib(test, complete):
+    """Point host.DECK_HOME at a temp dir whose installed library has (complete) or lacks __main__.py."""
+    import tempfile
+    d = tempfile.mkdtemp()
+    test.addCleanup(shutil.rmtree, d, True)
+    pkg = os.path.join(d, ".local", "lib", "z13-helper", "post_update")
+    os.makedirs(pkg)
+    open(os.path.join(pkg, "__init__.py"), "w").close()
+    if complete:
+        open(os.path.join(pkg, "__main__.py"), "w").close()
+    p = mock.patch.object(m.host, "DECK_HOME", d)
+    p.start()
+    test.addCleanup(p.stop)
+    return os.path.join(d, ".local", "lib", "z13-helper")
+
+
 class PostUpdateTest(unittest.TestCase):
     def test_argv_is_a_list_with_the_repo_on_pythonpath(self):
+        lib = _fake_lib(self, True)
         self.assertEqual(m.post_update_argv("/r", True),
-                         ["env", "PYTHONPATH=/home/deck/.local/lib/z13-helper:/r/tooling:/r/src", "Z13_REPO=/r",
+                         ["env", f"PYTHONPATH={lib}:/r/tooling:/r/src",
                           "python3", "-m", "post_update", "--tab-json", "--ack"])
         with self.assertRaises(ValueError):
             m.post_update_argv("rel")
+
+    def test_partial_installed_library_is_left_out(self):
+        _fake_lib(self, False)
+        self.assertEqual(m.post_update_argv("/r")[:2], ["env", "PYTHONPATH=/r/tooling:/r/src"])
+        self.assertEqual(m.post_repair_argv("/r")[1], "PYTHONPATH=/r/tooling:/r/src")
 
     def test_parse_skips_noise_and_rejects_junk(self):
         self.assertEqual(m.parse_post_update('log\n{"rows": []}'), {"rows": []})
@@ -799,7 +822,8 @@ class PostUpdateTest(unittest.TestCase):
 
 class PostUpdateRepairTest(unittest.TestCase):
     def test_argv_plan_and_run(self):
-        base = ["env", "PYTHONPATH=/home/deck/.local/lib/z13-helper:/r/tooling:/r/src", "Z13_REPO=/r", "python3", "-m", "post_update", "repair", "--json"]
+        lib = _fake_lib(self, True)
+        base = ["env", f"PYTHONPATH={lib}:/r/tooling:/r/src", "python3", "-m", "post_update", "repair", "--json"]
         self.assertEqual(m.post_repair_argv("/r"), base)
         self.assertEqual(m.post_repair_argv("/r", ["kernel_args", "permission:/etc/x"]),
                          base + ["--run", "kernel_args,permission:/etc/x"])

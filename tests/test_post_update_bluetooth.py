@@ -185,17 +185,3 @@ def test_apply_runs_cleanly_through_runner():
     assert result == [("mt7925-bt", "done")]
     for src, dest in BT_FILES:
         assert h.files.get(dest) == SAMPLE_SOURCES[src]
-
-
-def test_default_source_root_prefers_the_repo_hint(tmp_path, monkeypatch):
-    """Run from the installed copy there is no packaging/ beside the module: Z13_REPO names it."""
-    import os
-    from post_update.bluetooth import BT_FILES, default_source_root
-    for src, _ in BT_FILES:
-        f = tmp_path / src
-        f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text("x")
-    monkeypatch.setenv("Z13_REPO", str(tmp_path))
-    assert default_source_root() == str(tmp_path)
-    monkeypatch.setenv("Z13_REPO", str(tmp_path / "nope"))
-    assert default_source_root() != str(tmp_path / "nope")
