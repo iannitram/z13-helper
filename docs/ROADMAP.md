@@ -25,7 +25,7 @@ SteamOS 3.9.5 device pass) closed 2026-11-11 with dated evidence comments; CI on
 PR #206 (#198). Open for 1.0: #30, #61, #66, #73, #80, #86 and #199-#205 (device acceptance, own-release
 update source, Boondock TDP, the release, this docs pass). Owner decisions 2026-11-11: **1.0 ships from
 main, and the post-1.0 branch merges after the tag**; **#66 keeps the 10 s daemon-absent backstop** (§8,
-PR #207). Per-mark device status is in the "on-device check pending" lines below; a mark turns into a
+PR #207, merged 2026-11-11). Per-mark device status is in the "on-device check pending" lines below; a mark turns into a
 dated tick only where an issue comment already shows the evidence.
 
 ### Shipped and working
@@ -196,7 +196,7 @@ the active profile; Max Fans survives a profile change; Decky shows and applies 
 
 ---
 
-## 5. Phase 9 — G-Helper layout port ✅ (2026-10-09; lighting modes and tile icons ✅ #62/#63, CPU Boost ✅ #64; Screen panel: #28, out of 1.0)
+## 5. Phase 9 — G-Helper layout port ✅ (2026-10-09; lighting modes and tile icons ✅ #62/#63, CPU Boost ✅ #64; Screen panel ✅ #28, PR #167, closed 2026-11-05)
 Lift G-Helper's layout (seerge/g-helper, `app/Settings*.cs`, `app/Fans*.cs`) as closely as the Z13 +
 Linux allow. Research spec (2026-10-09) is summarised here; the port keeps its names.
 
@@ -208,7 +208,7 @@ of equal-width tiles.
 |---|---|---|---|
 | 1 | **Performance Mode: &lt;profile&gt;[+][ &lt;W&gt;W]** · right: `CPU 44°C  Fan 2100RPM` | tiles **Silent / Balanced / Turbo / Fans + Power** (94×60, icon bottom-centre) + **profile dropdown** | Silent/Balanced/Turbo = the three built-ins; any other profile highlights **Fans + Power** in the base's colour (G-Helper's custom-mode rule). "+" = custom curve applied, "20W" = custom SPL. |
 | 2 | GPU Mode | — | **hidden** (`NoGpu()` is true for GZ302 in G-Helper too) |
-| 3 | Laptop Screen | Auto / 60 Hz / 120 Hz + OD | ⏳ later: refresh rate via KScreen/`kscreen-doctor`, overdrive via `z13ctl paneloverdrive`. Panel is 48–180 Hz; see Phase 13. |
+| 3 | Laptop Screen | Auto / 60 Hz / 120 Hz + OD | ✅ desktop refresh-rate choice with rollback (#28, PR #167, 2026-11-05; code in `src/display_modes.py`). Overdrive via `z13ctl paneloverdrive` is not part of that change. Panel is 48–180 Hz; see Phase 13. |
 | 4 | **Rear Light** | mode combo · colour | Z13-only in G-Helper (`HasRearLight() == IsZ13()`); maps to `z13ctl apply --device lightbar` |
 | 5 | **Laptop Keyboard** | brightness **Off / Low / Medium / High** · lighting mode combo · colour · Extra (gear) | per-device writes (today's fix) |
 | 6 | **Battery Charge Limit: 80 %** · right: `Charge: 86 %` | slider + **100 %** pill | existing semantics (apply on release) |
@@ -315,11 +315,11 @@ handled by the #66 decision below.
 
 **#66 decision (owner, 2026-11-11): keep the branch as a 10 s backstop.** Device evidence (#66 comments,
 2026-11-06; z13ctl 1.4.2, SteamOS 3.9.5, kernel 7.2.7): the daemon re-applies the saved curve after each of
-8 resumes and after an outside `platform_profile` write, in under a second, without touching the platform
-profile. The watchdog's curve-drop branch therefore waits `DROP_GRACE_S` (10 s) before it acts, respects the
+8 resumes (about 3 s after wake) and after an outside `platform_profile` write (in under a second), without
+touching the platform profile. The watchdog's curve-drop branch therefore waits `DROP_GRACE_S` (10 s) before it acts, respects the
 post-resume grace window, and rechecks intent and curve mode before writing (PR #181 and #194, merged
-2026-11-06); it still covers a stopped daemon or an older z13ctl. PR #207 (open) rewrites the stale code
-comment and adds the test for that behaviour. A Desktop↔Game Mode switch and #80's resume hook
+2026-11-06); it still covers a stopped daemon or an older z13ctl. PR #207 (merged 2026-11-11) rewrote the stale code
+comment and added the test for that behaviour. A Desktop↔Game Mode switch and #80's resume hook
 (`z13-profile resume-owner`, PR #196) are tracked on #66 and #80. Stall, frozen-tach and auto-stall recovery are
 independent of this decision.
 
@@ -570,7 +570,7 @@ Not issues (checked, nothing to do): the RDNA1/2 dedicated-GPU resume fix (Strix
 | 16c side-button gestures | #131 | #130 |
 | 16d ADR: shared touch UI ✅ | #132 | — |
 | 16e touch-first layout | #133 | #132 |
-| 16f timeline store (`src/timeline.py`; store + install/Decky/steamos writers done, post-update host wiring pending) | #134 | #109 |
+| 16f timeline store (`src/timeline.py`; store + install/Decky/steamos writers done, post-update host wiring done via `make_timeline_recorder` in `tooling/post_update/driver.py`) | #134 | #109 |
 | 16g timeline view | #135 | #134 |
 
 - **16e (#133) Where:** `src/design_tokens.json`, `src/theme.py`, `src/dashboard_ui.py`, `src/fans_window.py`, `decky/src/tokens.ts` (and token consumers in `decky/src/`), `MAP/README.md`, `MAP/decky.md` (no `PyQt6-WebEngine`, local web bridge, or `@decky/ui` DOM shim).
