@@ -39,13 +39,13 @@ dated tick only where an issue comment already shows the evidence.
 | Installer | ✅ `install.sh` / `--repair` + `install_check.py verify` (§9a); Repair button in the Updates panel (`./install.sh --repair` itself ran green on the device 2026-11-06 and 2026-11-07, #75; the button's on-device check pending, #201) |
 | Lightbar wedge | ✅ auto-recovery via `z13-lightbar-reset.service` + polkit rule (§3; reset and daemon restart found necessary on-device 2026-10-11; end-to-end recovery check pending, #61) |
 | App version | **0.5.1** (2026-10-30; `CHANGELOG.md`, desktop/Decky/AppStream aligned) |
-| Boondock | Earlier hardware/profile-hook checks: quiet + 20/30/40 W + screen 35 %. The Docker/VM steps are gone and `BG_SERVICES` names the user `llama-swap` unit (#65, closed 2026-11-01); a current device run of the profile is not recorded. |
+| Boondock | Earlier hardware/profile-hook checks: quiet + 20/30/40 W + screen 35 % (the built-in TDP is now 28/32/45 W, PR #213, #203; not re-run on the device). The Docker/VM steps are gone and `BG_SERVICES` names the user `llama-swap` unit (#65, closed 2026-11-01); a current device run of the profile is not recorded. |
 
 ### Open bugs and test debt (updated 2026-10-30)
 - **#60** no-curve `NameError`: fixed via PR #83. Current repair PR CI is green; the old main-CI blocker no longer applies.
 - **#16** Decky Profile dropdown showing a state that never applied: ✅ fixed by PR #49 (`decky/src/profileSwitch.ts`), merged 2026-10-26; the on-device check is part of #61.
 - **#58** flaky and environment-dependent tests: closed 2026-11-02 (PR #149). Ten tests that still failed off-device in CI (session identity, Decky DMI write gate) were fixed by PR #206 (#198, 2026-11-11).
-- **#86** fan/power regression: the individual fixes (#89, #92, #93, #95, #97) merged 2026-10-30; root firmware causality and broader device verification remain open (Turbo power-state evidence 2026-11-06 is on the issue; the Boondock TDP clamp is #203). See the release record for observed behaviour and rejected workarounds.
+- **#86** fan/power regression: the individual fixes (#89, #92, #93, #95, #97) merged 2026-10-30; root firmware causality and broader device verification remain open (Turbo power-state evidence 2026-11-06 is on the issue; the Boondock TDP floors and clamp are PR #213, #203, device comparison still owed). See the release record for observed behaviour and rejected workarounds.
 - **#30** the reported 43 GB memory spike: open (investigation). Source audit and preventive trace/RSS bounds are recorded in [fan-watchdog-memory.md](fan-watchdog-memory.md); no completed 24-hour current-identity sampler result or leak attribution is claimed.
 - Also merged 2026-10-26: PR #3, `tooling/z13_gamemode_report.py` (reads a Game Mode session back from local logs).
 
@@ -131,8 +131,10 @@ Remaining:
   pinned if ON) and falls back to the old curve logic. Backup: `z13-fan-resume.sh.bak-20261009`.
   Repo copy: `packaging/host/systemd/system/z13-fan-resume.sh`.
 - ✅ **Boondock script cleanup** (#65, closed 2026-11-01). The Docker/VM steps and the system `llama-swap`
-  unit are gone; `BG_SERVICES` points at the user unit (`systemctl --user`). Its built-in 20/30/40 W is
-  below the firmware floors on kernel 7.2 and is clamped (#203).
+  unit are gone; `BG_SERVICES` points at the user unit (`systemctl --user`). Its built-in TDP moved from 20/30/40 W (below the firmware floors on kernel 7.2) to the armoury
+  floors 28/32/45 W (`src/profiles.py` `BOONDOCK_TDP`, `tooling/boondock` `TDP_PL1`), and every TDP write is
+  clamped by the app (`power_range.fit_tdp`); PR #213, merged 2026-11-11, Refs #203. The `z13ctl tdp --get`
+  comparison on the device is still owed on #203.
 - ✅ written 2026-10-12; end-to-end on-device check pending (#61) **Lightbar wedge auto-recovery.** Root oneshot
   `z13-lightbar-reset.service` → `/etc/systemd/system/z13-lightbar-reset.sh` finds the USB device by
   ID `0b05:18c6` (never by port) and writes `authorized` 0 → 1; polkit rule
@@ -165,7 +167,7 @@ non-hardware effects.
   as the `z13-profile` CLI, shell-able from the Decky backend. Store: `~/.config/z13-helper/profiles.json`.
 - **Built-ins** (G-Helper names; mirror the host scripts so nothing regresses): Silent (= `z13-cool`), Balanced
   (= `z13-balanced`, longevity curve), Turbo (= `z13-max`, aggressive curve), Boondock (quiet,
-  20/30/40 W, hooks `boondock on|off`). Built-ins can be edited (curve/TDP/…) but not deleted.
+  28/32/45 W since PR #213, was 20/30/40 W, hooks `boondock on|off`). Built-ins can be edited (curve/TDP/…) but not deleted.
 - **Apply engine** = principle 4; each step independent; results surface per step in the status bar.
   Max Fans ON → the profile's curve is saved as `saved_curve`, 100 % stays pinned.
 - **Migration:** first run seeds the store and takes the active name from
@@ -583,6 +585,7 @@ Installed/pinned versions as of **2026-10-12**; SteamOS, kernel and Decky rows u
 
 | Component | Repo / source | Installed here | Latest | Watch for |
 |---|---|---|---|---|
+| Z13-Helper (this project) | `iannitram/z13-helper` releases | **0.5.1** (installed app version) | no v1.0.0 published yet | The Updates panel lists this project's own releases as an update source, neutral until v1.0.0 exists or when GitHub is unreachable (`src/update_watch.py`, PR #209, merged 2026-11-11, Refs #202). Code merged; the on-device check of the Updates panel is pending (#202). |
 | **z13ctl** (backend) | `dahui/z13ctl` releases | **1.4.2** (daemon `--no-button`; 1.1.6 kept as rollback) | **1.4.2** (2026-10-09; still the latest 2026-10-26; ran on kernel 7.2.7 in the #74 pass, 2026-11-06) | a release tested on 7.2 / SteamOS 3.9; hard-lock reports after 1.4.x; asus-armoury path on Valve kernels; `subscribe` API changes (§8) |
 | Decky Loader | `SteamDeckHomebrew/decky-loader` | **3.3.1** | **3.3.0** (2026-10-18; 3.3.1 is installed, newest release not re-checked 2026-11-11; **minimum** since the 2026-10-13 Steam client, #77) | `@decky/api`/`@decky/ui` breaking changes; `_root` flag policy; the new unvetted-plugin warning |
 | asusctl | `OpenGamingCollective/asusctl` | not installed (reference) | 6.5.0 | GZ302 Aura/LampArray support; boot-hang race with hid-asus (#718) — reason we don't run asusd |

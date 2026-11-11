@@ -11,7 +11,7 @@ The approved Musts and Won'ts below are unchanged. #60 is fixed (PR #83), #58 cl
 and #23 and #27 closed 2026-11-04 with their code merged; their on-device acceptance is tracked in #199 (M6)
 and #200 (M7). #74 and #75 (the SteamOS 3.9.5 pass) closed 2026-11-11 with dated device evidence on the issues.
 Still open for 1.0: #30, #61, #66, #73, #80, #86, and #199-#204 (acceptance, own-release update source,
-Boondock TDP, the release). Per-release evidence is in [`docs/releases/0.5.1.md`](docs/releases/0.5.1.md);
+Boondock TDP, the release). Code merged 2026-11-11: own-release update source (PR #209, #202) and Boondock TDP floors/clamp (PR #213, #203); their device checks are still owed. Per-release evidence is in [`docs/releases/0.5.1.md`](docs/releases/0.5.1.md);
 later evidence is on the issues. Non-zero/cached RPM or curve-enabled state alone is insufficient evidence
 of fan response.
 

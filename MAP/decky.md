@@ -1,6 +1,6 @@
 # Decky / Game Mode code map
 
-Refreshed 2026-11-11 from origin/main c842be6. #153 (state owner) and #154 (post-update repair) are on main (bf7a478 and bf6e412). Open PRs are not reflected; #207 (fan-watchdog comment and test) merged 2026-11-11. This describes the Decky source on `main` as of that commit. It is not a claim that all Game Mode behavior has been verified on the device; dated device evidence (TDP and charge-limit writes in Game Mode, 2026-11-07) is on #74. The current code map is [`README.md`](README.md); the pending verification checklist is in [`docs/ROADMAP.md`](../docs/ROADMAP.md).
+Refreshed 2026-11-11 from origin/main 8724767. #153 (state owner) and #154 (post-update repair) are on main (bf7a478 and bf6e412). Open PRs are not reflected; #207 (fan-watchdog comment and test) merged 2026-11-11. This describes the Decky source on `main` as of that commit. It is not a claim that all Game Mode behavior has been verified on the device; dated device evidence (TDP and charge-limit writes in Game Mode, 2026-11-07) is on #74. The current code map is [`README.md`](README.md); the pending verification checklist is in [`docs/ROADMAP.md`](../docs/ROADMAP.md).
 
 ## Runtime and data flow
 
