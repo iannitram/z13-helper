@@ -6,7 +6,7 @@ Everything you need to work here is in this repo. The full pipeline and rules (`
 2. **Work from an issue.** Take one that is not `in-progress` and not blocked; add `in-progress` before you start. Its body is your brief; an Easy issue has a "Qwen brief" section with the expected results and the code map snippet.
 3. **Your own platform's issues first.** Mac, Windows and Linux all matter: say which you built on.
 4. **Check that it builds**, then open the PR. CI and a review by another satellite with another model do the rest.
-5. **Label the PR** `by:<machine>` and `model:<model>`, and write `Closes #N`.
+5. **Label the PR** `by:<machine>` and `model:<model>`, and write `Closes #N`, or `Refs #N` when the issue needs a device check (`needs-owner-device`): such an issue closes only after the dated evidence is on it.
 6. **A failed job** gets a comment on the issue saying what happened, and the issue moves up one size (Easy -> Medium -> Hard).
 7. **Use the project's words** from `GLOSSARY.md` and the decisions in `docs/adr/`.
 8. **No private details** in code, commits or PR text: no names, e-mail addresses, home paths or machine names. Commit as the no-reply identity.
@@ -18,6 +18,9 @@ Cold-start orientation for Claude Code working in this repo. Read this first.
 **Current repair release: 0.5.1 (2026-10-30).** See [`docs/releases/0.5.1.md`](docs/releases/0.5.1.md)
 for PR dependencies, automated checks, device evidence and remaining verification. Desktop,
 Decky package and Flatpak AppStream versions must agree. This release does not complete the 1.0 spec.
+That record is a snapshot at 0.5.1 (it still says app profiles are not mirrored; they are, since #23
+closed 2026-11-04). Later status is in the "2026-11-11 update" in `docs/ROADMAP.md` §1 and on the
+issues; 1.0 (#204) ships from `main`, and the post-1.0 branch merges after the tag.
 
 **Renamed 2026-10-15 (v0.5.0):** Z13 Controller → **Z13-Helper** (after G-Helper). Flatpak
 `io.github.z13.Controller` → `io.github.iannitram.Z13Helper`, `z13-controller.service` →
@@ -69,8 +72,8 @@ tooling/                           ← reference copies of host scripts (boondoc
 packaging/host/                    ← the system files the app depends on (install.sh installs the
   systemd/{user,system}/, polkit/,    ones in tooling/install_check.py's MANIFEST; udev rules + perms
   udev/, asusd/, xdg/                 unit are z13ctl setup's, reference only here)
-CHANGELOG.md                       ← per-release changes (app version: APP_VERSION in src/dashboard_ui.py)
-tests/                             ← pytest suite (`python3 -m pytest`); decky/tests is unittest
+CHANGELOG.md                       ← per-release changes (app version: APP_VERSION in src/versions.py)
+tests/                             ← pytest suite (see "Running the tests"); decky/tests is unittest
 decky/                             ← Game Mode QAM plugin (installs to ~/homebrew/plugins/z13-helper)
 ```
 
@@ -91,7 +94,7 @@ decky/                             ← Game Mode QAM plugin (installs to ~/homeb
   `/sys/firmware/acpi/platform_profile`.
 - Profile apply holds shared Max Fans enforcement off during hardware writes and publishes it on
   only after the intended full-speed curve succeeds. Queued recovery rechecks current intent.
-  App profiles and z13ctl named profiles remain separate (#23); fan-only applies probe and safely
+  App profiles are mirrored into z13ctl named profiles (#23, closed 2026-11-04); fan-only applies probe and safely
   clear stale backend default-`custom` TDP before activating curves. Range discovery uses host-side
   permission checks and range metadata, never live Armoury `current_value` reads.
 
@@ -123,6 +126,18 @@ toggles the window; the watcher only steps in when the app isn't running (a pres
 `z13-helper.service` and shows it). The Decky plugin also restarts a missing desktop app in Desktop
 Mode (not after a deliberate Quit). Note the Decky backend runs as **deck**, not root (`"_root"` in
 `plugin.json` isn't Decky's `"root"` flag). Full write-up: [`docs/plan/Phase_6.md`](docs/plan/Phase_6.md).
+
+## Running the tests
+
+The host's Python 3.14 has no `pytest`, so `python3 -m pytest` fails there with "No module named pytest".
+Use a virtualenv that has it (CI installs only `pytest`; the few tests that need PyQt6 skip without it),
+with a throwaway `HOME` and the offscreen Qt platform:
+
+```
+VENV=$(mktemp -d)/z13-venv; python3 -m venv "$VENV"; "$VENV/bin/pip" install pytest      # once
+HOME=$(mktemp -d) QT_QPA_PLATFORM=offscreen "$VENV/bin/python" -m pytest -q               # from the repo root
+python3 -m unittest discover -s decky/tests                                              # Decky backend, stdlib only
+```
 
 ## Deploy + verify
 

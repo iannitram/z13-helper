@@ -340,7 +340,7 @@ service and plugin.
 | Screen brightness | KDE PowerDevil `org.kde.ScreenBrightness` over D-Bus, else `/sys/class/backlight` |
 | One app instance | file lock + Unix socket in the Flatpak's runtime folder |
 | Shared state | `~/.config/z13-helper/` (`profiles.json`, `max-fans.json`, `config.json`) |
-| Backend state | z13ctl's independent `~/.local/state/z13ctl/state.json`; named-profile/event integration remains #23 |
+| Backend state | z13ctl's independent `~/.local/state/z13ctl/state.json`; app profiles are mirrored into its named profiles and frontends follow its events (#23, closed 2026-11-04) |
 | Logs | `~/.local/state/z13-helper/` (`app.log`, `crashes/`, `fan-trace-*.log`, install logs) |
 
 ```
