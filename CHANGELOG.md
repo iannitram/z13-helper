@@ -8,6 +8,7 @@ the device but not yet verified on the Z13. Plan and status: `docs/ROADMAP.md`.
 
 ## Pipeline
 
+- 2026-11-11 Done (#202): this project's own releases are an update source in `src/update_watch.py` (neutral until v1.0.0 exists or when GitHub is unreachable), with tests for newer, equal, none and offline. ROADMAP §11 row marked done; the on-device Updates panel check is still open.
 - 2026-11-11 Docs reconciled with the tracker and the device evidence (#205): PIPELINE notes, SPEC status paragraph (Musts and Won'ts unchanged), ROADMAP status marks and §11 versions, both code-map headers and stale rows, AGENTS.md, tests/README.md. The EPP ADR was renumbered 0002 → 0003 (two files were numbered 0002). Owner decisions 2026-11-11: 1.0 ships from main and the post-1.0 branch merges after the tag; #66 keeps its 10 s daemon-absent backstop.
 - 2026-11-11 Docs follow-up (#205): own-release update source (PR #209, #202) and Boondock TDP 28/32/45 W with clamped writes (PR #213, #203) recorded as merged, device checks still owed; ROADMAP §11 row for this project's releases. Post-update armoury fan-attribute check bug filed as #216.
 - 2026-11-11 CI on main fixed (#198, PR #206): ten tests no longer depend on the session user or the machine model. #74 and #75 closed with device evidence; issues #199-#205 filed (acceptance, own-release update source, Boondock TDP, release, docs).
