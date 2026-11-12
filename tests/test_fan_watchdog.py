@@ -1151,3 +1151,66 @@ def test_queued_stalled_recovery_skips_when_suspended(env):
     assert call_names(ns.ctl) == ["rewrite_profile", "set_fancurve_pwm"]
     assert not runner.pending
 
+
+
+# ----------------------------------------------------------------------
+# Rule 1b: a goal runner holds the lease (#125), curve dropped
+# ----------------------------------------------------------------------
+
+GOAL_SP = {"tdp": {"pl1": 40, "pl2": 50, "pl3": 60},
+           "fan_curve": [[t, p] for t, p in zip((30, 40, 50, 60, 70, 80, 90, 100),
+                                                (10, 20, 30, 40, 60, 80, 90, 100))]}
+
+
+def test_dropped_curve_reasserts_goal_setpoint(env):
+    """While a goal is active, a dropped curve gets the goal's setpoint back,
+    after the same daemon grace, as profile rewrite -> goal TDP -> goal curve."""
+    ns = env.make(enabled=False, fans=(2400, 2500))
+    ns.wd._goal_setpoint = lambda: GOAL_SP
+    msgs = run(ns, DROP_TICKS)
+    assert msgs[:-1] == [None] * (DROP_TICKS - 1)
+    assert "Goal setpoint re-asserted" in msgs[-1]
+    assert call_names(ns.ctl) == ["rewrite_profile", "apply_tdp", "set_fancurve_pwm"]
+    assert ns.ctl.calls[1][1] == GOAL_SP["tdp"]
+    assert ns.ctl.calls[2][1][0] == [30, round(10 * 255 / 100)]
+    assert ns.ctl.calls[2][1][-1] == [100, 255]
+
+
+def test_dropped_curve_without_goal_keeps_auto_behaviour(env):
+    """No goal (or the reader fails): the dropped-curve path is not taken."""
+    ns = env.make(enabled=False, fans=(2400, 2500))
+
+    def broken():
+        raise OSError("lease unreadable")
+
+    ns.wd._goal_setpoint = broken
+    assert run(ns, DROP_TICKS * 2) == [None] * (DROP_TICKS * 2)
+    assert ns.ctl.calls == []
+
+
+def test_goal_reassert_skips_when_runner_stopped_before_it_ran(env):
+    ns = env.make(enabled=False, fans=(2400, 2500))
+    current = {"sp": GOAL_SP}
+    ns.wd._goal_setpoint = lambda: current["sp"]
+    jobs = []
+    runner = FanWatchdogRunner(ns.wd, lambda label, fn: jobs.append(fn))
+    for _ in range(DROP_TICKS):
+        ns.clock.advance(TICK)
+        runner.tick()
+    assert len(jobs) == 1
+    current["sp"] = None   # a profile switch stopped the goal runner meanwhile
+    msg = jobs[0]()
+    assert "runner stopped" in msg
+    assert ns.ctl.calls == []
+
+
+def test_stall_recovery_restores_goal_setpoint_not_profile_curve(env):
+    """A stalled custom curve while a goal is active: rewrite, goal TDP, goal curve."""
+    ns = env.make(curve=HIGH_FROM_40, enabled=True, temp=60.0, fans=(0, 0), tdp={"pl1": 20, "pl2": 25, "pl3": 30})
+    ns.wd._goal_setpoint = lambda: GOAL_SP
+    msgs = [m for m in run(ns, STALL_TICKS + 1) if m]
+    assert msgs, "expected a stall recovery"
+    names = call_names(ns.ctl)
+    assert names[:3] == ["rewrite_profile", "apply_tdp", "set_fancurve_pwm"]
+    assert ns.ctl.calls[1][1] == GOAL_SP["tdp"]
+    assert ns.ctl.calls[2][1][-1] == [100, 255]

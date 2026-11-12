@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import threading
+import time
 
 import host
 from z13ctl_client import Z13CtlClient, Z13CtlError
@@ -121,6 +122,97 @@ def run(argv, timeout=30, *, as_deck=False, input=None):
             return host.Result(1, str(exc), False)
 
 
+# ----------------------------------------------------------------------
+# Goal lease (Phase 15c, #125): exactly one goal runner writes the fan curve
+# and TDP at a time. The record lives beside profiles.json so both frontends
+# (desktop app, Decky backend; both run as the same user) see the same file.
+# Heartbeats are CLOCK_MONOTONIC seconds, which every process on the machine
+# shares; a heartbeat in the future (a reboot reset the clock) or older than
+# GOAL_LEASE_TTL_S is stale and may be taken over.
+# ----------------------------------------------------------------------
+
+GOAL_LEASE_TTL_S = 30.0
+GOAL_LEASE_NAME = 'goal-runner.json'
+_now = time.monotonic   # the lease clock; tests replace it
+
+
+def _goal_lease_path():
+    import profiles
+    return os.path.join(os.path.dirname(profiles.STORE_PATH), GOAL_LEASE_NAME)
+
+
+def _read_goal_lease():
+    try:
+        with open(_goal_lease_path(), encoding='utf-8') as f:
+            rec = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    return rec if isinstance(rec, dict) else {}
+
+
+def _write_goal_lease(rec):
+    import profiles
+    path = _goal_lease_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    profiles._atomic_write_text(path, json.dumps(rec, sort_keys=True) + '\n')
+
+
+def _goal_lease_fresh(rec, now):
+    hb = rec.get('heartbeat')
+    if isinstance(hb, bool) or not isinstance(hb, (int, float)):
+        return False
+    return 0 <= now - hb <= GOAL_LEASE_TTL_S
+
+
+def goal_lease_acquire(owner, now):
+    """Take the goal lease for `owner`. Returns the previous record (a dict,
+    possibly empty; its setpoint lets a successor continue), or None while
+    another runner holds a fresh lease."""
+    with transaction():
+        rec = _read_goal_lease()
+        holder = rec.get('owner')
+        if holder not in (None, owner) and _goal_lease_fresh(rec, now):
+            return None
+        _write_goal_lease({'owner': owner, 'heartbeat': now, 'setpoint': rec.get('setpoint')})
+        return rec
+
+
+def goal_lease_publish(owner, now, setpoint):
+    """Renew the lease and publish the setpoint the holder last wrote. False
+    (nothing written) when `owner` no longer holds it."""
+    with transaction():
+        rec = _read_goal_lease()
+        if rec.get('owner') != owner:
+            return False
+        hb = rec.get('heartbeat')
+        if (rec.get('setpoint') == setpoint and isinstance(hb, (int, float))
+                and 0 <= now - hb < GOAL_LEASE_TTL_S / 3):
+            return True   # still fresh: spare the disk a write every tick
+        _write_goal_lease({'owner': owner, 'heartbeat': now, 'setpoint': setpoint})
+        return True
+
+
+def goal_lease_release(owner):
+    """Give the lease up; the last setpoint stays for a successor's handover."""
+    with transaction():
+        rec = _read_goal_lease()
+        if rec.get('owner') == owner:
+            _write_goal_lease({'owner': None, 'heartbeat': None, 'setpoint': rec.get('setpoint')})
+
+
+def goal_setpoint(now=None):
+    """The active goal runner's setpoint ({tdp, fan_curve, ...}), or None when
+    no runner holds a fresh lease. Read by slider pushes and fan recovery."""
+    rec = _read_goal_lease()
+    if rec.get('owner') is None or not _goal_lease_fresh(rec, _now() if now is None else now):
+        return None
+    sp = rec.get('setpoint')
+    if not isinstance(sp, dict) or not isinstance(sp.get('tdp'), dict) \
+            or not isinstance(sp.get('fan_curve'), list):
+        return None
+    return sp
+
+
 def _read_saved_brightness():
     paths = [
         os.path.expanduser("~/.config/z13-helper/config.json"),
@@ -227,6 +319,10 @@ def _push_field(profile, field, *, devices=None, before=None):
         except Exception as e:
             logger.warning("timeline recording failed for %s: %s", field, e)
 
+    if field in ('tdp', 'fan_curve') and value and goal_setpoint() is not None:
+        # A goal runner owns TDP and the curve while it holds the lease; the
+        # edit is stored and becomes the goal's start point on its next apply.
+        return 'Saved; the goal runner controls TDP and fan curve'
     if field == 'tdp' and value:
         try:
             result = c.apply_tdp(value)
@@ -350,11 +446,13 @@ def set_platform_profile(profile, *, z13ctl=None, timeout=None):
 
 
 @serialized
-def recover_performance():
+def recover_performance(setpoint=None):
     """Reapply the current named performance state, without hooks or lighting.
 
     None selects the older watchdog sequence. Named recovery keeps its target
     throughout the base rewrite instead of accidentally selecting a built-in.
+    `setpoint` (a goal runner's {tdp, fan_curve}) replaces the profile's fixed
+    TDP and curve, so recovery re-asserts the goal instead of undoing it.
     """
     import profiles
     import max_fans_state
@@ -367,6 +465,9 @@ def recover_performance():
         if p is None:
             raise ValueError('No active profile for fan recovery')
         p = dict(p)
+        if setpoint:
+            p['tdp'] = dict(setpoint['tdp'], force=bool((p.get('tdp') or {}).get('force')))
+            p['fan_curve'] = [list(pt) for pt in setpoint['fan_curve']]
         if max_fans_state.is_enabled():
             p['fan_curve'] = [[t, 100] for t in profiles.MAX_FAN_TEMPS]
         client.activate_app_profile(p)

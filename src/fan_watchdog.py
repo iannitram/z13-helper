@@ -108,13 +108,19 @@ class FanWatchdog:
                  so the recovery happens on the first tick it says yes.
     active_tdp   () -> profiles.json tdp dict or None: the active profile's
                  TDP, re-applied after an auto-mode profile rewrite.
+    goal_setpoint () -> {"tdp", "fan_curve" [[temp, pct]...]} or None: the
+                 setpoint a goal runner (src/goal_runner.py, #125) holds the
+                 lease for. While it returns one, a dropped curve is
+                 re-asserted to the goal's setpoint (after DROP_GRACE_S, like
+                 Max Fans) and every recovery restores the goal's TDP and
+                 curve instead of the profile's fixed ones.
     clock        monotonic seconds; injectable for tests.
     trace        optional FanTrace: gets every tick's readings and decisions.
     """
 
     def __init__(self, sensors, fans, *, max_fans_on, suspended=lambda: False,
                  may_act=lambda: True, active_tdp=lambda: None, clock=time.monotonic,
-                 trace=None):
+                 trace=None, goal_setpoint=lambda: None):
         self.sensors = sensors
         self.fans = fans
         self._max_fans_on = max_fans_on
@@ -122,6 +128,7 @@ class FanWatchdog:
         self._auto_modes = None   # per-fan pwm modes when the auto stall began
         self._may_act = may_act
         self._active_tdp = active_tdp
+        self._goal_setpoint = goal_setpoint
         self._clock = clock
         self.trace = trace
         self._stall_ticks = 0
@@ -273,6 +280,26 @@ class FanWatchdog:
             return self._dispatch(True, lambda msg: msg.replace(
                 "Fans were stalled at 0 RPM;", "Max Fans re-applied after a profile change;"),
                 cancel_if_max_fans_drop=True)
+
+        # 1b. Dropped curve while a goal runner holds the lease -> re-assert
+        #     the goal's setpoint, with the same grace and profile rewrite.
+        goal = self._goal() if enabled is False else None
+        if goal is not None:
+            self._stall_ticks = 0
+            if self._dropped_since is None:
+                self._dropped_since = now
+                self._event(f"WAIT dropped curve with a goal active (daemon gets {DROP_GRACE_S:.0f}s)")
+                return None
+            if now - self._dropped_since < DROP_GRACE_S or now < self._grace_until:
+                return None
+            if not self._ready("dropped curve"):
+                return None
+            self._last_reapply = now
+            self._grace_until = now + RETRY_S
+            self._event("ACT dropped curve with a goal active")
+            if self._defer is None:
+                return self._reassert_goal()
+            return self._defer_run(self._reassert_goal)
 
         self._dropped_since = None
 
@@ -454,6 +481,41 @@ class FanWatchdog:
             return self._recover_auto(temp, max_on, modes)
         return self._defer_run(lambda: self._recover_auto(temp, max_on, modes))
 
+    def _goal(self):
+        """The goal runner's setpoint, or None (a failing reader is None)."""
+        try:
+            sp = self._goal_setpoint()
+        except Exception:  # noqa: BLE001
+            return None
+        if not isinstance(sp, dict) or not isinstance(sp.get("tdp"), dict) \
+                or not isinstance(sp.get("fan_curve"), list) or len(sp["fan_curve"]) != 8:
+            return None
+        return sp
+
+    @authority.serialized
+    def _reassert_goal(self) -> str:
+        """Platform-profile rewrite, then the goal runner's TDP and curve.
+
+        Re-reads the setpoint under the lock: a runner that stopped or a curve
+        restored since the decision skips the write."""
+        if self._suspended():
+            return "Goal recovery skipped; fan watchdog is suspended"
+        sp = self._goal()
+        if sp is None:
+            return "Goal recovery skipped; the goal runner stopped"
+        if self.sensors.custom_fan_curve_enabled() is not False:
+            return "Goal recovery skipped; the curve came back"
+        named = authority.recover_performance(setpoint=sp)
+        if named is not None:
+            return named.replace("Fans: named profile re-applied", "Goal setpoint re-asserted")
+        try:
+            self.fans.rewrite_profile()
+            self.fans.apply_tdp(sp["tdp"])
+            self.fans.set_fancurve_pwm(_pct_to_pwm(sp["fan_curve"]))
+        except Exception as e:  # noqa: BLE001
+            return f"Goal recovery failed: {e}"
+        return "Goal setpoint re-asserted after a curve drop"
+
     def _fan_modes(self):
         read = getattr(self.sensors, "fan_curve_modes", None)
         return read() if read else None
@@ -481,7 +543,8 @@ class FanWatchdog:
             or 1 in (now_modes or ())
         ):
             return "Auto fan recovery skipped; fan state changed before it ran"
-        named = authority.recover_performance()
+        goal = self._goal()
+        named = authority.recover_performance(setpoint=goal)
         if named is not None:
             return named
         head = f"Fans stopped in auto mode at {temp:.0f} °C; profile rewritten"
@@ -490,6 +553,10 @@ class FanWatchdog:
         except Exception as e:  # noqa: BLE001
             return f"Fan recovery failed: {e}"
         try:
+            if goal is not None:
+                self.fans.apply_tdp(goal["tdp"])
+                self.fans.set_fancurve_pwm(_pct_to_pwm(goal["fan_curve"]))
+                return f"{head}, goal setpoint re-asserted"
             tdp = self._active_tdp()
             if not tdp:
                 return head
@@ -512,7 +579,8 @@ class FanWatchdog:
             self._auto_zero_since = None
             self._holding = False
             return "Fan recovery skipped; fan watchdog is suspended"
-        named = authority.recover_performance()
+        goal = None if max_on else self._goal()
+        named = authority.recover_performance(setpoint=goal)
         if named is not None:
             return named
         problems = []
@@ -532,11 +600,18 @@ class FanWatchdog:
             return f"{text}; {'; '.join(problems)}" if problems else text
 
         try:
-            curve = None if max_on else self.sensors.custom_fan_curve_points()
+            curve = None if max_on else (_pct_to_pwm(goal["fan_curve"]) if goal is not None
+                                         else self.sensors.custom_fan_curve_points())
             if max_on and not self._max_fans_on():
                 return "Max Fans recovery cancelled; Max Fans is off"
             self.fans.rewrite_profile()
-            restore("restore_tdp")
+            if goal is not None:
+                try:
+                    self.fans.apply_tdp(goal["tdp"])
+                except Exception as e:  # noqa: BLE001
+                    problems.append(f"goal TDP: {e}")
+            else:
+                restore("restore_tdp")
             if max_on:
                 # The flag can change while the profile/TDP restoration runs.
                 # Recheck at the last point before the irreversible 100% write.
@@ -552,6 +627,11 @@ class FanWatchdog:
             return result("Fans were stalled at 0 RPM; profile and curve re-applied")
         except Exception as e:  # noqa: BLE001
             return f"Fan recovery failed: {e}"
+
+
+def _pct_to_pwm(points):
+    """[[temp, pct]...] -> [[temp, pwm 0-255]...] (set_fancurve_pwm's form)."""
+    return [[int(t), round(max(0, min(100, int(p))) * 255 / 100)] for t, p in points]
 
 
 class FanWatchdogRunner:

@@ -41,6 +41,9 @@ import timeline
 import update_watch
 import hw_signals
 from fan_watchdog import FanTrace, FanWatchdog, FanWatchdogRunner
+from goal_runner import GoalRunner, GoalRunnerDriver, ControllerWriter, sensor_readings
+import fps_source
+import power_range
 from display_modes import RefreshControl
 from screen_brightness import ScreenBrightness, MIN_PERCENT
 from apply_worker import ApplyWorker
@@ -139,9 +142,19 @@ class DashboardUI(QMainWindow):
                                          may_act=lambda: not self.control._pending
                                          and self.control.writes_allowed(),
                                          active_tdp=lambda: self.control.active().get("tdp"),
-                                         trace=self._make_fan_trace())
+                                         trace=self._make_fan_trace(),
+                                         goal_setpoint=authority.goal_setpoint)
         self._fan_runner = FanWatchdogRunner(self._fan_watchdog, self.worker.submit)
         self.worker.done.connect(self._on_fan_recovery_done)
+        # Phase 15c (#125): the goal runner ticks on the same serialized worker,
+        # so it never races a profile apply or a fan recovery.
+        self._goal_runner = GoalRunner(
+            "desktop", readings=lambda: sensor_readings(sensors), fps=fps_source.read,
+            writer=ControllerWriter(controller), ranges=power_range.detect_ranges,
+            may_run=lambda: self.control.writes_allowed())
+        self._goal_driver = GoalRunnerDriver(self._goal_runner, self.worker.submit)
+        self.worker.done.connect(self._on_goal_runner_done)
+        QApplication.instance().aboutToQuit.connect(self._goal_runner.stop)
         self._fans_window = None
         self._updates_dialog = None
         self._update_thread = None
@@ -1238,6 +1251,7 @@ class DashboardUI(QMainWindow):
             pass
         # Decides and enqueues only; the recovery runs on the worker.
         self._show_fan_message(self._fan_runner.tick())
+        self._goal_driver.tick()
         if self.isVisible():
             self._sync_screen_brightness()
 
@@ -1249,6 +1263,13 @@ class DashboardUI(QMainWindow):
     @pyqtSlot(str, object)
     def _on_fan_recovery_done(self, label, result):
         self._show_fan_message(self._fan_runner.on_done(label, result))
+
+    @pyqtSlot(str, object)
+    def _on_goal_runner_done(self, label, result):
+        msg = self._goal_driver.on_done(label, result)
+        if msg:
+            logging.getLogger("z13.goal").info("%s", msg)
+            self.status_bar.showMessage(msg, 8000)
 
     # ------------------------------------------------------------------
     # Side button listener

@@ -40,6 +40,8 @@ import state_events
 import power_range
 import timeline
 from fan_watchdog import FanTrace, FanWatchdog
+import fps_source
+from goal_runner import GoalRunner, ControllerWriter, sensor_readings
 from sensor_reader import SensorReader
 
 # This process is always a Decky backend. host.detect() spots that from the loader's
@@ -71,6 +73,8 @@ MAX_FAN_TEMPS = (20, 30, 40, 50, 60, 70, 80, 90)   # Low anchor; firmware respon
 MAX_FANS_SPEC = ",".join(f"{t}:100%" for t in MAX_FAN_TEMPS)
 # Fan watchdog poll cadence (its thresholds live in fan_watchdog.py).
 ENFORCE_INTERVAL_S = 2
+# Goal runner cadence (#125); it writes at most once per goal_control.MIN_DWELL_S.
+GOAL_TICK_S = 5
 # Its trace, next to the desktop app's (Help -> Error log -> Fan trace shows both).
 # Written as root, handed to deck so the app and deck can read and rotate it.
 FAN_TRACE_DIR = "/home/deck/.local/state/z13-helper"
@@ -883,7 +887,34 @@ def make_fan_watchdog(sensors=None, fans=None, may_act=None, clock=time.monotoni
                        suspended=lambda: _load_max_fans().get("suspended") is not None,
                        may_act=may_act or _in_gamemode,
                        active_tdp=lambda: (active_profile(_read_store()) or {}).get("tdp"),
-                       clock=clock, trace=trace)
+                       clock=clock, trace=trace, goal_setpoint=authority.goal_setpoint)
+
+
+def make_goal_runner(controller=None, may_run=None, clock=time.monotonic):
+    """The Game Mode goal runner (src/goal_runner.py). It holds the goal lease
+    only in Game Mode on the Z13; in Desktop Mode the desktop app's runner does."""
+    return GoalRunner("decky", readings=lambda: sensor_readings(_sensors),
+                      fps=fps_source.read,
+                      writer=ControllerWriter(controller or HardwareController(Z13CTL)),
+                      ranges=power_range.detect_ranges,
+                      may_run=may_run or (lambda: _writes_allowed() and _in_gamemode()),
+                      clock=clock)
+
+
+async def goal_runner_tick(runner):
+    """One goal runner tick under the write lock; skipped while a write holds it."""
+    lock = _lock()
+    if lock.locked():
+        return None
+    try:
+        async with lock:
+            msg = await asyncio.to_thread(runner.tick)
+    except Exception as e:  # noqa: BLE001
+        decky.logger.error("Goal runner error: %s", e)
+        return None
+    if msg:
+        decky.logger.info("%s", msg)
+    return msg
 
 
 async def fan_watchdog_tick(watchdog):
@@ -1215,6 +1246,13 @@ class Plugin:
             await asyncio.sleep(ENFORCE_INTERVAL_S)
             await fan_watchdog_tick(watchdog)
 
+    async def _run_goal_runner(self):
+        """Tick the shared goal runner; it acts only in Game Mode (make_goal_runner)."""
+        self._goal_runner = make_goal_runner(controller=self._signal_controller)
+        while True:
+            await asyncio.sleep(GOAL_TICK_S)
+            await goal_runner_tick(self._goal_runner)
+
     async def _watch_desktop_app(self):
         """Keep the desktop app running in Desktop Mode (DesktopAppCheck)."""
         check = DesktopAppCheck()
@@ -1479,8 +1517,10 @@ class Plugin:
         self._enforce_task = self.loop.create_task(self._enforce_max_fans())
         self._desktop_task = self.loop.create_task(self._watch_desktop_app())
         self._hardware_signals_task = self.loop.create_task(self._run_hardware_signals())
+        self._goal_task = self.loop.create_task(self._run_goal_runner())
         if self._crash_reporter:
-            for task in (self._enforce_task, self._desktop_task, self._hardware_signals_task):
+            for task in (self._enforce_task, self._desktop_task, self._hardware_signals_task,
+                         self._goal_task):
                 task.add_done_callback(self._crash_reporter.task_done)
         decky.logger.info("z13-helper up. z13ctl=%s exists=%s max_fans=%s",
                           Z13CTL, os.path.exists(Z13CTL),
@@ -1494,9 +1534,12 @@ class Plugin:
         if getattr(self, "_crash_reporter", None):
             self._crash_reporter.close()
         for task in (getattr(self, "_enforce_task", None), getattr(self, "_desktop_task", None),
-                     getattr(self, "_hardware_signals_task", None)):
+                     getattr(self, "_hardware_signals_task", None),
+                     getattr(self, "_goal_task", None)):
             if task:
                 task.cancel()
+        if getattr(self, "_goal_runner", None):
+            await asyncio.to_thread(self._goal_runner.stop)
         decky.logger.info("z13-helper unloading")
 
     async def _uninstall(self):
