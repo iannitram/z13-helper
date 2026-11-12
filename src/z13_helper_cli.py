@@ -12,7 +12,7 @@ store through this command.
 
 CLI:
     z13-helper status
-    z13-helper profile list|get|set|apply
+    z13-helper profile list|get|set|apply|create|rename|delete
     z13-helper tdp [get|set|reset]
     z13-helper fans curve get|set
     z13-helper fans max-fans on|off|status
@@ -135,6 +135,15 @@ def _parser():
     s = psub.add_parser("apply", parents=[common], help="apply a stored profile")
     s.add_argument("name")
     s.add_argument("--no-hooks", action="store_true")
+    s = psub.add_parser("create", parents=[common], help="add a new profile")
+    s.add_argument("name")
+    s.add_argument("--from", dest="from_name", metavar="PROFILE",
+                   help="copy this profile instead of the Balanced base")
+    s = psub.add_parser("rename", parents=[common], help="rename a custom profile")
+    s.add_argument("old")
+    s.add_argument("new")
+    s = psub.add_parser("delete", parents=[common], help="delete a custom profile")
+    s.add_argument("name")
 
     tdp = sub.add_parser("tdp", parents=[common], help="power limits")
     tdp.add_argument("action", nargs="?", default="get")
@@ -585,6 +594,46 @@ def cmd_profile_set(args):
     }
     _emit(args, payload, [f"{profile['name']}: updated {', '.join(updated)}"])
     return 0
+
+
+def _owner_call(call, *args, **kwargs):
+    """Run a state-owner profile edit; store errors become CLI failures."""
+    try:
+        return call(*args, **kwargs)
+    except KeyError as exc:
+        raise CliError(f"no profile named {exc.args[0]!r}") from None
+    except ValueError as exc:
+        raise CliError(str(exc)) from None
+
+
+def cmd_profile_create(args):
+    made = _owner_call(authority.create_profile, args.name, from_name=args.from_name)
+    payload = {"ok": True, "name": made["name"], "from": args.from_name, "profile": made}
+    source = f" from {args.from_name}" if args.from_name else ""
+    _emit(args, payload, [f"Created profile: {made['name']}{source}"])
+    return 0
+
+
+def cmd_profile_rename(args):
+    renamed = _owner_call(authority.rename_profile, args.old, args.new)
+    payload = {"ok": True, "old": args.old, "name": renamed["name"]}
+    _emit(args, payload, [f"Renamed profile: {args.old} -> {renamed['name']}"])
+    return 0
+
+
+def cmd_profile_delete(args):
+    result = _owner_call(authority.delete_profile, args.name)
+    steps = result["steps"]
+    ok = all(step_ok for _, step_ok, _ in steps)
+    payload = {"ok": ok, "name": args.name, "active": result["active"],
+               "steps": [[step, step_ok, message] for step, step_ok, message in steps]}
+    lines = [f"Deleted profile: {args.name}"]
+    if steps:
+        lines.append(f"Active profile is now {result['active']}; applied it")
+    lines.extend(f"  {'ok ' if step_ok else 'ERR'}  {step:<22}  {message}"
+                 for step, step_ok, message in steps)
+    _emit(args, payload, lines)
+    return 0 if ok else 1
 
 
 def cmd_profile_apply(args):
@@ -1310,6 +1359,9 @@ def main(argv=None):
         ("profile", "get"): cmd_profile_get,
         ("profile", "set"): cmd_profile_set,
         ("profile", "apply"): cmd_profile_apply,
+        ("profile", "create"): cmd_profile_create,
+        ("profile", "rename"): cmd_profile_rename,
+        ("profile", "delete"): cmd_profile_delete,
         ("tdp",): cmd_tdp,
         ("fans", "curve", "get"): cmd_fans_curve_get,
         ("fans", "curve", "set"): cmd_fans_curve_set,

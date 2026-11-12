@@ -723,3 +723,112 @@ def test_backups_never_overwrite_each_other(profiles_env, monkeypatch):
         _seed(profiles_env, content)
         profiles.load_store()
     assert sorted(b.read_text() for b in _backups(profiles_env)) == ['{"profiles":[1]}', '{"profiles":[null]}']
+
+
+# ----------------------------------------------------------------------
+# #227: create / rename, and backend (z13h-*) names never become app profiles
+# ----------------------------------------------------------------------
+
+LEAKED = "z13h-balanced-5386ea5d"   # the backend name of the built-in Balanced
+
+
+def test_create_profile_from_the_balanced_base(profiles_env):
+    profiles.load_store()
+    made = profiles.create_profile("65 watt charger")
+    assert made["name"] == "65 watt charger"
+    assert made["base"] == "balanced" and made["builtin"] is False
+    assert profiles.get_profile("65 watt charger")["name"] == "65 watt charger"
+    assert "65 watt charger" in [p["name"] for p in stored(profiles_env)["profiles"]]
+
+
+def test_create_profile_copies_an_existing_one(profiles_env):
+    profiles.load_store()
+    src = profiles.get_profile("Turbo")
+    made = profiles.create_profile("Copy of Turbo", from_name="Turbo")
+    assert made["builtin"] is False
+    assert made["fan_curve"] == src["fan_curve"] and made["base"] == src["base"]
+    assert made["max_fans"] == src["max_fans"]
+    assert "z13ctl_profile" not in made
+    assert profiles.get_profile("Turbo")["builtin"] is True   # the source is untouched
+
+
+@pytest.mark.parametrize("name", ["", "   ", "Balanced", "balanced", LEAKED])
+def test_create_profile_refuses_empty_duplicate_and_backend_names(profiles_env, name):
+    profiles.load_store()
+    before = len(profiles.load_store()["profiles"])
+    with pytest.raises(ValueError):
+        profiles.create_profile(name)
+    assert len(profiles.load_store()["profiles"]) == before
+
+
+def test_create_from_an_unknown_profile_is_a_key_error(profiles_env):
+    profiles.load_store()
+    with pytest.raises(KeyError):
+        profiles.create_profile("Copy", from_name="Nope")
+
+
+def test_rename_a_custom_profile_moves_the_active_name(profiles_env):
+    profiles.create_profile("Old name")
+    profiles.set_active("Old name")
+    profiles.rename_profile("Old name", "New name")
+    assert profiles.get_profile("Old name") is None
+    assert profiles.get_profile("New name") is not None
+    assert profiles.active_name() == "New name"
+
+
+def test_rename_pins_the_backend_identity(profiles_env):
+    profiles.create_profile("Old name")
+    profiles.rename_profile("Old name", "New name", pin_backend="z13h-old-name-0123abcd")
+    assert profiles.get_profile("New name")["z13ctl_profile"] == "z13h-old-name-0123abcd"
+
+
+def test_rename_keeps_an_existing_backend_pin(profiles_env):
+    profiles.create_profile("Old name")
+    store = profiles.load_store()
+    profiles.get_profile("Old name", store)["z13ctl_profile"] = "z13h-kept-11112222"
+    profiles.save_store(store)
+    profiles.rename_profile("Old name", "New name", pin_backend="z13h-other-33334444")
+    assert profiles.get_profile("New name")["z13ctl_profile"] == "z13h-kept-11112222"
+
+
+@pytest.mark.parametrize("old, new", [
+    ("Balanced", "Mine"),          # built-ins keep their names
+    ("Mine", "Turbo"),             # no clashes
+    ("Mine", LEAKED),              # no backend names
+    ("Mine", "Mine"),              # nothing to do
+])
+def test_rename_refuses_builtins_clashes_and_backend_names(profiles_env, old, new):
+    profiles.create_profile("Mine")
+    with pytest.raises(ValueError):
+        profiles.rename_profile(old, new)
+    assert profiles.get_profile(old) is not None
+
+
+def test_rename_unknown_profile_is_a_key_error(profiles_env):
+    profiles.load_store()
+    with pytest.raises(KeyError):
+        profiles.rename_profile("Nope", "Whatever")
+
+
+def test_backend_named_entry_is_dropped_from_a_stored_profile_list(profiles_env, capsys):
+    """The leak from the issue: a z13h-* backend name stored as its own app profile."""
+    leaked = profiles._profile("Balanced", "balanced")
+    leaked["name"] = LEAKED
+    leaked["builtin"] = False
+    store = {"version": 1, "active": "Mine",
+             "profiles": profiles.default_profiles() + [custom("Mine"), leaked]}
+    profiles_env.store.parent.mkdir(parents=True)
+    profiles_env.store.write_text(json.dumps(store))
+    names = [p["name"] for p in profiles.load_store()["profiles"]]
+    assert LEAKED not in names and "Mine" in names
+    assert LEAKED not in [p["name"] for p in stored(profiles_env)["profiles"]]
+    assert list(profiles_env.store.parent.glob("profiles.json.corrupt-*"))   # kept aside
+
+
+def test_backend_name_check_matches_only_generated_names():
+    assert profiles.is_backend_name(LEAKED)
+    assert profiles.is_backend_name("z13h-turbo-0a1b2c3d")
+    assert not profiles.is_backend_name("z13h-")
+    assert not profiles.is_backend_name("Balanced")
+    assert not profiles.is_backend_name("z13h-Balanced-5386ea5d")
+    assert not profiles.is_backend_name(None)
