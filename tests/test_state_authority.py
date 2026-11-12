@@ -324,3 +324,54 @@ def test_epp_value_writes_only_the_epp_node(monkeypatch, fake_host):
     assert fake_host.argvs == [profiles.epp_argv('power')]
     assert not any('z13ctl' in ' '.join(a) or 'platform_profile' in ' '.join(a)
                    for a in fake_host.argvs)
+
+
+# ----------------------------------------------------------------------
+# #227: the owner creates, renames and deletes app profiles
+# ----------------------------------------------------------------------
+
+def test_create_profile_is_stored_without_a_daemon_write(daemon, fake_host):
+    made = authority.create_profile('65 watt charger', from_name='Turbo')
+    assert made['name'] == '65 watt charger' and made['builtin'] is False
+    assert profiles.get_profile('65 watt charger') is not None
+    assert not daemon.calls and not fake_host.calls
+
+
+def test_rename_keeps_the_backend_profile_it_already_mirrors(daemon, fake_host):
+    p = profiles.get_profile('Balanced')
+    p.update(name='Travel', builtin=False)
+    profiles.upsert_profile(p)
+    authority.rename_profile('Travel', 'Road')
+    assert profiles.get_profile('Road')['z13ctl_profile'] == Z13CtlClient.mapped_profile_name(
+        {'name': 'Travel'})
+    assert not daemon.calls   # rename is store-only
+
+
+def test_delete_removes_the_named_backend_profile_too(daemon, fake_host):
+    p = profiles.get_profile('Balanced')
+    p.update(name='Travel', builtin=False)
+    profiles.upsert_profile(p)
+    authority.mirror_profile(p)
+    daemon.calls.clear()
+    authority.delete_profile('Travel')
+    assert profiles.get_profile('Travel') is None
+    assert ('profile-delete', {'set': Z13CtlClient.mapped_profile_name({'name': 'Travel'})}) in daemon.calls
+
+
+def test_delete_refuses_a_builtin_and_touches_nothing(daemon, fake_host):
+    with pytest.raises(ValueError):
+        authority.delete_profile('Turbo')
+    assert profiles.get_profile('Turbo') is not None
+    assert not any(cmd == 'profile-delete' for cmd, _ in daemon.calls)
+
+
+def test_deleting_the_active_profile_falls_back_to_balanced_and_applies(daemon, fake_host, monkeypatch):
+    p = profiles.get_profile('Balanced')
+    p.update(name='Travel', builtin=False)
+    profiles.upsert_profile(p)
+    profiles.set_active('Travel')
+    applied = []
+    monkeypatch.setattr(authority, 'apply_profile', lambda name, **kw: applied.append(name) or [])
+    result = authority.delete_profile('Travel')
+    assert result == {'removed': 'Travel', 'active': 'Balanced', 'steps': []}
+    assert applied == ['Balanced']

@@ -487,7 +487,13 @@ class FansWindow(QWidget):
         self.control.save(p, "undervolt")
 
     def _add(self):
-        name = self.control.add_custom(self._selected)
+        new, ok = QInputDialog.getText(
+            self, "New profile", f"Name (copies {self._selected!r}):")
+        if not ok or not new.strip():
+            return
+        name = self.control.add_custom(self._selected, new)
+        if name is None:
+            return
         self._selected = name
         self.control.switch(name)
         self.refresh()

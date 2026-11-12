@@ -702,3 +702,47 @@ def test_crash_upload_removes_only_uploaded_report(crash_upload_env, capsys, nam
     assert data["uploaded"] == ["report.zip"] and data["pending"] == []
     assert uploads == [(json.loads(build_path.read_text()), "report.zip", b"PK")]
     assert queue.pending() == [] and (queue.directory / "sent.json").exists()
+
+
+# ----------------------------------------------------------------------
+# #227: profile create / rename / delete
+# ----------------------------------------------------------------------
+
+@pytest.mark.parametrize("argv", [
+    ["profile", "create", "65 watt charger"],
+    ["profile", "create", "Copy", "--from", "Turbo"],
+    ["profile", "rename", "Old", "New"],
+    ["profile", "delete", "Old"],
+])
+def test_profile_create_rename_delete_parse(argv):
+    assert cli._parser().parse_args(argv).cmd == "profile"
+
+
+def test_profile_create_goes_through_the_owner(owner, capsys):
+    calls, record = owner
+    record("create_profile", {"name": "65 watt charger"})
+    data = run_json(capsys, ["profile", "create", "65 watt charger", "--from", "Turbo"])
+    assert data["ok"] is True and data["name"] == "65 watt charger"
+    assert calls == [("create_profile", ("65 watt charger",), {"from_name": "Turbo"})]
+
+
+def test_profile_rename_and_delete_go_through_the_owner(owner, capsys):
+    calls, record = owner
+    record("rename_profile", {"name": "New"})
+    record("delete_profile", {"removed": "Old", "active": "Balanced", "steps": []})
+    assert run_json(capsys, ["profile", "rename", "Old", "New"])["ok"] is True
+    assert run_json(capsys, ["profile", "delete", "Old"])["ok"] is True
+    assert calls == [
+        ("rename_profile", ("Old", "New"), {}),
+        ("delete_profile", ("Old",), {}),
+    ]
+
+
+def test_profile_create_then_get_works_end_to_end(profiles_env, capsys):
+    run_json(capsys, ["profile", "create", "65 watt charger"])
+    data = run_json(capsys, ["profile", "get", "65 watt charger"])
+    assert data["name"] == "65 watt charger" and data["builtin"] is False
+
+
+def test_profile_create_reports_a_clash_as_a_failure(profiles_env, capsys):
+    assert cli.main(["profile", "create", "Turbo", "--json"]) == 1
