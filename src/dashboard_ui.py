@@ -19,7 +19,7 @@ import time
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QSlider, QStatusBar, QSystemTrayIcon, QMenu, QMessageBox, QComboBox, QCheckBox, QFrame,
+    QSlider, QStatusBar, QSystemTrayIcon, QMenu, QMessageBox, QComboBox, QCheckBox, QFrame, QScrollArea,
 )
 from PyQt6.QtCore import QTimer, Qt, pyqtSlot, pyqtSignal
 from PyQt6.QtDBus import QDBusConnection
@@ -39,6 +39,7 @@ import post_update_view
 import profiles
 import timeline
 import update_watch
+import hw_signals
 from fan_watchdog import FanTrace, FanWatchdog, FanWatchdogRunner
 from display_modes import RefreshControl
 from screen_brightness import ScreenBrightness, MIN_PERCENT
@@ -49,9 +50,11 @@ from profile_control import ProfileControl
 from fans_window import FansWindow
 from compute_dialog import ComputeDialog
 from updates_dialog import UpdatesDialog, UpdateCheckThread, PostUpdateThread
+from timeline_dialog import TimelineDialog
 from theme import (STYLESHEET, ModeTile, Panel, pill, tip, ECO, STANDARD, TURBO, CUSTOM,
-                   ACCENT_FOR_BASE, BORDER)
-from evdev_listener import find_side_button_device, EvdevListener
+                   ACCENT_FOR_BASE, BORDER, TOUCH_TARGET_MIN)
+from evdev_listener import (find_side_button_device, EvdevListener, GestureDetector,
+                           gesture_for_app)
 from versions import APP_VERSION
 
 _INPUTPLUMBER_SERVICE      = "org.shadowblip.InputPlumber"
@@ -95,6 +98,7 @@ SCREEN_FOLLOW_GRACE_S = 1.5     # after our own write, don't snap the slider bac
 
 class DashboardUI(QMainWindow):
     sideButtonPressed = pyqtSignal()
+    sideButtonCycle = pyqtSignal()    # triple press in Desktop Mode: next profile (#131)
     # From app_log listeners, which run on whatever thread logged / crashed.
     _errorLogged = pyqtSignal()
     _crashReported = pyqtSignal(str, str)
@@ -111,8 +115,8 @@ class DashboardUI(QMainWindow):
 
         self.setWindowTitle("Z13-Helper")
         self.setStyleSheet(STYLESHEET)
-        # No fixed minimum: the layout's own minimum keeps the title row (profile
-        # name + live sensors) from being clipped, which a hard 430 px allowed.
+        self.resize(620, 760)
+        self.setMinimumSize(480, 520)
         self._app_icon = self._make_app_icon()
         self.setWindowIcon(self._app_icon)
         QApplication.instance().setWindowIcon(self._app_icon)
@@ -144,9 +148,19 @@ class DashboardUI(QMainWindow):
         self._new_updates = []
         self.screen = ScreenBrightness(QDBusConnection.sessionBus())
         self._screen_last_write = 0.0
+        self._signals_active = {}
+        self._signals_shown = None
+        self._signals_shown_at = {}
+        self._signals_last_write = None
+        self._signals_pending = None
+        self._signals_timer = QTimer(self)
+        self._signals_timer.setInterval(250)
+        self._signals_timer.timeout.connect(self._tick_hardware_signals)
+        self.worker.done.connect(self._on_hardware_signal_source_done)
 
         self._build_menu_bar()
         self._build_ui()
+        self._signals_timer.start()
         self._setup_tray()
         self._refresh_profile_ui()
         self._load_initial_state()
@@ -170,6 +184,7 @@ class DashboardUI(QMainWindow):
         self._host_reader_proc = None
         self._evdev_listener = None
         self.sideButtonPressed.connect(self._toggle_window)
+        self.sideButtonCycle.connect(self.cycle_profile)
         self._start_side_button_listener()
 
         # Error log: badge on errors, notice on crashes (app_log.py).
@@ -218,6 +233,9 @@ class DashboardUI(QMainWindow):
         upd = QAction("Updates…", self)
         upd.triggered.connect(self._open_updates)
         file_menu.addAction(upd)
+        timeline_action = QAction("Machine timeline…", self)
+        timeline_action.triggered.connect(self._open_timeline)
+        file_menu.addAction(timeline_action)
         mem = QAction("Memory and compute…", self)
         mem.triggered.connect(self._open_compute)
         file_menu.addAction(mem)
@@ -300,6 +318,13 @@ class DashboardUI(QMainWindow):
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
             self._toggle_window()
 
+    def cycle_profile(self):
+        """Side-button triple press / `cycle` command: switch to the next profile. The apply
+        raises PROFILE_CHANGED through the normal hardware-signal wiring (#130)."""
+        name = self.control.cycle()
+        if name:
+            self.status_bar.showMessage(f"Side button: next profile, {name}", 5000)
+
     def _toggle_window(self):
         if self.isVisible():
             self.hide()
@@ -355,28 +380,32 @@ class DashboardUI(QMainWindow):
         self.error_badge.hide()
         self.status_bar.addPermanentWidget(self.error_badge)
 
-        root = QWidget()
-        root.setObjectName("root")
-        self.setCentralWidget(root)
-        col = QVBoxLayout(root)
-        col.setContentsMargins(6, 4, 6, 4)
-        col.setSpacing(0)
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        content = QWidget()
+        content.setObjectName("root")
+        scroll.setWidget(content)
+        self.setCentralWidget(scroll)
+        col = QVBoxLayout(content)
+        col.setContentsMargins(12, 12, 12, 12)
+        col.setSpacing(8)
 
         # 1. Performance Mode
         self.perf = Panel("Performance Mode")
         self.maxfans_pill = pill("MAX FANS", orange=True)
         self.maxfans_pill.setToolTip("Both fans at 100%. Off restores the profile's curve.")
         self.maxfans_pill.clicked.connect(self._toggle_max_fans)
-        self.maxfans_pill.setFixedHeight(28)
+        self.maxfans_pill.setMinimumHeight(TOUCH_TARGET_MIN)
         tiles = QHBoxLayout()
-        tiles.setSpacing(6)
+        tiles.setSpacing(10)
         self._tiles = {}
         for name, accent, icon in _TILES:
-            t = ModeTile(name, accent, height=60, icon=icon)
+            t = ModeTile(name, accent, height=72, icon=icon)
             t.clicked.connect(lambda checked, n=name: self._tile_clicked(n))
             tiles.addWidget(t)
             self._tiles[name] = t
-        self.fans_tile = ModeTile("Fans + Power", CUSTOM, secondary=True, height=60, icon="fan")
+        self.fans_tile = ModeTile("Fans + Power", CUSTOM, secondary=True, height=72, icon="fan")
         self.fans_tile.clicked.connect(self._fans_tile_clicked)
         tiles.addWidget(self.fans_tile)
         self.perf.body.addLayout(tiles)
@@ -393,6 +422,11 @@ class DashboardUI(QMainWindow):
 
         # 2. Keyboard & Rear Light
         self.light = Panel("Keyboard & Rear Light")
+        self.signals_enabled = QCheckBox("Lightbar signals")
+        self.signals_enabled.setToolTip("Use the rear light for app notifications")
+        self.signals_enabled.setChecked(self.config.get("hardware_signals_enabled", True) is not False)
+        self.signals_enabled.toggled.connect(self._set_hardware_signals_enabled)
+        self.light.add_head_widget(self.signals_enabled)
         self.light_target = QComboBox()
         for label, _devs in _LIGHT_TARGETS:
             self.light_target.addItem(label)
@@ -425,7 +459,7 @@ class DashboardUI(QMainWindow):
         self.light_target.currentIndexChanged.connect(lambda _index: self._refresh_profile_ui())
         self._bright_tiles = {}
         for label, level in _BRIGHTNESS:
-            t = ModeTile(label, STANDARD, height=36)
+            t = ModeTile(label, STANDARD, height=TOUCH_TARGET_MIN + 16)
             t.clicked.connect(lambda checked, lv=level, lb=label: self._change_brightness(lv, lb))
             brow.addWidget(t)
             self._bright_tiles[level] = t
@@ -640,6 +674,78 @@ class DashboardUI(QMainWindow):
     def _refresh_epp_ui(self, profile):
         epp.show_profile_epp(self.epp_combo, profile)
         self.epp_now.setText(epp.now_text(self.controller.get_epp()))
+
+    def _set_hardware_signals_enabled(self, enabled):
+        self.config.set("hardware_signals_enabled", bool(enabled))
+        # Run immediately so disabling a visible signal restores the saved lightbar mode.
+        self._tick_hardware_signals()
+
+    def _on_hardware_signal_source_done(self, label, result):
+        if label == f"Lighting → {hw_signals.DEVICE}":
+            # The signal rate limit must see every lightbar write, not only signal writes.
+            self._signals_last_write = time.monotonic()
+            return
+        if label == "Hardware signal lightbar":
+            pending = self._signals_pending
+            self._signals_pending = None
+            if pending is None:
+                return
+            action, pattern, event, started = pending
+            if isinstance(result, Exception):
+                logger.warning("Lightbar signal write failed: %s", result)
+                return
+            self._signals_last_write = time.monotonic()
+            if action == "play":
+                self._signals_shown = pattern
+                if event and hw_signals.signal_for(event).duration_s is not None:
+                    self._signals_shown_at[event] = self._signals_last_write
+            else:
+                self._signals_shown = None
+                if action == "clear":
+                    self._signals_active.clear()
+                    self._signals_shown_at.clear()
+            return
+        if (label.startswith("Profile → ") and isinstance(result, list) and result
+                and all(isinstance(step, tuple) and len(step) >= 2 and step[1] is True
+                        for step in result)):
+            now = time.monotonic()
+            self._signals_active[hw_signals.PROFILE_CHANGED] = now
+            self._signals_shown_at.pop(hw_signals.PROFILE_CHANGED, None)
+            self._signals_shown = None
+            self._signals_last_write = now  # the profile apply itself may have written the lightbar
+            self._tick_hardware_signals()
+
+    def _tick_hardware_signals(self):
+        """Play the highest-priority app signal and restore the active profile's lightbar."""
+        if self._signals_pending is not None:
+            return
+        profile = self.control.active()
+        saved = (profile.get("lighting") or {}).get(hw_signals.DEVICE)
+        restore = None
+        if isinstance(saved, dict) and saved.get("mode") and saved.get("color"):
+            brightness = profile.get("brightness") or self.config.get("brightness", "high")
+            restore = hw_signals.Pattern(saved["mode"], saved["color"], brightness)
+        enabled = self.config.get("hardware_signals_enabled", True) is not False
+        now = time.monotonic()
+        action, pattern = hw_signals.next_action(
+            self._signals_active, self._signals_shown, now=now,
+            last_write=self._signals_last_write, enabled=enabled, restore=restore,
+            shown_at=self._signals_shown_at)
+        if action == "none":
+            return
+        chosen = pattern or restore
+        if chosen is None:
+            if action == "clear":
+                self._signals_shown = None
+                self._signals_active.clear()
+                self._signals_shown_at.clear()
+            return
+        signal = hw_signals.active_signal(self._signals_active, now,
+                                          shown_at=self._signals_shown_at)
+        event = signal.event if action == "play" and signal else None
+        self._signals_pending = (action, pattern, event, now)
+        self.worker.submit("Hardware signal lightbar", lambda: self.controller.set_lighting(
+            hw_signals.DEVICE, chosen.setting(), chosen.brightness))
 
     def _on_epp(self, _index):
         self.control.save(epp.profile_with_epp(self.control.shown(), self.epp_combo), "epp")
@@ -974,6 +1080,13 @@ class DashboardUI(QMainWindow):
     def _post_update_banner(self, status):
         text = post_update_view.tray_text(status)
         self._post_update_text = text
+        event = hw_signals.UPDATE_ATTENTION
+        if text:
+            self._signals_active[event] = time.monotonic()
+        else:
+            self._signals_active.pop(event, None)
+            self._signals_shown_at.pop(event, None)
+        self._tick_hardware_signals()
         if self._tray is not None:
             self._tray.setToolTip("Z13-Helper" + (f"\n{text}" if text else ""))
             self._rebuild_tray_menu()
@@ -1029,6 +1142,50 @@ class DashboardUI(QMainWindow):
         self._updates_dialog.populate(update_watch.summary())
         self._updates_dialog.show()
         self._updates_dialog.raise_()
+
+    def _open_timeline(self):
+        dialog = TimelineDialog(self, rollback=self._rollback_timeline_entry)
+        dialog.exec()
+
+    def _rollback_timeline_entry(self, entry):
+        """Validate a rollback record, then run it on the hardware worker.
+
+        The apply can take seconds (a profile restore has a long budget), so it
+        never runs on the Qt thread inside the modal dialog; it queues behind
+        any other hardware write like every other control. The dialog gets an
+        immediate (ok, message); the outcome shows in the status bar and the
+        rollback's own entry appears in the timeline.
+        """
+        spec = timeline.rollback_spec(entry)
+        if spec is None:
+            return False, "This rollback record format is not supported."
+        if not self.control.writes_allowed():
+            return False, "Unsupported machine: hardware controls are disabled."
+
+        def go():
+            kind = spec["kind"]
+            if kind == "profile":
+                if profiles.get_profile(spec["profile"]) is None:
+                    raise RuntimeError("The saved profile no longer exists.")
+                return authority.apply_profile(spec["profile"], skip_hooks=True)
+            if kind == "goal":
+                target = spec["goal"] == "max"
+                before_mf = max_fans_state.load() or {}
+                active_name = profiles.active_name()
+                message = authority.set_max_fans(target)
+                after_mf = max_fans_state.load() or {}
+                before, after = timeline.max_fans_goal_states(before_mf, after_mf, target)
+                timeline.record_goal_change(goal=after["goal"], previous_goal=before["goal"],
+                                            before=before, after=after, profile=active_name, defer=True)
+                return message
+            active = profiles.get_profile(profiles.active_name())
+            if active is None:
+                raise RuntimeError("There is no active profile to restore this setting into.")
+            active[kind] = spec["value"]
+            return authority.edit(active, kind)
+
+        self.control._submit("Timeline rollback", go)
+        return True, "Rollback queued. The result shows in the status bar and adds a new timeline entry."
 
     # ------------------------------------------------------------------
     # Telemetry tick
@@ -1112,8 +1269,16 @@ class DashboardUI(QMainWindow):
         else:
             device, code = find_side_button_device()
             if device:
-                self._evdev_listener = EvdevListener(
-                    device, lambda ev: self.sideButtonPressed.emit() if ev == code else None)
+                gestures = GestureDetector()
+
+                def on_key(ev):
+                    if ev != code:
+                        return
+                    if gesture_for_app(gestures, time.monotonic()) == "cycle":
+                        self.sideButtonCycle.emit()
+                    else:
+                        self.sideButtonPressed.emit()
+                self._evdev_listener = EvdevListener(device, on_key)
                 self._evdev_listener.start()
                 self.button_label.setText(f"Side button: evdev {os.path.basename(device)}")
                 return
@@ -1153,6 +1318,8 @@ class DashboardUI(QMainWindow):
                 for line in proc.stdout:
                     if line.strip() == "PRESS":
                         self.sideButtonPressed.emit()
+                    elif line.strip() == "CYCLE":
+                        self.sideButtonCycle.emit()
             except Exception:
                 logging.getLogger("z13.button").exception("Side-button reader pipe failed")
             rc = proc.poll()

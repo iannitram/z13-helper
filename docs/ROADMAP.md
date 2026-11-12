@@ -11,7 +11,7 @@ Status marks: ✅ shipped · 🔧 in progress · ⏳ planned · 🚧 gated (need
 
 ---
 
-## 1. Where we are (audit, 2026-10-09)
+## 1. Where we are (reconciled 2026-11-07, `main` 84f0b1e)
 
 **2026-10-30 update:** Repair release **0.5.1** has Desktop fan/power checks on SteamOS
 **3.9.5 / kernel 7.2** with z13ctl 1.4.2. See the [release verification record](releases/0.5.1.md)
@@ -509,7 +509,7 @@ Valve's 3.9.5 post: https://store.steampowered.com/news/app/1675200/view/6942757
 
 Not issues (checked, nothing to do): the RDNA1/2 dedicated-GPU resume fix (Strix Halo is an iGPU); HDMI 2.1 FRL (press only, external displays); Android binder back in the kernel (only #71's probe list); the revoked eMudhra certificates; the Deck-only idle-power change.
 
-**Order of work:** #77 and #76 (small, no device) → #79 → the device passes #74 and #75 (with #61) → #78 → #80 if #74 shows a clash. Kernel-major and BUILD_ID triggers for the post-update tab: comments on #70 and #71.
+**Status:** #76-#79 are closed with their code integrated. The remaining sequence is #74/#75 device passes with #61, plus the five-cycle #80 resume evidence and the separate #73 VRR matrix. Kernel-major and BUILD_ID triggers for the post-update tab are tracked by #70 and #71.
 
 **Done when:** #74 and #75 are green on 3.9.5, #76–#79 are merged, and #80 is merged or closed with measurements.
 **Status 2026-11-11:** #74 and #75 closed 2026-11-11 with dated evidence (comments of 2026-11-06 and 2026-11-08); #76–#79 closed; #80's resume hook merged (PR #196) and its five-cycle device check remains open.
@@ -554,6 +554,12 @@ Not issues (checked, nothing to do): the RDNA1/2 dedicated-GPU resume fix (Strix
 | 15e Comfort sensor (probe) | #127 | — |
 | 15f goal picker, Expert section | #128 | #125, #126 |
 
+**Build snapshot (2026-11-07):** #123 has a pure decision-step implementation; it still needs trace/edge-case acceptance. #126's source probe ended with no dependable live FPS source, so Hold FPS remains unavailable. #124 is present from prior work. The goal runner (#125) and goal UI (#128) remain future builds; the Comfort probe tooling (#127) is built, with no device run yet (note below).
+
+**15e Comfort sensor note (#127, 2026-11-04, desk work only; no run recorded, no constants chosen):** the candidates are Tctl (`k10temp`), `acpitz`, the NVMe composite, the battery (`BAT0/temp`) and the GPU edge, all read by `SensorReader.get_comfort_candidates()` (hwmon and power_supply only, never an Armoury file). `tooling/z13_comfort_probe.py sample --phase idle|game|load --external-c <°C>` appends a row pairing them with an IR-thermometer reading on the back panel; `fit FILE` ranks each candidate by RMSE of `external = offset + slope * reading`. Still to do on the Z13: one run each of idle, game and sustained load, then write the chosen sensor, offset, slope and any lag as constants for `goal_control.py` here. A lag model is not fitted yet; add it only if the residuals of the linear fit show a lag.
+
+**15d frame-rate probe (#126) record:** each source tried, how it reads, and the pick. (1) gamescope's own stats: needs an output path supplied when gamescope starts; gamescope was not running during the probe, so no live read was made. (2) MangoHud: logging is opt-in and writes historical samples; there is no live read contract for the running process. (3) Steam client via Decky: no frame-rate reading exposed through an interface this plugin uses. Latency and overhead were not measured because no source produced a reading. **Pick: none.** `src/fps_source.read()` returns `None` without I/O, so Hold FPS is a no-go for now; 15f must hide it until a source is demonstrated.
+
 **Done when:** Quiet and Max are verified on the Z13 across a Desktop↔Game Mode switch and resume; Comfort and Hold FPS are verified or recorded as a no-go with the reason; no other code path writes a curve while a goal is active.
 
 ## 10b. Phase 16 — Hardware as the interface 💤 after 1.0 (added 2026-11-01, the owner's pick)
@@ -561,7 +567,7 @@ Not issues (checked, nothing to do): the RDNA1/2 dedicated-GPU resume fix (Strix
 
 **Pieces:**
 - **Signal language** (#129, #130): the lightbar confirms a profile change, pulses while thermal throttling, glows when charging stops at the limit, and turns amber when a SteamOS update needs attention (Phase 12c). Priorities, a strict rate limit (the lightbar wedges under bursts, Phase 7), restore of the owner's lighting, and an off switch.
-- **Side-button gestures** (#131): hold or double-press cycles profiles (goals, after Phase 15) with a lightbar confirmation, in both modes. InputPlumber stays masked (principle 2).
+- **Side-button gestures** (#131): a triple press cycles profiles (hold is impossible; double press is Game Mode's Steam menu; one reader owns it per session) (goals, after Phase 15) with a lightbar confirmation, in both modes. InputPlumber stays masked (principle 2).
 - **One touch-first interface** (#132 ✅, #133): [`docs/adr/0002-shared-touch-ui.md`](adr/0002-shared-touch-ui.md) picks **shared JSON design tokens (`src/design_tokens.json`) and a matching large-tile PyQt6 layout** over a desktop web view (which would add +277.3 MB to the 253.7 MB Flatpak, raise resident RAM from 65 MB to 516 MB across 4 processes in offscreen prototype measurements, and still require a custom `@decky/ui` shim). This is where the R04 design pass's shared design system lands.
 - **Machine timeline** (#134, #135): `src/timeline.py` (#134) records every hardware or host change as one append-only entry under `~/.local/state/z13-helper/timeline.jsonl` (principle 7's journal line comes from the same call), with Phase 12c's rollback records; a view (#135) compares states and rolls back reversible entries. A SteamOS update (`BUILD_ID` change) shows as one entry listing what it changed.
 
@@ -572,8 +578,10 @@ Not issues (checked, nothing to do): the RDNA1/2 dedicated-GPU resume fix (Strix
 | 16c side-button gestures | #131 | #130 |
 | 16d ADR: shared touch UI ✅ | #132 | — |
 | 16e touch-first layout | #133 | #132 |
-| 16f timeline store (`src/timeline.py`; store + install/Decky/steamos writers done, post-update host wiring done via `make_timeline_recorder` in `tooling/post_update/driver.py`) | #134 | #109 |
+| 16f timeline store (`src/timeline.py`; store + install/Decky/steamos writers done, post-update host wiring done via `make_timeline_recorder` in `tooling/post_update/driver.py`; issue #134 closed) | #134 | #109 |
 | 16g timeline view | #135 | #134 |
+
+**Build snapshot (2026-11-07):** #130 now signals successful profile changes in Desktop and Game Mode, and update attention in Desktop. Thermal/charge/goal event sources and a one-hour no-wedge device check remain. #133 has shared tokens and initial desktop/Decky consumers, with rendered target-size and device evidence pending. #135 has desktop compare and QAM recent-change views plus allowlisted rollback for profile, Max Fans goal, TDP, charge limit and brightness entries; actions create their own timeline entries. Installer/post-update backup and OS rollback records remain view-only because no safe persisted executor exists. #131 is built on `post-1.0` (triple-press profile cycle, one reader per session: the app in Desktop Mode, the button watcher in Game Mode); its device check is still owed.
 
 - **16e (#133) Where:** `src/design_tokens.json`, `src/theme.py`, `src/dashboard_ui.py`, `src/fans_window.py`, `decky/src/tokens.ts` (and token consumers in `decky/src/`), `MAP/README.md`, `MAP/decky.md` (no `PyQt6-WebEngine`, local web bridge, or `@decky/ui` DOM shim).
 - **16e (#133) Done when:** `src/design_tokens.json` defines the shared palette, semantic profile/goal accents, radii, spacing and `>= 44 px` touch-target minimums consumed by both `src/theme.py` and `decky/src/` (checked in `pytest` without `PyQt6`); every interactive control in the desktop app is reachable by touch with targets of at least `44 px` while preserving every control from the current windows; the Decky plugin keeps `@decky/ui` `Focusable` QAM navigation styled from the same tokens; screenshots in tablet (keyboard off) and laptop use are in the PR; Flatpak dependencies remain unchanged. *Pending owner/coordinator action:* sync this Where and Done-when, including the shared-token and Decky acceptance criteria, to #133 on GitHub; it has not been posted. The ADR's prototype timings are offscreen only, with no committed harness, and are not application-level startup costs.

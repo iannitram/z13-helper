@@ -33,6 +33,8 @@ import crash_report
 import host
 import compute_health
 import state_authority as authority
+import hw_signals
+from hardware_controller import HardwareController
 from state_stream import StateStream
 import state_events
 import power_range
@@ -111,13 +113,22 @@ Z13CTL_WRITE_TIMEOUT_S = host.Z13CTL_WRITE_TIMEOUT_S
 PROFILE_APPLY_TIMEOUT_S = 180
 
 
+def _post_update_env(repo):
+    """Copy of src/post_update_view._env: the installed library first only when it is complete
+    (LIB/post_update/__main__.py exists), else the checkout alone."""
+    lib = f"{host.DECK_HOME}/.local/lib/z13-helper"
+    path = f"{repo}/tooling:{repo}/src"
+    if os.path.isfile(os.path.join(lib, "post_update", "__main__.py")):
+        path = f"{lib}:{path}"
+    return ["env", f"PYTHONPATH={path}"]
+
+
 def post_update_argv(repo, ack=False):
     """Host command for the After SteamOS update tab (copy of src/post_update_view.tab_argv:
     this backend runs as root and can't import src/ modules that are not in py_modules/)."""
     if not isinstance(repo, str) or not os.path.isabs(repo) or "\n" in repo:
         raise ValueError("repo path must be absolute")
-    return ["env", f"PYTHONPATH={repo}/tooling:{repo}/src", "python3", "-m", "post_update",
-            "--tab-json"] + (["--ack"] if ack else [])
+    return _post_update_env(repo) + ["python3", "-m", "post_update", "--tab-json"] + (["--ack"] if ack else [])
 
 
 def parse_post_update(out):
@@ -138,8 +149,7 @@ def post_repair_argv(repo, ids=None):
     prints the plan as JSON and changes nothing; with ids it runs exactly those confirmed steps."""
     if not isinstance(repo, str) or not os.path.isabs(repo) or "\n" in repo:
         raise ValueError("repo path must be absolute")
-    argv = ["env", f"PYTHONPATH={repo}/tooling:{repo}/src", "python3", "-m", "post_update",
-            "repair", "--json"]
+    argv = _post_update_env(repo) + ["python3", "-m", "post_update", "repair", "--json"]
     if ids is not None:
         if not isinstance(ids, (list, tuple)) or not ids or not all(
                 isinstance(i, str) and _STEP_ID.fullmatch(i) for i in ids):
@@ -1123,6 +1133,69 @@ def _edit_field_recorded(field, value, expected):
 
 
 class Plugin:
+    def _signal_profile_changed(self):
+        if not getattr(self, "_signals_wakeup", None):
+            return
+        self._signals_active[hw_signals.PROFILE_CHANGED] = time.monotonic()
+        self._signals_shown_at.pop(hw_signals.PROFILE_CHANGED, None)
+        self._signals_shown = None
+        self._signals_wakeup.set()
+
+    def _signals_enabled(self):
+        return _shared_config().get("hardware_signals_enabled", True) is not False
+
+    def _signal_restore_pattern(self):
+        profile = active_profile(_read_store()) or {}
+        saved = (profile.get("lighting") or {}).get(hw_signals.DEVICE)
+        if not isinstance(saved, dict) or not saved.get("mode") or not saved.get("color"):
+            return None
+        brightness = profile.get("brightness") or _shared_config().get("brightness") or "high"
+        return hw_signals.Pattern(saved["mode"], saved["color"], brightness)
+
+    async def _run_hardware_signals(self):
+        """Serialize Game Mode notifications with QAM/profile writes and restore saved lighting."""
+        while True:
+            self._signals_wakeup.clear()
+            now = time.monotonic()
+            action, pattern = hw_signals.next_action(
+                self._signals_active, self._signals_shown, now=now,
+                last_write=self._signals_last_write, enabled=self._signals_enabled(),
+                restore=await asyncio.to_thread(self._signal_restore_pattern),
+                shown_at=self._signals_shown_at)
+            if action != "none":
+                chosen = pattern or await asyncio.to_thread(self._signal_restore_pattern)
+                if chosen is None:
+                    if action == "clear":
+                        self._signals_shown = None
+                        self._signals_active.clear()
+                        self._signals_shown_at.clear()
+                else:
+                    try:
+                        async with _lock():
+                            await asyncio.to_thread(self._signal_controller.set_lighting,
+                                                    hw_signals.DEVICE, chosen.setting(),
+                                                    chosen.brightness)
+                    except Exception as exc:  # noqa: BLE001
+                        decky.logger.warning("Lightbar signal write failed: %s", exc)
+                    else:
+                        self._signals_last_write = time.monotonic()
+                        if action == "play":
+                            self._signals_shown = pattern
+                            signal = hw_signals.active_signal(
+                                self._signals_active, self._signals_last_write,
+                                shown_at=self._signals_shown_at)
+                            if signal and signal.duration_s is not None:
+                                self._signals_shown_at[signal.event] = self._signals_last_write
+                        else:
+                            self._signals_shown = None
+                            if action == "clear":
+                                self._signals_active.clear()
+                                self._signals_shown_at.clear()
+            try:
+                await asyncio.wait_for(self._signals_wakeup.wait(), timeout=0.25)
+            except asyncio.TimeoutError:
+                pass
+
     # ---- Max Fans (mirrors the desktop app: 100% <-> custom aggressive curve) ----
     async def get_max_fans(self) -> bool:
         return bool(_load_max_fans().get("enabled", False))
@@ -1230,6 +1303,10 @@ class Plugin:
             rc, out = await asyncio.to_thread(
                 lambda: _run(Z13_PROFILE + ["apply", name], PROFILE_APPLY_TIMEOUT_S, as_deck=True))
         ok = rc == 0 and "ERR  profile" not in out
+        ok = ok and not any(line.lstrip().startswith("ERR ") for line in out.splitlines())
+        self._signals_last_write = time.monotonic()
+        if ok:
+            self._signal_profile_changed()
         timeout_message = _extract_z13ctl_timeout(out)
         message = (f"{name} applied" if ok else timeout_message or
                    f"{name}: profile apply failed ({out[-160:] or f'rc={rc}'})")
@@ -1312,6 +1389,7 @@ class Plugin:
                 return {"ok": False, "message": "bad brightness level", "failed": []}
             res = await asyncio.to_thread(_edit_field_recorded, 'brightness', level, None)
         if res["ok"]:
+            self._signals_last_write = time.monotonic()
             _save_plugin_state(brightness=level)
         return res
 
@@ -1329,13 +1407,64 @@ class Plugin:
     # ---- Machine timeline (Phase 16f, #134) ----
     async def get_timeline(self, limit: int = 50) -> list:
         cap = max(0, int(limit))
-        return await asyncio.to_thread(
-            lambda: timeline.read_entries(TIMELINE_PATH, limit=cap, newest_first=True)
-        )
+
+        def read():
+            rows = timeline.read_entries(TIMELINE_PATH, limit=cap, newest_first=True)
+            for row in rows:
+                row["rollback_supported"] = timeline.rollback_spec(row) is not None
+            return rows
+
+        return await asyncio.to_thread(read)
+
+    async def rollback_timeline_entry(self, entry_id: str) -> dict:
+        """Run one validated, allowlisted rollback through existing APIs."""
+        if not isinstance(entry_id, str) or not entry_id:
+            return {"ok": False, "message": "Invalid timeline entry."}
+        if not _writes_allowed():
+            return _unsupported()
+
+        def find():
+            # Read-only lookup in a worker thread, before the write lock is taken:
+            # timeline entries are append-only, so the record cannot change under us,
+            # and a slow disk must not hold the lock that serializes hardware writes.
+            rows = timeline.read_entries(TIMELINE_PATH, limit=500, newest_first=True)
+            return next((row for row in rows if row.get("id") == entry_id), None)
+
+        entry = await asyncio.to_thread(find)
+        spec = timeline.rollback_spec(entry)
+        if spec is None:
+            return {"ok": False, "message": "This rollback record is unsupported."}
+        kind = spec["kind"]
+        async with _lock():
+            try:
+                if kind == "profile":
+                    rc, out = await asyncio.to_thread(
+                        lambda: _run(Z13_PROFILE + ["apply", spec["profile"], "--no-hooks"],
+                                     PROFILE_APPLY_TIMEOUT_S, as_deck=True))
+                    ok = rc == 0 and "ERR  profile" not in out
+                    return {"ok": ok, "message": "Saved profile restored." if ok else
+                            f"Profile restore failed ({out[-160:] or f'rc={rc}'})."}
+                if kind == "goal":
+                    await asyncio.to_thread(_set_max_fans_recorded, spec["goal"] == "max")
+                    return {"ok": True, "message": "Saved fan goal restored."}
+                field = kind
+                value = spec["value"]
+                result = await asyncio.to_thread(_edit_field_recorded, field, value, "")
+                return {"ok": bool(result.get("ok")),
+                        "message": result.get("message") or ("Saved setting restored." if result.get("ok") else "Setting restore failed.")}
+            except (OSError, RuntimeError, ValueError, KeyError) as exc:
+                decky.logger.warning("Timeline rollback failed: %s", str(exc)[:200])
+                return {"ok": False, "message": f"Rollback failed: {str(exc)[:200]}"}
 
     # ---- Lifecycle ----
     async def _main(self):
         self.loop = asyncio.get_event_loop()
+        self._signals_active = {}
+        self._signals_shown = None
+        self._signals_shown_at = {}
+        self._signals_last_write = None
+        self._signals_wakeup = asyncio.Event()
+        self._signal_controller = HardwareController(Z13CTL)
         self._memory_guard = BackendMemoryGuard()
         self._memory_guard.start()
         self._crash_reporter = crash_report.install(
@@ -1356,8 +1485,9 @@ class Plugin:
         self._state_stream = StateStream(on_state, command=Z13_PROFILE + ["watch"]).start()
         self._enforce_task = self.loop.create_task(self._enforce_max_fans())
         self._desktop_task = self.loop.create_task(self._watch_desktop_app())
+        self._hardware_signals_task = self.loop.create_task(self._run_hardware_signals())
         if self._crash_reporter:
-            for task in (self._enforce_task, self._desktop_task):
+            for task in (self._enforce_task, self._desktop_task, self._hardware_signals_task):
                 task.add_done_callback(self._crash_reporter.task_done)
         decky.logger.info("z13-helper up. z13ctl=%s exists=%s max_fans=%s",
                           Z13CTL, os.path.exists(Z13CTL),
@@ -1370,7 +1500,8 @@ class Plugin:
             await asyncio.to_thread(self._state_stream.close)
         if getattr(self, "_crash_reporter", None):
             self._crash_reporter.close()
-        for task in (getattr(self, "_enforce_task", None), getattr(self, "_desktop_task", None)):
+        for task in (getattr(self, "_enforce_task", None), getattr(self, "_desktop_task", None),
+                     getattr(self, "_hardware_signals_task", None)):
             if task:
                 task.cancel()
         decky.logger.info("z13-helper unloading")

@@ -94,8 +94,9 @@ def next_action(active: Mapping[str, Optional[float]], shown: Optional[Pattern],
     - off switch (`enabled` False): never play; restore the owner's lighting once if a
       signal is still showing.
     - nothing active but a signal showing: restore the owner's lighting (`restore`);
-      with no known lighting to restore, return ("clear", None): the signal is over and
-      the caller drops `shown` and applies the profile's lighting (another write). Clear
+      with no known lighting to restore, return ("clear", <shown pattern at brightness
+      "off">): the signal is over, the caller writes the bar off and drops `shown`
+      (owner decision 2026-11-07: no saved lighting means off, not the flash). Clear
       and restore therefore share the same rate check: under MIN_WRITE_INTERVAL_S both
       return ("none", None) (deferred; the caller asks again later).
       A higher signal ending while a lower one is active plays the lower pattern instead.
@@ -111,7 +112,7 @@ def next_action(active: Mapping[str, Optional[float]], shown: Optional[Pattern],
         if not _may_write(now, last_write):
             return "none", None
         if restore is None:
-            return "clear", None
+            return "clear", Pattern(shown.mode, shown.color, "off")
         return "restore", restore
     if want.pattern == shown or not _may_write(now, last_write):
         return "none", None

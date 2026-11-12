@@ -127,3 +127,62 @@ def test_host_falls_back_to_deck_for_uid_1000(monkeypatch):
     argv, env = host.command(["x"], as_deck=True, mode="root", environ={})
     assert argv[:4] == ["runuser", "-u", "deck", "--"] and "HOME=/home/deck" in argv
     assert env["XDG_RUNTIME_DIR"] == "/run/user/1000"
+
+
+# --- backend_version: read-only, time-bounded z13ctl probe (#22) ---
+
+def test_backend_version_is_parsed_from_the_probe():
+    seen = []
+
+    def run(argv, timeout):
+        seen.append((argv, timeout))
+        return 0, "z13ctl 1.4.2\n"
+
+    assert ps.backend_version(run) == "1.4.2"
+    argv, timeout = seen[0]
+    assert argv[1:] == ["--version"] and argv[0].endswith("z13ctl")
+    assert 0 < timeout <= 5
+
+
+def test_backend_version_failures_are_unknown_and_never_raise():
+    assert ps.backend_version(lambda a, t: (127, "")) == "unknown"
+    assert ps.backend_version(lambda a, t: (124, "")) == "unknown"
+    assert ps.backend_version(lambda a, t: (0, "no number here")) == "unknown"
+
+    def boom(a, t):
+        raise OSError("gone")
+
+    assert ps.backend_version(boom) == "unknown"
+
+
+def test_detect_fills_backend_version_only_when_supported(tmp_path):
+    _z13(tmp_path)
+    r = ps.detect(str(tmp_path), system="linux", version_runner=lambda a, t: (0, "1.4.2"))
+    assert r["backend_version"] == "1.4.2"
+    r = ps.detect(str(tmp_path), system="darwin", version_runner=lambda a, t: (0, "1.4.2"))
+    assert r["backend_version"] == "unknown"
+
+
+def test_detect_on_a_fake_tree_never_runs_the_probe(tmp_path, monkeypatch):
+    _z13(tmp_path)
+
+    def trap(*a, **k):
+        raise AssertionError("probe ran for a test tree")
+
+    monkeypatch.setattr(ps, "backend_version", trap)
+    assert ps.detect(str(tmp_path), system="linux")["backend_version"] == "unknown"
+
+
+def test_default_probe_goes_through_host_run_with_a_timeout(monkeypatch):
+    import host
+    seen = []
+
+    def fake(argv, timeout=None, **k):
+        seen.append((argv, timeout))
+        return host.Result(0, "z13ctl version 1.5.0", False)
+
+    monkeypatch.setattr(host, "run", fake)
+    ps.reset_version_cache()
+    assert ps.backend_version() == "1.5.0"
+    assert ps.backend_version() == "1.5.0"      # cached: no second spawn
+    assert len(seen) == 1 and seen[0][1] == ps.VERSION_TIMEOUT_S

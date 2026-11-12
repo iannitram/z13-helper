@@ -1287,6 +1287,33 @@ def cmd_crash_upload(args):
 # ----------------------------------------------------------------------
 
 
+def _is_hardware_write(key, args):
+    """True when this command would write hardware or the active profile's hardware."""
+    if key in (("profile", "set"), ("profile", "apply"), ("fans", "curve", "set")):
+        return True
+    if key == ("fans", "max-fans"):
+        return args.action in ("on", "off")
+    if key == ("boondock",):
+        return args.action in ("on", "off")
+    if key == ("tdp",):
+        rails = any(getattr(args, r) is not None for r in ("pl1", "pl2", "pl3"))
+        return args.action != "get" or args.value is not None or rails
+    if key == ("battery",):
+        return args.action != "get" or args.value is not None
+    if key == ("brightness",):
+        return args.action != "get" and not (args.action == "screen" and args.value is None)
+    if key == ("lighting",):
+        return args.action != "get" or bool(args.mode or args.device_option)
+    return False
+
+
+def _unsupported_reason():
+    """The platform_support reason when this is not the supported Z13, else ''."""
+    import platform_support
+    found = platform_support.detect()
+    return "" if found["supported"] else (found["reason"] or "unsupported platform")
+
+
 def main(argv=None):
     if argv is None:
         argv = sys.argv[1:]
@@ -1353,6 +1380,10 @@ def main(argv=None):
     handler = handlers.get(key)
     if handler is None:
         return _fail(args, f"unknown command {' '.join(part for part in key if part)}")
+    if _is_hardware_write(key, args):
+        reason = _unsupported_reason()
+        if reason:   # reads stay available; every hardware write is refused (#22)
+            return _fail(args, reason)
     try:
         return handler(args)
     except (_InputError, OverflowError) as exc:

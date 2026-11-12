@@ -8,17 +8,45 @@ import json
 import os
 from typing import Optional
 
+import host
+
 STATE_TEXT = {"needs": "Needs attention", "fine": "Fine", "info": "Info", "na": "Not applicable",
               "reboot": "Reboot pending", "error": "Error", "unknown": "Could not check"}
 EMPTY = {"updated": False, "banner": None, "reason": "", "armoury": None, "rows": []}
+
+
+def host_lib() -> str:
+    """Where install.sh puts the post-update package and the modules it imports (host path)."""
+    return f"{host.DECK_HOME}/.local/lib/z13-helper"
+
+
+# Runs on the host (host.run sends argv there, also from the Flatpak, whose sandbox cannot see
+# ~/.local/lib): the installed package goes first on the path only when it is complete.
+_LAUNCHER = (
+    "import os, sys, runpy\n"
+    "lib, repo = sys.argv[1], sys.argv[2]\n"
+    "sys.argv = ['post_update'] + sys.argv[3:]\n"
+    "paths = [repo + '/tooling', repo + '/src']\n"
+    "if os.path.isfile(os.path.join(lib, 'post_update', '__main__.py')):\n"
+    "    paths.insert(0, lib)\n"
+    "sys.path[:0] = paths\n"
+    "os.environ['PYTHONPATH'] = os.pathsep.join(paths)\n"
+    "runpy.run_module('post_update', run_name='__main__')\n"
+)
+
+
+def _env(repo: str) -> list:
+    """Launcher words for the runner: the installed copy first when it is complete (decided on the
+    host, so the Flatpak sees it too), else the checkout only. A partial LIB/post_update would
+    shadow the checkout's package, so it is left out."""
+    return ["python3", "-c", _LAUNCHER, host_lib(), repo]
 
 
 def tab_argv(repo: str, ack: bool = False) -> list:
     """The host command (argv, no shell) that prints the tab as JSON; `ack` clears the flag."""
     if not os.path.isabs(repo):
         raise ValueError("repo path must be absolute")
-    return ["env", f"PYTHONPATH={repo}/tooling:{repo}/src", "python3", "-m", "post_update",
-            "--tab-json"] + (["--ack"] if ack else [])
+    return _env(repo) + ["--tab-json"] + (["--ack"] if ack else [])
 
 
 def repair_argv(repo: str, ids=None) -> list:
@@ -26,8 +54,7 @@ def repair_argv(repo: str, ids=None) -> list:
     exactly the confirmed step ids and prints the result as JSON."""
     if not os.path.isabs(repo):
         raise ValueError("repo path must be absolute")
-    argv = ["env", f"PYTHONPATH={repo}/tooling:{repo}/src", "python3", "-m", "post_update",
-            "repair", "--json"]
+    argv = _env(repo) + ["repair", "--json"]
     if ids is not None:
         ids = list(ids)
         if not ids or not all(isinstance(i, str) and i and "," not in i and " " not in i for i in ids):

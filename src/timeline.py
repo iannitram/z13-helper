@@ -563,6 +563,52 @@ def read_entries(path=None, *, limit=None, newest_first=False,
     return _read_entries_unlocked(target, limit, newest_first, include_rotated, backups)
 
 
+def rollback_spec(entry):
+    """Return a validated allowlisted rollback action, or None when unsupported.
+
+    Timeline data is persisted input. This deliberately accepts only structured
+    profile, Max Fans goal, and single-setting records; backup paths and command
+    strings are never interpreted here.
+    """
+    if not isinstance(entry, dict):
+        return None
+    rb = entry.get("rollback")
+    if not isinstance(rb, dict):
+        return None
+    kind = rb.get("kind")
+    if kind == "profile":
+        name = rb.get("profile")
+        if (isinstance(name, str) and name and not name.startswith("-")
+                and isinstance(rb.get("snapshot"), dict)
+                and rb["snapshot"].get("name") == name):
+            return {"kind": "profile", "profile": name}
+        return None
+    if kind == "goal" and rb.get("goal") in ("max", "custom"):
+        return {"kind": "goal", "goal": rb["goal"]}
+    if kind in SETTING_KINDS:
+        state = rb.get("state")
+        if not isinstance(state, dict) or set(state) != {kind}:
+            return None
+        value = state[kind]
+        if kind == "tdp":
+            if value is not None:
+                # A stored profile TDP carries an optional bool "force" beside the rails.
+                if (not isinstance(value, dict) or set(value) - {"force"} != {"pl1", "pl2", "pl3"}
+                        or ("force" in value and type(value["force"]) is not bool)
+                        or any(type(value[k]) is not int or not 5 <= value[k] <= 93
+                               for k in ("pl1", "pl2", "pl3"))
+                        or value["pl1"] > value["pl2"] or value["pl2"] > value["pl3"]):
+                    return None
+                value = {k: value[k] for k in ("pl1", "pl2", "pl3")} | {"force": value.get("force", False)}
+        elif kind == "battery_limit":
+            if type(value) is not int or not 40 <= value <= 100:
+                return None
+        elif kind == "brightness" and value not in ("off", "low", "medium", "high"):
+            return None
+        return {"kind": kind, "value": value}
+    return None
+
+
 def _read_entries_unlocked(target, limit, newest_first, include_rotated, backups):
     if limit is not None and int(limit) <= 0:
         return []

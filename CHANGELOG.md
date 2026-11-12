@@ -13,7 +13,7 @@ the device but not yet verified on the Z13. Plan and status: `docs/ROADMAP.md`.
 - 2026-11-11 Docs follow-up (#205): own-release update source (PR #209, #202) and Boondock TDP 28/32/45 W with clamped writes (PR #213, #203) recorded as merged, device checks still owed; ROADMAP §11 row for this project's releases. Post-update armoury fan-attribute check bug filed as #216.
 - 2026-11-11 CI on main fixed (#198, PR #206): ten tests no longer depend on the session user or the machine model. #74 and #75 closed with device evidence; issues #199-#205 filed (acceptance, own-release update source, Boondock TDP, release, docs).
 - 2026-11-11 Docs: replaced dev-machine paths in AGENTS.md and ROADMAP with placeholders (repo-lint, R01).
-
+- 2026-11-07 Reconciled roadmap/spec/pipeline and refreshed the code map against `main` 84f0b1e; state owner (#23) and post-update repair (#27) are implemented, while device acceptance remains open. Added a disposition for the Nov 4 code-audit findings.
 - 2026-11-02 Code map (MAP/README.md, MAP/decky.md) refreshed to match main: repair PRs merged, new modules and tooling listed.
 - 2026-11-01 Phases 15 (goal control) and 16 (hardware as the interface) added after 1.0 on the owner's pick: ROADMAP §10a, §10b; code map MAP/README.md "Planned (after 1.0)"; issues #123-#135 filed (`after-1.0`). SPEC unchanged.
 - 2026-10-26 End-of-night sweep: code map (MAP/README.md, MAP/decky.md) refreshed for PR #49 (`decky/src/profileSwitch.ts`) and PR #3 (`z13_gamemode_report.py`); ROADMAP §1 open-bugs status; PIPELINE notes issue list updated (#16 done, #74-#81 added); #16 closed.
@@ -24,6 +24,7 @@ the device but not yet verified on the Z13. Plan and status: `docs/ROADMAP.md`.
 
 ## Unreleased
 
+- **Post-1.0 build batch (#123, #126, #130, #133, #135):** created `post-1.0` and integrated the goal decision step, fail-closed FPS probe API, lightbar signal wiring, shared touch tokens/layout changes, and desktop/QAM timeline views. Timeline rollback is allowlisted for profiles, Max Fans goals, TDP, charge limit and brightness; backup/OS rollback remains unsupported. Acceptance remains open: #123 traces/review; #126 has no dependable live FPS source; #130 broader event coverage and device soak; #133 rendered touch-target/device evidence; #135 verify supported rollback flows. See `docs/ROADMAP.md` §10a–§10b and `MAP/README.md`.
 - **Resume restore defers to z13ctl 1.4.2+ when its saved state matches (Refs #80; on-device five-cycle check pending).** `z13-profile resume-owner` compares the active app profile, Max Fans intent and z13ctl's saved named profile using files only. The system resume hook defers only when the version is at least 1.4.2 and the ownership check succeeds; every uncertain case retains the full restore and protective-curve fallback.
 - **Crash reports sort into the drop's `z13-helper/` folder (Refs #82).** `upload_report` PUTs to `<base>/public.php/dav/files/<token>/z13-helper/<name>` (`DROP_FOLDER`); the drop creates the folder itself. Queued retries go through the same function, so they land there too.
 

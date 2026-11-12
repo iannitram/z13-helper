@@ -113,6 +113,23 @@ class ProfileControl(QObject):
         self.changed.emit()
         self._submit(f"Profile → {name}", lambda: authority.apply_profile(name))
 
+    def next_name(self):
+        """The profile after the one shown (wraps), or None with fewer than two."""
+        names = self.names()
+        shown = self.shown()["name"]
+        if len(names) < 2 or shown not in names:
+            return None
+        return names[(names.index(shown) + 1) % len(names)]
+
+    def cycle(self):
+        """Switch to the next profile (side-button triple press); returns its name, or None
+        when there is nothing to cycle. Goes through switch(), so the apply raises the same
+        PROFILE_CHANGED lightbar signal as any other profile change (#130)."""
+        name = self.next_name()
+        if name:
+            self.switch(name)
+        return name
+
     def reapply_active(self):
         name = self.active_name()
         self._submit(f"Re-applied {name}", lambda: authority.apply_profile(name, skip_hooks=True))
@@ -218,7 +235,8 @@ class ProfileControl(QObject):
         self.worker.submit(label, fn)
 
     def _on_done(self, label, result):
-        if label == FAN_RECOVERY_LABEL:   # the fan watchdog shares the worker; not ours
+        if label == FAN_RECOVERY_LABEL or label == "Hardware signal lightbar":
+            # The fan watchdog and lightbar signal runner share this queue, not profile state.
             return
         if self.pending_name and label == f"Profile → {self.pending_name}":
             self.pending_name = None
