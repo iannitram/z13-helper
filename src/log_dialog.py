@@ -8,8 +8,6 @@ import time
 from PyQt6.QtCore import Qt, QUrl, pyqtSignal
 from PyQt6.QtGui import QDesktopServices, QFont, QGuiApplication
 from PyQt6.QtWidgets import (
-    QCheckBox,
-    QComboBox,
     QDialog,
     QHBoxLayout,
     QLabel,
@@ -26,6 +24,7 @@ from PyQt6.QtWidgets import (
 
 import app_log
 import crash_report
+from theme import CheckBox, ComboBox
 
 _LEVELS = [("Warnings and errors", logging.WARNING), ("Errors only", logging.ERROR),
            ("Everything", logging.INFO)]
@@ -56,7 +55,7 @@ class LogDialog(QDialog):
         self.info.setWordWrap(True)
         v.addWidget(self.info)
 
-        self.logging_box = QCheckBox(
+        self.logging_box = CheckBox(
             "Save logs to disk (app log, crash reports, fan traces) to help with development")
         self.logging_box.setToolTip(
             f"Writes to {app_log.LOG_DIR}. Off: local logs stay in memory; this window still "
@@ -67,7 +66,7 @@ class LogDialog(QDialog):
         self.logging_box.setVisible(on_logging is not None)
         v.addWidget(self.logging_box)
 
-        self.reporting_box = QCheckBox("Send crash reports automatically")
+        self.reporting_box = CheckBox("Send crash reports automatically")
         self.reporting_box.setToolTip(
             "Send scrubbed crash details and recent app logs to the shared bug drop. "
             "Offline reports are queued for the next start. Applies to the desktop app "
@@ -86,7 +85,7 @@ class LogDialog(QDialog):
         lv.setContentsMargins(0, 6, 0, 0)
         row = QHBoxLayout()
         row.addWidget(QLabel("Show"))
-        self.level = QComboBox()
+        self.level = ComboBox()
         for label, lvl in _LEVELS:
             self.level.addItem(label, lvl)
         self.level.currentIndexChanged.connect(self._fill_log)
@@ -124,7 +123,7 @@ class LogDialog(QDialog):
         tv.setContentsMargins(0, 6, 0, 0)
         row = QHBoxLayout()
         row.addWidget(QLabel("Watchdog"))
-        self.trace_side = QComboBox()
+        self.trace_side = ComboBox()
         self.trace_side.addItem("Desktop app", "desktop")
         self.trace_side.addItem("Game Mode (Decky)", "gamemode")
         self.trace_side.currentIndexChanged.connect(self._fill_trace)
