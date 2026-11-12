@@ -45,6 +45,7 @@ _REPO_TOOLING = os.path.join(
 if os.path.isdir(_REPO_TOOLING) and _REPO_TOOLING not in sys.path:
     sys.path.append(_REPO_TOOLING)
 
+import battery_readout  # noqa: E402
 import host  # noqa: E402
 import profiles  # noqa: E402
 import state_authority as authority  # noqa: E402
@@ -441,7 +442,11 @@ def cmd_status(args):
             "apu": reader.get_apu_temp(),
             "gpu": reader.get_gpu_temp(),
         },
-        "battery": dict(reader.get_battery(), charge_limit=charge_limit),
+        "battery": dict(
+            reader.get_battery(),
+            charge_limit=charge_limit,
+            readout=battery_readout.current(battery_readout.BAT_ROOT, charge_limit),
+        ),
         "max_fans": max_fans_state.is_enabled(),
         "screen_brightness": _screen_percent(),
         "brightness": (active or {}).get("brightness") or _config_brightness(),
@@ -454,6 +459,7 @@ def cmd_status(args):
         f"APU/GPU: {payload['temperatures']['apu']} / {payload['temperatures']['gpu']} °C",
         f"Battery: {payload['battery']['capacity']}% ({payload['battery']['status'] or '-'})"
         f"  limit: {charge_limit if charge_limit is not None else '-'}%",
+        f"Power: {payload['battery']['readout']['text']}",
         f"Max Fans: {'ON' if payload['max_fans'] else 'OFF'}",
         f"Screen brightness: {payload['screen_brightness'] if payload['screen_brightness'] is not None else '-'}%",
         f"Keyboard/rear brightness: {payload['brightness']}",

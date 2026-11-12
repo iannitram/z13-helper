@@ -702,3 +702,22 @@ def test_crash_upload_removes_only_uploaded_report(crash_upload_env, capsys, nam
     assert data["uploaded"] == ["report.zip"] and data["pending"] == []
     assert uploads == [(json.loads(build_path.read_text()), "report.zip", b"PK")]
     assert queue.pending() == [] and (queue.directory / "sent.json").exists()
+
+
+def test_status_includes_battery_readout(tmp_path, monkeypatch, profiles_env, capsys):
+    import battery_readout
+
+    bat = tmp_path / "BAT0"
+    bat.mkdir()
+    for name, value in {"status": "Discharging", "capacity": "57", "power_now": "18200000",
+                        "energy_now": "40000000", "energy_full": "70000000"}.items():
+        (bat / name).write_text(value + "\n")
+    monkeypatch.setattr(battery_readout, "BAT_ROOT", str(bat))
+    monkeypatch.setattr(cli.sensor_reader, "SensorReader", FakeReader)
+    monkeypatch.setattr(cli, "_screen_percent", lambda: 55)
+    monkeypatch.setattr(hardware_controller, "HardwareController", FakeController)
+    data = run_json(capsys, ["status"])
+    readout = data["battery"]["readout"]
+    assert readout["state"] == "Draining"
+    assert readout["rate_w"] == pytest.approx(-18.2)
+    assert "Empty at" in readout["text"]

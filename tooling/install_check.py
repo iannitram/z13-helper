@@ -93,6 +93,7 @@ MANIFEST = [
     ("src/versions.py", f"{LIB}/versions.py", "644", False),
     ("src/power_range.py", f"{LIB}/power_range.py", "644", False),
     ("src/sensor_reader.py", f"{LIB}/sensor_reader.py", "644", False),
+    ("src/battery_readout.py", f"{LIB}/battery_readout.py", "644", False),
     ("src/screen_brightness.py", f"{LIB}/screen_brightness.py", "644", False),
     ("src/evdev_listener.py", f"{LIB}/evdev_listener.py", "644", False),
     ("src/crash_report.py", f"{LIB}/crash_report.py", "644", False),

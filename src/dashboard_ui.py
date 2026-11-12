@@ -27,6 +27,7 @@ from PyQt6.QtGui import QFont, QIcon, QPainter, QColor, QPixmap, QAction
 
 from hardware_controller import HardwareController
 from sensor_reader import SensorReader
+import battery_readout
 from telemetry_history import TelemetryHistory
 from config_manager import ConfigManager
 import app_log
@@ -483,6 +484,10 @@ class DashboardUI(QMainWindow):
         self.batt_100.clicked.connect(self._battery_100)
         srow.addWidget(self.batt_100)
         self.batt.body.addLayout(srow)
+        self.batt_readout = QLabel("")  # live rate + ETA to the limit (#228)
+        self.batt_readout.setObjectName("dim")
+        self._batt_smoother = battery_readout.RateSmoother()
+        self.batt.body.addWidget(self.batt_readout)
         col.addWidget(self.batt)
         self._batt_sep = self._sep()
         col.addWidget(self._batt_sep)
@@ -1077,6 +1082,12 @@ class DashboardUI(QMainWindow):
                 self.power_label.setText(f"On battery · {pw:.1f} W" if pw else "On battery")
             elif st:
                 self.power_label.setText("On AC" + (f" · {st.lower()}" if st not in ("Charging",) else " · charging"))
+        except Exception:
+            pass
+        try:
+            r = battery_readout.current(battery_readout.BAT_ROOT, self.battery_slider.value(),
+                                        smoother=self._batt_smoother)
+            self.batt_readout.setText("" if r["state"] == "Unavailable" else r["text"])
         except Exception:
             pass
         # Decides and enqueues only; the recovery runs on the worker.
