@@ -1,10 +1,13 @@
 """Fans + Power window — G-Helper's `Fans` form, adapted to the Z13 on Linux.
 
-Left column: CPU page (platform profile · power limits SPL/sPPT/fPPT ·
-"Apply Power Limits") and, only when ryzen_smu exists, an Advanced page
-(Curve Optimizer). Right: "BIOS Fan Curves" with the profile combo and
-＋ / Rename / Remove, Clamp to Grid, the draggable 8-point chart, Factory
-Defaults and "Apply Custom Fan Curve".
+Top row: the profile combo with New / Rename / Remove; everything below
+belongs to the profile picked there. Left column, one card each: Platform
+Profile, CPU Boost and Power Limits ("Apply Power Limits" then SPL/sPPT/fPPT);
+only when ryzen_smu exists, a CPU / Advanced switch adds the Advanced page
+(Curve Optimizer). Right: the "BIOS Fan Curves" card with "Apply Custom Fan
+Curve", Max Fans, the draggable 8-point chart, Factory Defaults and Clamp to
+Grid; under it the "Last Hour" card (temperatures and fan speeds,
+history_chart.py).
 
 Everything edits the profile selected in the combo; edits to the active
 profile are pushed to the hardware immediately (ProfileControl).
@@ -12,14 +15,14 @@ profile are pushed to the hardware immediately (ProfileControl).
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
-    QWidget, QHBoxLayout, QVBoxLayout, QLabel, QComboBox, QSlider, QCheckBox,
-    QPushButton, QInputDialog, QMessageBox, QFrame, QStackedWidget, QSizePolicy,
+    QWidget, QHBoxLayout, QVBoxLayout, QLabel, QSlider,
+    QPushButton, QInputDialog, QMessageBox, QStackedWidget,
 )
 
 import epp
 import power_range
 import profiles
-from theme import ModeTile, Panel, tip, STANDARD, CUSTOM, ACCENT_FOR_BASE, TEXT_DIM
+from theme import ModeTile, Panel, CheckBox, ComboBox, heading, tip, STANDARD, CUSTOM, ACCENT_FOR_BASE, SIZE, SPACE
 from fan_curve_widget import FanCurveWidget, DEFAULT_CURVE
 from history_chart import HistoryChartWidget
 from profile_control import ProfileControl
@@ -36,17 +39,17 @@ BASE_LABELS = [("quiet", "Quiet (Silent)"), ("balanced", "Balanced"), ("performa
 
 
 class _SliderRow(QWidget):
-    """Caption left · bold value right · slider underneath (G-Helper panelTotal etc.)."""
+    """Caption left · bold value right · slider underneath."""
 
     def __init__(self, caption, lo, hi, suffix, parent=None):
         super().__init__(parent)
         v = QVBoxLayout(self)
-        v.setContentsMargins(0, 2, 0, 2)
-        v.setSpacing(2)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(0)
         h = QHBoxLayout()
         self.caption = QLabel(caption)
         self.value = QLabel("")
-        self.value.setObjectName("title")
+        self.value.setObjectName("value")
         self.value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         h.addWidget(self.caption)
         h.addStretch(1)
@@ -87,7 +90,7 @@ class FansWindow(QWidget):
         # Per-rail kernel range from sysfs metadata (no live PPT reads, no z13ctl).
         self._ranges = power_range.detect_ranges()
         self._support = None          # platform_support.detect() result (#22), set by the dashboard
-        self.resize(675, 560)
+        self.resize(SIZE["fans_window_w"], SIZE["fans_window_h"])
         self._build()
         self.control.changed.connect(self.refresh)
         self.refresh()
@@ -97,52 +100,19 @@ class FansWindow(QWidget):
     # ------------------------------------------------------------------
 
     def _build(self):
-        root = QHBoxLayout(self)
-        root.setContentsMargins(10, 10, 10, 10)
-        root.setSpacing(10)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(SPACE["md"], SPACE["md"], SPACE["md"], SPACE["md"])
+        outer.setSpacing(SPACE["md"])
 
-        # ---- left column (265 px) ----
-        left = QWidget()
-        left.setFixedWidth(265)
-        lv = QVBoxLayout(left)
-        lv.setContentsMargins(0, 0, 0, 0)
-        lv.setSpacing(8)
-
-        nav = QHBoxLayout()
-        self.btn_cpu = ModeTile("CPU", STANDARD, secondary=True, height=29)
-        self.btn_cpu.radius = 2
-        self.btn_adv = ModeTile("Advanced", STANDARD, secondary=True, height=29)
-        self.btn_adv.radius = 2
-        self.btn_cpu.clicked.connect(lambda: self._nav(0))
-        self.btn_adv.clicked.connect(lambda: self._nav(1))
-        nav.addWidget(self.btn_cpu)
-        nav.addWidget(self.btn_adv)
-        lv.addLayout(nav)
-        self.btn_adv.setVisible(self._uv_available)   # G-Helper: Advanced only with a Ryzen SMU driver
-
-        self.pages = QStackedWidget()
-        self.pages.addWidget(self._build_cpu_page())
-        self.pages.addWidget(self._build_adv_page())
-        lv.addWidget(self.pages, 1)
-        root.addWidget(left)
-
-        # ---- right region ----
-        right = QWidget()
-        rv = QVBoxLayout(right)
-        rv.setContentsMargins(0, 0, 0, 0)
-        rv.setSpacing(6)
-
-        head = QHBoxLayout()
-        t = QLabel("BIOS Fan Curves")
-        t.setObjectName("title")
-        head.addWidget(t)
-        head.addStretch(1)
-        self.combo = QComboBox()
-        self.combo.setMinimumWidth(150)
+        # ---- top: which profile both columns below belong to ----
+        bar = QHBoxLayout()
+        bar.setSpacing(SPACE["sm"])
+        bar.addWidget(heading("Profile"))
+        self.combo = ComboBox()
+        self.combo.setMinimumWidth(200)
         self.combo.currentTextChanged.connect(self._on_combo)
-        head.addWidget(self.combo)
-        self.btn_add = QPushButton("＋")
-        self.btn_add.setFixedWidth(30)
+        bar.addWidget(self.combo)
+        self.btn_add = QPushButton("New")
         self.btn_add.setToolTip("Add a custom profile (copies the selected one)")
         self.btn_add.clicked.connect(self._add)
         self.btn_rename = QPushButton("Rename")
@@ -150,21 +120,67 @@ class FansWindow(QWidget):
         self.btn_remove = QPushButton("Remove")
         self.btn_remove.clicked.connect(self._remove)
         for b in (self.btn_add, self.btn_rename, self.btn_remove):
-            head.addWidget(b)
-        rv.addLayout(head)
+            bar.addWidget(b)
+        bar.addStretch(1)
+        outer.addLayout(bar)
 
-        self.clamp = QCheckBox("Clamp to Grid")
-        self.clamp.toggled.connect(lambda on: self.chart.setClampToGrid(on))
-        rv.addWidget(self.clamp)
+        root = QHBoxLayout()
+        root.setSpacing(SPACE["md"])
+        outer.addLayout(root, 1)
 
-        self.chart = FanCurveWidget(title="CPU Fan Profile, RPM/°C  (both fans share one curve on the Z13)")
+        # ---- left column: one card per setting group ----
+        left = QWidget()
+        left.setFixedWidth(SIZE["fans_side_w"])
+        lv = QVBoxLayout(left)
+        lv.setContentsMargins(0, 0, 0, 0)
+        lv.setSpacing(SPACE["md"])
+
+        # CPU / Advanced switch: only shown when there is an Advanced page to switch to
+        # (G-Helper: Advanced only with a Ryzen SMU driver).
+        self._nav_row = QWidget()
+        nav = QHBoxLayout(self._nav_row)
+        nav.setContentsMargins(0, 0, 0, 0)
+        nav.setSpacing(SPACE["sm"])
+        self.btn_cpu = ModeTile("CPU", STANDARD, height=SIZE["tile_small_h"])
+        self.btn_adv = ModeTile("Advanced", STANDARD, height=SIZE["tile_small_h"])
+        self.btn_cpu.clicked.connect(lambda: self._nav(0))
+        self.btn_adv.clicked.connect(lambda: self._nav(1))
+        nav.addWidget(self.btn_cpu)
+        nav.addWidget(self.btn_adv)
+        lv.addWidget(self._nav_row)
+        self._nav_row.setVisible(self._uv_available)
+
+        self.pages = QStackedWidget()
+        self.pages.addWidget(self._build_cpu_page())
+        self.pages.addWidget(self._build_adv_page())
+        lv.addWidget(self.pages, 1)
+        root.addWidget(left)
+
+        # ---- right region: the fan curve card, then the last hour ----
+        right = QWidget()
+        rv = QVBoxLayout(right)
+        rv.setContentsMargins(0, 0, 0, 0)
+        rv.setSpacing(SPACE["md"])
+
+        curves = Panel("BIOS Fan Curves")
+
+        # What applies to this profile, above the chart it switches on.
+        toggles = QHBoxLayout()
+        toggles.setSpacing(SPACE["lg"])
+        self.apply_curve = CheckBox("Apply Custom Fan Curve")
+        self.apply_curve.toggled.connect(self._on_apply_curve)
+        toggles.addWidget(self.apply_curve)
+        self.max_fans_cb = CheckBox("Max Fans")
+        self.max_fans_cb.setToolTip("Switching to this profile turns Max Fans ON (100%);\n"
+                                    "switching away turns it OFF again.")
+        self.max_fans_cb.toggled.connect(self._on_max_fans_cb)
+        toggles.addWidget(self.max_fans_cb)
+        toggles.addStretch(1)
+        curves.body.addLayout(toggles)
+
+        self.chart = FanCurveWidget(title="RPM / °C · both fans share one curve")
         self.chart.curveChanged.connect(self._on_curve_dragged)
-        rv.addWidget(self.chart, 1)
-
-        if self._history is not None:
-            # The last hour, kept in memory only (telemetry_history.py).
-            self.history_chart = HistoryChartWidget(self._history)
-            rv.addWidget(self.history_chart)
+        curves.body.addWidget(self.chart, 1)
 
         bottom = QHBoxLayout()
         self.btn_defaults = QPushButton("Factory Defaults")
@@ -173,15 +189,18 @@ class FansWindow(QWidget):
         self.result = QLabel("")
         self.result.setObjectName("dim")
         bottom.addWidget(self.result, 1)
-        self.max_fans_cb = QCheckBox("Max Fans")
-        self.max_fans_cb.setToolTip("Switching to this profile turns Max Fans ON (100%);\n"
-                                    "switching away turns it OFF again.")
-        self.max_fans_cb.toggled.connect(self._on_max_fans_cb)
-        bottom.addWidget(self.max_fans_cb)
-        self.apply_curve = QCheckBox("Apply Custom Fan Curve")
-        self.apply_curve.toggled.connect(self._on_apply_curve)
-        bottom.addWidget(self.apply_curve)
-        rv.addLayout(bottom)
+        self.clamp = CheckBox("Clamp to Grid")       # an editing aid, not a profile setting
+        self.clamp.toggled.connect(lambda on: self.chart.setClampToGrid(on))
+        bottom.addWidget(self.clamp)
+        curves.body.addLayout(bottom)
+        rv.addWidget(curves, 1)
+
+        if self._history is not None:
+            # The last hour, kept in memory only (telemetry_history.py).
+            hour = Panel("Last Hour")
+            self.history_chart = HistoryChartWidget(self._history)
+            hour.body.addWidget(self.history_chart)
+            rv.addWidget(hour)
         root.addWidget(right, 1)
         self._nav(0)
 
@@ -189,53 +208,49 @@ class FansWindow(QWidget):
         page = QWidget()
         v = QVBoxLayout(page)
         v.setContentsMargins(0, 0, 0, 0)
-        v.setSpacing(6)
+        v.setSpacing(SPACE["md"])
 
-        t = QLabel("Platform Profile")
-        t.setObjectName("title")
-        v.addWidget(t)
-        self.base_combo = QComboBox()
+        platform = Panel("Platform Profile")
+        self.base_combo = ComboBox()
         for key, label in BASE_LABELS:
             self.base_combo.addItem(label, key)
         self.base_combo.currentIndexChanged.connect(self._on_base)
-        v.addWidget(self.base_combo)
-        v.addWidget(tip("The firmware mode underneath (asus-wmi platform_profile). "
-                        "G-Helper's \"Windows Power Mode\" slot."))
+        platform.body.addWidget(self.base_combo)
+        platform.body.addWidget(tip("The firmware mode underneath (asus-wmi platform_profile). "
+                                    "G-Helper's \"Windows Power Mode\" slot."))
+        v.addWidget(platform)
 
-        t3 = QLabel("CPU Boost")
-        t3.setObjectName("title")
-        v.addWidget(t3)
-        self.epp_combo = QComboBox()
+        boost = Panel("CPU Boost")
+        self.epp_combo = ComboBox()
         epp.fill_combo(self.epp_combo, self.controller.get_epp_choices())
         self.epp_combo.currentIndexChanged.connect(self._on_epp)
-        v.addWidget(self.epp_combo)
-        self.epp_now = QLabel("")
-        self.epp_now.setObjectName("dim")
-        v.addWidget(self.epp_now)
-        v.addWidget(tip("amd-pstate energy_performance_preference on every CPU. Unchanged "
-                        "leaves it as the platform profile sets it."))
+        boost.body.addWidget(self.epp_combo)
+        self.epp_now = boost.right          # "Now: ..." sits in the card's head row
+        boost.body.addWidget(tip("amd-pstate energy_performance_preference on every CPU. Unchanged "
+                                 "leaves it as the platform profile sets it."))
+        v.addWidget(boost)
 
-        t2 = QLabel("Power Limits")
-        t2.setObjectName("title")
-        v.addWidget(t2)
-        self.spl = _SliderRow("SPL (CPU sustained)", PL_MIN, PL_MAX, "W")
-        self.sppt = _SliderRow("sPPT (CPU long boost)", PL_MIN, PL_MAX, "W")
-        self.fppt = _SliderRow("fPPT (CPU short boost)", PL_MIN, PL_MAX, "W")
+        power = Panel("Power Limits")
+        # The switch comes first: it is what makes the three sliders count.
+        self.apply_power = CheckBox("Apply Power Limits")
+        self.apply_power.toggled.connect(self._on_apply_power)
+        power.body.addWidget(self.apply_power)
+        self.spl = _SliderRow("SPL (CPU sustained)", PL_MIN, PL_MAX, " W")
+        self.sppt = _SliderRow("sPPT (CPU long boost)", PL_MIN, PL_MAX, " W")
+        self.fppt = _SliderRow("fPPT (CPU short boost)", PL_MIN, PL_MAX, " W")
         for row, k in ((self.spl, "pl1"), (self.sppt, "pl2"), (self.fppt, "pl3")):
             row.set_range(*self._ranges[k])
-            v.addWidget(row)
+            power.body.addWidget(row)
             row.slider.valueChanged.connect(self._on_tdp_moved)
             row.slider.sliderReleased.connect(self._on_tdp_released)
         self.power_note = QLabel("")
         self.power_note.setObjectName("dim")
         self.power_note.setWordWrap(True)
         self.power_note.setVisible(False)
-        v.addWidget(self.power_note)
-        v.addWidget(tip("sPPT ≥ SPL, fPPT ≥ sPPT. Above 75 W sustained, z13ctl runs the fans "
-                        "at full speed (--force)."))
-        self.apply_power = QCheckBox("Apply Power Limits")
-        self.apply_power.toggled.connect(self._on_apply_power)
-        v.addWidget(self.apply_power)
+        power.body.addWidget(self.power_note)
+        power.body.addWidget(tip("sPPT ≥ SPL, fPPT ≥ sPPT. Above 75 W sustained, z13ctl runs the fans "
+                                 "at full speed (--force)."))
+        v.addWidget(power)
         v.addStretch(1)
         return page
 
@@ -243,19 +258,19 @@ class FansWindow(QWidget):
         page = QWidget()
         v = QVBoxLayout(page)
         v.setContentsMargins(0, 0, 0, 0)
-        t = QLabel("Undervolting")
-        t.setObjectName("title")
-        v.addWidget(t)
+        v.setSpacing(SPACE["md"])
+        under = Panel("Undervolting")
         self.uv = _SliderRow("CPU (Curve Optimizer)", UV_MIN, UV_MAX, "")
         self.uv.slider.sliderReleased.connect(self._on_uv_released)
-        v.addWidget(self.uv)
-        self.auto_uv = QCheckBox("Auto Apply")
+        under.body.addWidget(self.uv)
+        self.auto_uv = CheckBox("Auto Apply")
         self.auto_uv.toggled.connect(self._on_auto_uv)
-        v.addWidget(self.auto_uv)
+        under.body.addWidget(self.auto_uv)
         if not self._uv_available:
-            v.addWidget(tip("Unavailable: the ryzen_smu kernel module is not loaded (stock SteamOS)."))
+            under.body.addWidget(tip("Unavailable: the ryzen_smu kernel module is not loaded (stock SteamOS)."))
             self.uv.setEnabled(False)
             self.auto_uv.setEnabled(False)
+        v.addWidget(under)
         v.addStretch(1)
         return page
 

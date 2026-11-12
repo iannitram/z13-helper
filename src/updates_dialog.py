@@ -5,7 +5,7 @@ import subprocess
 import time
 
 from PyQt6.QtCore import Qt, QUrl, QThread, pyqtSignal
-from PyQt6.QtGui import QDesktopServices, QColor
+from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem, QPushButton, QLabel,
     QAbstractItemView, QHeaderView, QMessageBox, QPlainTextEdit, QTabWidget, QWidget,
@@ -15,7 +15,7 @@ import host
 import install_record
 import post_update_view
 import update_watch
-from theme import TURBO, TEXT_DIM
+from theme import set_tone, tone_item
 
 _INSTALLERS_SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "installers.py")
 _VERSIONS_SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "versions.py")
@@ -121,7 +121,7 @@ class InstallDialog(QDialog):
         if self._repair:
             green, text = install_record.verdict(self._lines[-15:], rc)
             self.status.setText(("✓ " if green else "✗ ") + text)
-            self.status.setStyleSheet(f"color: {'#06B48A' if green else TURBO}; font-weight: bold;")
+            set_tone(self.status, "ok" if green else "danger")
         else:
             self.status.setText("Done ✓" if rc == 0 else install_record.failure_text(self._lines[-40:], rc))
         self.btn_close.setEnabled(True)
@@ -275,7 +275,7 @@ class PostUpdateTab(QWidget):
     def show_status(self, status, problem):
         status = status or post_update_view.EMPTY
         self.banner.setText(problem or status["banner"] or "No SteamOS update seen since the last look.")
-        self.banner.setStyleSheet(f"color: {TURBO}; font-weight: bold;" if status["banner"] else "")
+        set_tone(self.banner, "danger" if status["banner"] else "")
         self.status_changed.emit(post_update_view.tray_text(status) or "")
         self.armoury.setText(post_update_view.armoury_line(status["armoury"]))
         self.btn_ack.setEnabled(bool(status["updated"]))
@@ -285,7 +285,7 @@ class PostUpdateTab(QWidget):
             for c, val in enumerate(post_update_view.row_cells(row)):
                 it = QTableWidgetItem(val)
                 if row["state"] in ("needs", "error", "unknown"):
-                    it.setForeground(QColor(TURBO))
+                    tone_item(it, "danger")
                 self.table.setItem(r, c, it)
 
 
@@ -372,7 +372,7 @@ class UpdatesDialog(QDialog):
                 if c == 4:
                     it.setToolTip(val)
                 if row["new"]:
-                    it.setForeground(QColor(TURBO))
+                    tone_item(it, "accent")
                 if row.get("error"):
                     it.setToolTip(f"Check failed: {row['error']}")
                 table.setItem(r, c, it)
@@ -394,7 +394,7 @@ class UpdatesDialog(QDialog):
         rec = install_record.load()
         self.last_run.setText(install_record.last_run_line(rec))
         if rec and rec.get("verify") in ("green", "red"):
-            self.last_run.setStyleSheet(f"color: {'#06B48A' if rec['verify'] == 'green' else TURBO};")
+            set_tone(self.last_run, "ok" if rec["verify"] == "green" else "danger")
         repo = install_record.repo_path(rec)
         self.btn_repair.setEnabled(bool(repo))
         self.btn_repair.setToolTip(
