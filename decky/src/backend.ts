@@ -140,15 +140,25 @@ export interface ComputeHealth {
     kfd_access: boolean | null;
     render_access: boolean | null;
   };
+  vulkan: {
+    ok: boolean;
+    instance_version: string | null;
+    devices: { name: string | null; api_version: string | null; driver: string | null; type: string | null }[];
+  };
+  compat: { label: string; status: "ok" | "warn" | "info"; detail: string }[];
+  compat_notes: string[];
+  runtimes: string[];
   smoke_budget: string;
 }
+export type ComputeRuntime = "hip" | "vulkan";
 export interface SmokeResult {
   ok: boolean;
+  runtime?: string;
   detail: string;
   budget_mib: number | null;
 }
 export const getComputeHealth = callable<[], ComputeHealth>("get_compute_health");
-export const runComputeSmoke = callable<[], SmokeResult>("run_compute_smoke");
+export const runComputeSmoke = callable<[ComputeRuntime], SmokeResult>("run_compute_smoke");
 // ---- After SteamOS update (tooling/post_update --tab-json, checks only) ----
 export interface PostUpdateRow {
   id: string;

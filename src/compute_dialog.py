@@ -5,7 +5,7 @@ button is pressed, within the budget compute_health.SMOKE_BUDGET_TEXT states.
 """
 
 from PyQt6.QtCore import QThread, pyqtSignal
-from PyQt6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPlainTextEdit, QPushButton, QVBoxLayout
+from PyQt6.QtWidgets import QComboBox, QDialog, QHBoxLayout, QLabel, QPlainTextEdit, QPushButton, QVBoxLayout
 
 import compute_health
 
@@ -51,6 +51,17 @@ def format_report(r):
                              else "no AMD driver file found") + f", vulkaninfo: {rt['vulkaninfo'] or 'not found'}",
             "  Finding a library is not proof every component works; run the test below.",
         ]
+    vk = r.get("vulkan")
+    if vk:
+        if vk.get("ok"):
+            lines += [f"  Vulkan {vk['instance_version'] or '?'}: {d['name']} [{d['driver']}, {d['api_version']}]"
+                      for d in vk["devices"]]
+        else:
+            lines.append("  Vulkan devices: vulkaninfo not found or listed no device.")
+    if r.get("compat"):
+        lines += ["", "Compatibility (a hint, not a verdict)"]
+        lines += [f"  [{c['status']}] {c['label']}: {c['detail']}" for c in r["compat"]]
+        lines += [f"  {n}" for n in r.get("compat_notes", [])]
     return "\n".join(lines)
 
 
@@ -84,9 +95,13 @@ class ComputeDialog(QDialog):
         row = QHBoxLayout()
         self.btn_refresh = QPushButton("Refresh")
         self.btn_refresh.clicked.connect(self.refresh)
+        self.runtime = QComboBox()
+        for key, label in (("hip", "HIP (ROCm)"), ("vulkan", "Vulkan")):
+            self.runtime.addItem(label, key)
         self.btn_smoke = QPushButton("Run allocation test")
         self.btn_smoke.clicked.connect(self._smoke)
         row.addWidget(self.btn_refresh)
+        row.addWidget(self.runtime)
         row.addWidget(self.btn_smoke)
         row.addStretch()
         v.addLayout(row)
@@ -97,13 +112,16 @@ class ComputeDialog(QDialog):
         self._run(compute_health.health_report, self._show_report, "Reading…")
 
     def _smoke(self):
-        self._run(compute_health.smoke_test, self._show_smoke, "Running the allocation test…")
+        runtime = self.runtime.currentData()
+        self._run(lambda: compute_health.smoke_test(runtime=runtime), self._show_smoke,
+                  f"Running the {self.runtime.currentText()} allocation test…")
 
     def _run(self, fn, slot, busy):
         if self._worker is not None and self._worker.isRunning():
             return
         self.btn_refresh.setEnabled(False)
         self.btn_smoke.setEnabled(False)
+        self.runtime.setEnabled(False)
         self.text.setPlainText(busy)
         self._worker = _Worker(fn, self)
         self._worker.done.connect(slot)
@@ -112,6 +130,7 @@ class ComputeDialog(QDialog):
     def _finish(self):
         self.btn_refresh.setEnabled(True)
         self.btn_smoke.setEnabled(True)
+        self.runtime.setEnabled(True)
 
     def _show_report(self, r):
         self._finish()
@@ -121,7 +140,7 @@ class ComputeDialog(QDialog):
     def _show_smoke(self, r):
         self._finish()
         verdict = "PASSED" if r.get("ok") else "FAILED"
-        self.text.setPlainText(f"{self._report_text}\n\nAllocation test {verdict}: "
+        self.text.setPlainText(f"{self._report_text}\n\n{r.get('runtime', 'hip').upper()} allocation test {verdict}: "
                                f"{r.get('detail') or r.get('error')}")
 
     def showEvent(self, e):

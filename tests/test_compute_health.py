@@ -129,7 +129,7 @@ def test_smoke_runs_bounded(sysfs, fake_host):
     fake_host.fail(is_smoke, rc=0, out=json.dumps({"ok": True, "detail": "fine"}))
     r = ch.smoke_test(10 ** 6, hip_lib="/opt/rocm/lib/libamdhip64.so")
     call = fake_host.calls[-1]
-    assert r == {"ok": True, "budget_mib": ch.SMOKE_MAX_MIB, "detail": "fine"}
+    assert r == {"ok": True, "budget_mib": ch.SMOKE_MAX_MIB, "runtime": "hip", "detail": "fine"}
     assert call.timeout == ch.SMOKE_TIMEOUT_S
     assert call.argv[-2:] == ["/opt/rocm/lib/libamdhip64.so", str(ch.SMOKE_MAX_MIB)]
     assert "HSA_OVERRIDE_GFX_VERSION" not in ch.SMOKE_SCRIPT
@@ -170,3 +170,165 @@ def test_report_text_keeps_pools_apart_and_marks_unknowns():
     assert "gfx1151 (Strix Halo): yes" in text
     assert "ROCm/HIP: not found" in text
     assert "render node access: unavailable" in text
+
+
+# ---- Vulkan verification, runtime choice, compatibility diagnostic (#26) ----
+
+VULKANINFO = """Vulkan Instance Version: 1.4.350
+
+Devices:
+========
+GPU0:
+\tapiVersion         = 1.4.350
+\tdeviceType         = PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU
+\tdeviceName         = AMD Radeon 8060S Graphics (RADV STRIX_HALO)
+\tdriverName         = radv
+GPU1:
+\tapiVersion         = 1.3.0
+\tdeviceType         = PHYSICAL_DEVICE_TYPE_CPU
+\tdeviceName         = llvmpipe
+\tdriverName         = llvmpipe
+"""
+
+
+def is_vk_smoke(argv):
+    return ch.VULKAN_SMOKE_SCRIPT in argv
+
+
+def test_parse_vulkaninfo_lists_devices_and_version():
+    r = ch.parse_vulkaninfo(VULKANINFO)
+    assert r["instance_version"] == "1.4.350"
+    assert [d["name"] for d in r["devices"]] == ["AMD Radeon 8060S Graphics (RADV STRIX_HALO)", "llvmpipe"]
+    assert r["devices"][0] == {"name": "AMD Radeon 8060S Graphics (RADV STRIX_HALO)", "api_version": "1.4.350",
+                               "driver": "radv", "type": "INTEGRATED_GPU"}
+
+
+def test_vulkan_info_runs_summary_only(fake_host):
+    fake_host.fail(lambda a: a[-1] == "--summary", rc=0, out=VULKANINFO)
+    r = ch.vulkan_info("/usr/bin/vulkaninfo")
+    assert r["ok"] and r["instance_version"] == "1.4.350"
+    assert fake_host.calls[-1].timeout == ch.VULKANINFO_TIMEOUT_S
+    assert ch.vulkan_info(None)["ok"] is False
+
+
+def test_vulkan_info_failure_is_not_ok(fake_host):
+    fake_host.fail(lambda a: a[-1] == "--summary", rc=1, out="boom")
+    assert ch.vulkan_info("/usr/bin/vulkaninfo") == {"ok": False, "instance_version": None, "devices": [],}
+
+
+def test_smoke_rejects_unknown_runtime_without_running(sysfs, fake_host):
+    r = ch.smoke_test(runtime="cuda")
+    assert r["ok"] is False and "Unknown runtime" in r["detail"]
+    assert not fake_host.argvs
+
+
+def test_smoke_hip_is_still_the_default(sysfs, fake_host):
+    fake_host.fail(is_smoke, rc=0, out=json.dumps({"ok": True, "detail": "fine"}))
+    r = ch.smoke_test(hip_lib="/opt/rocm/lib/libamdhip64.so")
+    assert r["runtime"] == "hip" and r["ok"] and not any(is_vk_smoke(a) for a in fake_host.argvs)
+
+
+def test_smoke_vulkan_runs_bounded(sysfs, fake_host):
+    fake_host.fail(is_vk_smoke, rc=0, out=json.dumps({"ok": True, "detail": "fine"}))
+    r = ch.smoke_test(10 ** 6, runtime="vulkan", vulkan_lib="libvulkan.so.1")
+    call = fake_host.calls[-1]
+    assert r == {"ok": True, "budget_mib": ch.SMOKE_MAX_MIB, "runtime": "vulkan", "detail": "fine"}
+    assert call.timeout == ch.SMOKE_TIMEOUT_S
+    assert call.argv[-2:] == ["libvulkan.so.1", str(ch.SMOKE_MAX_MIB)]
+    assert "HSA_OVERRIDE_GFX_VERSION" not in ch.VULKAN_SMOKE_SCRIPT
+
+
+def test_smoke_vulkan_needs_an_amd_driver(sysfs, fake_host):
+    fake_host.fail("python3", rc=0, out=json.dumps({"hip_libs": ["/x"], "vulkan_icds": []}))
+    r = ch.smoke_test(runtime="vulkan")
+    assert r["ok"] is False and "Vulkan driver" in r["detail"]
+    assert not any(is_vk_smoke(a) for a in fake_host.argvs)
+
+
+def test_smoke_vulkan_timeout(sysfs, fake_host):
+    fake_host.fail(is_vk_smoke, rc=124, out="", timed_out=True)
+    assert "Timed out" in ch.smoke_test(runtime="vulkan", vulkan_lib="x")["detail"]
+
+
+def test_vulkan_script_reports_unloadable_library(real_subprocess):
+    out = real_subprocess([sys.executable, "-I", "-c", ch.VULKAN_SMOKE_SCRIPT, "/nonexistent/libvulkan.so.1", "16"],
+                         capture_output=True, text=True, timeout=30).stdout
+    data = json.loads(out.splitlines()[-1])
+    assert data["ok"] is False and "cannot load" in data["detail"]
+
+
+def test_vulkan_script_compiles():
+    compile(ch.VULKAN_SMOKE_SCRIPT, "vulkan-smoke", "exec")
+
+
+def test_parse_rocm_version_and_lib_version():
+    assert ch.parse_rocm_version("6.4.1-123") == (6, 4, 1)
+    assert ch.parse_rocm_version("7.0") == (7, 0, 0)
+    assert ch.parse_rocm_version("junk") is None and ch.parse_rocm_version(None) is None
+    assert ch.lib_version("/opt/rocm/lib/libamdhip64.so.6.4.60401") == "6.4.60401"
+    assert ch.lib_version("/opt/rocm/lib/libamdhip64.so") is None
+
+
+def _rows(rt, agents=None, amdgpu=True, kfd=True):
+    agents = [{"gfx": "gfx1151", "name": None}] if agents is None else agents
+    return {r["label"]: r for r in ch.compat_report("7.2.0", agents, rt, amdgpu, kfd)}
+
+
+RT_OK = {"ok": True, "hip_libs": ["/opt/rocm/lib/libamdhip64.so.6.4.60401"], "rocm_version": "6.4.1",
+         "kfd_access": True, "render_access": True}
+
+
+def test_compat_all_good():
+    rows = _rows(RT_OK)
+    assert all(r["status"] in ("ok", "info") for r in rows.values())
+    assert rows["ROCm"]["status"] == "ok" and rows["HIP library"]["detail"] == "6.4.60401"
+    assert rows["Kernel"]["detail"] == "7.2.0"
+
+
+def test_compat_old_rocm_warns_on_gfx1151():
+    rows = _rows({**RT_OK, "rocm_version": "6.2.4"})
+    assert rows["ROCm"]["status"] == "warn" and "predates" in rows["ROCm"]["detail"]
+
+
+def test_compat_missing_pieces():
+    rows = _rows({"ok": True, "hip_libs": [], "rocm_version": None, "kfd_access": False, "render_access": True},
+                 agents=[], amdgpu=False, kfd=False)
+    assert rows["amdgpu driver"]["status"] == "warn" and rows["KFD (compute interface)"]["status"] == "warn"
+    assert rows["GPU target"]["status"] == "warn"
+    assert rows["ROCm"]["status"] == "info" and rows["Access"]["status"] == "warn"
+
+
+def test_compat_discovery_failed_is_info_not_warn():
+    rows = _rows({"ok": False, "hip_libs": []})
+    assert rows["ROCm"]["status"] == "info" and rows["Access"]["status"] == "info"
+
+
+def test_health_report_has_vulkan_compat_and_choices(sysfs, fake_host, monkeypatch):
+    monkeypatch.setattr(ch, "AMDGPU_MODULE", str(sysfs))
+    monkeypatch.setattr(ch, "KFD_ROOT", str(sysfs / "kfd"))
+    fake_host.fail(lambda a: a[-1] == "--summary", rc=0, out=VULKANINFO)
+    fake_host.fail("python3", rc=0, out=json.dumps({"hip_libs": [], "vulkaninfo": "/usr/bin/vulkaninfo"}))
+    r = ch.health_report()
+    assert r["runtimes"] == ["hip", "vulkan"]
+    assert r["vulkan"]["devices"][0]["driver"] == "radv"
+    assert any(row["label"] == "ROCm" for row in r["compat"])
+    assert any("hipSPARSELt" in n for n in r["compat_notes"])
+    assert not any(is_smoke(a) or is_vk_smoke(a) for a in fake_host.argvs)   # reporting allocates nothing
+
+
+def test_report_text_shows_vulkan_and_compat():
+    pytest.importorskip("PyQt6.QtWidgets")
+    import compute_dialog as cd
+    r = {
+        "memory": {"physical_total": None, "ram_total": None, "ram_available": None, "ram_used": None,
+                   "vram_reserved": None, "vram_used": None, "gtt_limit": None, "gtt_used": None,
+                   "pressure_avg10": None, "notes": []},
+        "gpu_agents": [], "gfx1151": False, "kernel": "7.2",
+        "runtime": {"ok": False},
+        "vulkan": ch.parse_vulkaninfo(VULKANINFO) | {"ok": True},
+        "compat": [{"label": "ROCm", "status": "warn", "detail": "too old"}],
+        "compat_notes": ["note-c"],
+    }
+    text = cd.format_report(r)
+    assert "Vulkan 1.4.350: AMD Radeon 8060S Graphics (RADV STRIX_HALO) [radv, 1.4.350]" in text
+    assert "[warn] ROCm: too old" in text and "note-c" in text
