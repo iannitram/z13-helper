@@ -25,6 +25,18 @@ the device but not yet verified on the Z13. Plan and status: `docs/ROADMAP.md`.
 
 ## Unreleased
 
+(nothing yet)
+
+## 1.0.0 — 2026-11-16
+
+The first 1.0 release. Evidence for each 1.0 Must: [`docs/releases/1.0.0.md`](docs/releases/1.0.0.md). Version 1.0.0 in the desktop app, the Decky package and the Flatpak AppStream metadata (#204). M9 (Game Mode Quick Access focus and the VRR profile) moved after 1.0 on the owner's word, tracked in #250.
+
+- **Version 0.5.1 to 1.0.0** in `src/versions.py`, `decky/package.json`, the AppStream release list, README, AGENTS.md, PIPELINE.md, SPEC.md and MAP/README.md; crash-report test fixtures follow.
+- **Device acceptance pass of 2026-11-16 recorded:** M3, M4 (Repair install), M6, M7 (before and after a reboot, after the #244 and #245 fixes) and M8, plus #122, #30, #235, #203, #80 and #61 (evidence on the issues).
+- **Known issues shipping in 1.0:** #243, #86, #80, #73 and #249 (fix in PR #251); see the release record.
+
+### Changes since 0.5.1
+
 - **Resume restore defers to z13ctl 1.4.2+ when its saved state matches (Refs #80; on-device five-cycle check pending).** `z13-profile resume-owner` compares the active app profile, Max Fans intent and z13ctl's saved named profile using files only. The system resume hook defers only when the version is at least 1.4.2 and the ownership check succeeds; every uncertain case retains the full restore and protective-curve fallback.
 - **Crash reports sort into the drop's `z13-helper/` folder (Refs #82).** `upload_report` PUTs to `<base>/public.php/dav/files/<token>/z13-helper/<name>` (`DROP_FOLDER`); the drop creates the folder itself. Queued retries go through the same function, so they land there too.
 

@@ -13,8 +13,8 @@ Status marks: ✅ shipped · 🔧 in progress · ⏳ planned · 🚧 gated (need
 
 ## 1. Where we are (audit, 2026-10-09)
 
-**2026-10-30 update:** Repair release **0.5.1** has Desktop fan/power checks on SteamOS
-**3.9.5 / kernel 7.2** with z13ctl 1.4.2. See the [release verification record](releases/0.5.1.md)
+**2026-10-30 update:** The repair release before 1.0 has Desktop fan/power checks on SteamOS
+**3.9.5 / kernel 7.2** with z13ctl 1.4.2. See the [release records](releases/)
 and [current code/connection map](../MAP/README.md). PRs #89, #92, #93, #95 and #97 merged
 2026-10-30. The remaining historical audit and upstream-watch tables below retain
 their dated observations; they are not current inventory. Interactive Game Mode, sustained load
@@ -31,7 +31,7 @@ dated tick only where an issue comment already shows the evidence.
 **2026-11-16 update (device acceptance pass for 1.0, Z13, SteamOS 3.9.5, main 06c4826 unless noted):**
 - **PASS:** #203 Boondock TDP (the app clamps to the firmware floors 28/32/45 W and reports what applied; `z13ctl tdp --get` matched); #199 single state owner, M6 (0 fan-curve writes from z13ctl over 10 min idle, 9:43:35am to 9:53:35am); #201 M3 lightbar and themes, M4 Repair (the Updates panel shows the z13ctl update row; Repair from the panel finished All green, 99 ok, 0 failures) and M8 lightbar reset recovery; #200 support bundle preview (no identifiers); #80 and #61 five of five suspend/resume cycles on Turbo with Max Fans (the custom curve is back 3-6 s after wake); #235 dashboard scroll fix (PR #242; window minimum 579x480, nothing clipped); #122 changed-plugin repair reported "Decky frontend: pass" and All green; #30 one-hour RSS soak flat (all six processes; Decky backend 47.1 MiB), closed as not reproduced (the soak length is the owner's call: 1 h, not 24 h).
 - **FAILED:** M7 (`install.sh --post-update --only amdgpu,rocm`, #200), ran 2026-11-16 at 1:14pm, blocked by #244 and #245. #244: the amdgpu task failed ("no GRUB_CMDLINE_LINUX_DEFAULT line in /etc/default/grub-steamos"; 3.9.5 sets the parameters in a continued `GRUB_CMDLINE_LINUX` block) although the parameters are already applied and on `/proc/cmdline`; the backup was restored. #245: the rocm task reported done, but `rocminfo` still fails because `libfmt.so.11` is missing (the repo has fmt 12.2.0, which provides only `libfmt.so.12`). No reboot was needed or done.
-- **Still pending for 1.0:** M9 (Quick Access menu focus with a game running, #201), and the fixes for #244 and #245 followed by a passing M7 re-run. Then the v1.0.0 tag (#204).
+- **Still pending for 1.0:** nothing but the owner's word on the release PR and the v1.0.0 tag (#204). M7 passed 2026-11-16 after the #244 and #245 fixes, before and after the reboot (main 77c29ef). M9 moved after 1.0 (#250). The evidence record is `docs/releases/1.0.0.md`.
 - **New, non-blocking, after 1.0:** #243, a desktop-launched instance hit a Qt SIGABRT about 10 s after start.
 
 ### Shipped and working
@@ -40,11 +40,11 @@ dated tick only where an issue comment already shows the evidence.
 | Desktop app (PyQt6 Flatpak `io.github.iannitram.Z13Helper`) | ✅ profiles, TDP, 8-point curve (spinboxes), battery limit, brightness, telemetry, tray, single-instance, resident service |
 | Side button | ✅ Desktop: host evdev reader → window toggle. Game Mode: `z13-button-watcher` → QAM / Steam menu |
 | Max Fans | ✅ shared `max-fans.json`, watchdog in app + Decky, re-pinned at login/resume |
-| Decky plugin `z13-helper` | ✅ profile dropdown, Max Fans, TDP sliders, charge limit, per-device brightness, telemetry (§7; TDP and charge-limit writes in Game Mode checked 2026-11-07, #74; changed-plugin repair frontend check passed 2026-11-16, #122; M9 Quick Access focus with a game running still pending, #201) |
+| Decky plugin `z13-helper` | ✅ profile dropdown, Max Fans, TDP sliders, charge limit, per-device brightness, telemetry (§7; TDP and charge-limit writes in Game Mode checked 2026-11-07, #74; changed-plugin repair frontend check passed 2026-11-16, #122; M9 Quick Access focus with a game running moved after 1.0, #250) |
 | Host profiles | ✅ profiles engine (`z13-profile`, §4); `z13-restore-profile.service` at login runs `z13-profile restore` |
 | Installer | ✅ `install.sh` / `--repair` + `install_check.py verify` (§9a); Repair button in the Updates panel (`./install.sh --repair` itself ran green on the device 2026-11-06 and 2026-11-07, #75; the button's on-device check passed 2026-11-16, #201) |
 | Lightbar wedge | ✅ auto-recovery via `z13-lightbar-reset.service` + polkit rule (§3; reset and daemon restart found necessary on-device 2026-10-11; reset recovery passed on the device 2026-11-16, M8, #201) |
-| App version | **0.5.1** (2026-10-30; `CHANGELOG.md`, desktop/Decky/AppStream aligned) |
+| App version | **1.0.0** (2026-11-16; `CHANGELOG.md`, desktop/Decky/AppStream aligned; tag pending the owner, #204) |
 | Boondock | Earlier hardware/profile-hook checks: quiet + 20/30/40 W + screen 35 % (the built-in TDP is now 28/32/45 W, PR #213, #203; not re-run on the device). The Docker/VM steps are gone and `BG_SERVICES` names the user `llama-swap` unit (#65, closed 2026-11-01); a current device run of the profile is not recorded. The 28/32/45 W TDP itself passed on the device 2026-11-16 (#203). |
 
 ### Open bugs and test debt (updated 2026-10-30)
@@ -276,13 +276,13 @@ controller fix; the kernel comes with SteamOS; G-Helper is Windows).
 
 ---
 
-## 7. Phase 11 — Decky parity ✅ written 2026-10-11; on-device check partly done (TDP and charge-limit writes in Game Mode, 2026-11-07, #74; changed-plugin repair frontend check, 2026-11-16, #122), the rest pending (#61, M9 on #201)
+## 7. Phase 11 — Decky parity ✅ written 2026-10-11; on-device check partly done (TDP and charge-limit writes in Game Mode, 2026-11-07, #74; changed-plugin repair frontend check, 2026-11-16, #122), the rest pending (#61; M9 moved after 1.0, #250)
 Contracts the plugin depends on (don't change silently): `max-fans.json` schema, `profiles.json`
 schema + `z13-profile` CLI, z13ctl output formats parsed by `main.py`.
 - ✅ **Profile dropdown** from `profiles.json` (replaces the raw platform-profile list; falls back to it
-  if the store is missing). ✅ A failed switch now reverts to the backend's active profile and Max Fans is re-read after every switch (#16, PR #49, 2026-10-26; on-device check pending, #61, M9 on #201).
+  if the store is missing). ✅ A failed switch now reverts to the backend's active profile and Max Fans is re-read after every switch (#16, PR #49, 2026-10-26; on-device check pending, #61; M9 moved after 1.0, #250).
 - ✅ fan-stall watchdog (today).
-- ✅ written 2026-10-11 (branch `claude/decky-parity`); on-device: TDP and charge-limit changes applied in Game Mode with every backend command rc 0, owner-confirmed 2026-11-07 (#74 comment, 2026-11-08), the changed-plugin repair frontend check passed 2026-11-16 (#122), the profile list, brightness and telemetry checks and M9 (Quick Access focus with a game running, #201) still pending (#61): **TDP sliders**
+- ✅ written 2026-10-11 (branch `claude/decky-parity`); on-device: TDP and charge-limit changes applied in Game Mode with every backend command rc 0, owner-confirmed 2026-11-07 (#74 comment, 2026-11-08), the changed-plugin repair frontend check passed 2026-11-16 (#122), the profile list, brightness and telemetry checks still pending (#61); M9 (Quick Access focus with a game running) moved after 1.0 (#250): **TDP sliders**
   SPL/sPPT/fPPT per-rail kernel bounds, 5…93 W fallback (sPPT ≥ SPL, fPPT ≥ sPPT, written on release),
   **Not set** when absent, + "Apply power limits" →
   active profile's `tdp` in `profiles.json`, then `z13ctl tdp --set` as deck (off →
@@ -591,7 +591,7 @@ Installed/pinned versions as of **2026-10-12**; SteamOS, kernel and Decky rows u
 
 | Component | Repo / source | Installed here | Latest | Watch for |
 |---|---|---|---|---|
-| Z13-Helper (this project) | `iannitram/z13-helper` releases | **0.5.1** (installed app version) | no v1.0.0 published yet | The Updates panel lists this project's own releases as an update source, neutral until v1.0.0 exists or when GitHub is unreachable (`src/update_watch.py`, PR #209, merged 2026-11-11, Refs #202). **Done (#202):** code merged in PR #209; only the on-device check of the Updates panel is still open. |
+| Z13-Helper (this project) | `iannitram/z13-helper` releases | **1.0.0** (version in the repo; tag pending the owner, #204) | no v1.0.0 published yet | The Updates panel lists this project's own releases as an update source, neutral until v1.0.0 exists or when GitHub is unreachable (`src/update_watch.py`, PR #209, merged 2026-11-11, Refs #202). **Done (#202):** code merged in PR #209; only the on-device check of the Updates panel is still open. |
 | **z13ctl** (backend) | `dahui/z13ctl` releases | **1.4.2** (daemon `--no-button`; 1.1.6 kept as rollback) | **1.4.2** (2026-10-09; still the latest 2026-10-26; ran on kernel 7.2.7 in the #74 pass, 2026-11-06) | a release tested on 7.2 / SteamOS 3.9; hard-lock reports after 1.4.x; asus-armoury path on Valve kernels; `subscribe` API changes (§8) |
 | Decky Loader | `SteamDeckHomebrew/decky-loader` | **3.3.1** | **3.3.0** (2026-10-18; 3.3.1 is installed, newest release not re-checked 2026-11-11; **minimum** since the 2026-10-13 Steam client, #77) | `@decky/api`/`@decky/ui` breaking changes; `_root` flag policy; the new unvetted-plugin warning |
 | asusctl | `OpenGamingCollective/asusctl` | not installed (reference) | 6.5.0 | GZ302 Aura/LampArray support; boot-hang race with hid-asus (#718) — reason we don't run asusd |
@@ -622,7 +622,7 @@ for r in dahui/z13ctl OpenGamingCollective/asusctl SteamDeckHomebrew/decky-loade
    allow the firmware ramp to settle, and correlate the trace with shared intent, the configured
    curve and backend saved TDP. Non-zero RPM and `pwm1_enable = 1` alone do not prove response;
    frozen tach requires corroboration. Repeat with the resident app to expose recovery races.
-   Never poll Armoury live PPT values. See the 0.5.1 record for bounded checks already performed.
+   Never poll Armoury live PPT values. See the repair-release record in `docs/releases/` for bounded checks already performed.
 5. Brightness: `z13ctl --device keyboard brightness low` and `… lightbar …` both return 0.
 6. Decky: inspect `journalctl -u plugin_loader.service` for backend startup/errors; verify one loader
    and walk through the QAM with a game running. A loaded backend does not establish interactive success.
@@ -637,7 +637,8 @@ for r in dahui/z13ctl OpenGamingCollective/asusctl SteamDeckHomebrew/decky-loade
 |---|---|
 | `CLAUDE.md` | cold-start orientation |
 | `MAP/README.md`, `MAP/decky.md` | current module, process, state and installation connections |
-| `docs/releases/0.5.1.md` | repair PR dependencies, evidence and outstanding device checks |
+| `docs/releases/1.0.0.md` | 1.0 evidence record: each Must, its status and evidence links, known open bugs |
+| `docs/releases/` | one record per release; the repair release before 1.0 is a dated snapshot |
 | **`docs/ROADMAP.md`** | **this plan — the only forward-looking doc** |
 | `docs/plan/Phase_1…6.md` | historical record of how we got here (frozen; banner added) |
 | `docs/BUTTON-AND-INPUTPLUMBER.md` | side-button root cause + fix |

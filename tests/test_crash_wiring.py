@@ -20,7 +20,7 @@ from build_crash_config import bake
 import crash_report as cr
 
 BUILD = {"base": "https://drop.invalid/reports", "token": "test-only-token",
-         "version": "0.5.1", "commit": "abc1234"}
+         "version": "1.0.0", "commit": "abc1234"}
 
 
 @pytest.fixture
@@ -71,7 +71,7 @@ def test_main_qt_and_thread_hooks_keep_local_handler_and_deduplicate(wiring):
     assert len(wiring.sent) == 1 and len(wiring.passed) == 3
     assert re.fullmatch(r"z13-helper-linux-\d{8}T\d{6}Z-[0-9a-f]{8}\.zip", wiring.sent[0][1])
     report, _ = unpack(wiring.sent[0])
-    assert report["app"] == "z13-helper" and report["version"] == "0.5.1"
+    assert report["app"] == "z13-helper" and report["version"] == "1.0.0"
     assert report["commit"] == "abc1234" and report["exception_type"] == "ValueError"
     assert "Traceback" in report["traceback"]
     assert re.fullmatch("[0-9a-f]{32}", report["install_id"])
