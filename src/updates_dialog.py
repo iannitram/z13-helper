@@ -361,17 +361,28 @@ class UpdatesDialog(QDialog):
 
     def _fill(self, table, rows):
         table.setRowCount(len(rows))
+        is_installable = (table is getattr(self, "table", None)) or (
+            table is not getattr(self, "track", None) and any(r.get("installer") for r in rows)
+        )
         for r, row in enumerate(rows):
             latest = "check failed" if row.get("error") else (row["latest"] or "—")
             if not row.get("error") and not row["latest"]:
                 latest = {"none": "no release yet", "unreachable": "not reachable"}.get(row.get("state"), latest)
             vals = [row["label"], row["installed"] or "—", latest, row["published"] or "",
                     (row["note"] or "") + (("\n" + (row["notes"] or "")) if row.get("notes") else "")]
+            is_danger = (
+                is_installable
+                and bool(row.get("installer", True))
+                and not row.get("error")
+                and update_watch.is_newer(row.get("latest"), row.get("installed"))
+            )
             for c, val in enumerate(vals):
                 it = QTableWidgetItem(val.splitlines()[0] if c == 4 else val)
                 if c == 4:
                     it.setToolTip(val)
-                if row["new"]:
+                if is_danger:
+                    tone_item(it, "danger")
+                elif not row.get("error") and row.get("new"):
                     tone_item(it, "accent")
                 if row.get("error"):
                     it.setToolTip(f"Check failed: {row['error']}")
