@@ -8,6 +8,7 @@ import random
 
 import pytest
 
+import fps_source
 import goal_control as gc
 import power_range
 
@@ -281,6 +282,20 @@ def test_trace_missing_fps_holds_then_recovers():
         tdp, state = out["tdp"], out["state"]
         now += gc.MIN_DWELL_S
     assert trace == [30, 30, 30, 35, 40, 40]
+
+
+def test_unsupported_fps_source_stays_fail_closed():
+    goal = {"kind": "fps", "target_fps": 60}
+    tdp, state = dict(TDP), {}
+    for now in (0.0, gc.MIN_DWELL_S, 2 * gc.MIN_DWELL_S):
+        fps = fps_source.read()
+        assert fps is None
+        out = gc.step(goal, {"fps": fps}, {"tdp": tdp, "fan_curve": CURVE}, RANGES,
+                      now_s=now, state=state)
+        assert out["tdp"] == TDP and out["fan_curve"] == CURVE
+        assert out["reason"] == "Waiting for fps reading"
+        assert "last_change_at" not in out["state"]
+        tdp, state = out["tdp"], out["state"]
 
 
 def test_trace_fps_dropout_mid_run_holds_the_last_setpoints():
