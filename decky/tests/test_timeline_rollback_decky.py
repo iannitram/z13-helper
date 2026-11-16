@@ -81,7 +81,7 @@ class RollbackEntryTest(RollbackBase):
                 ("tdp", {"pl1": 15, "pl2": 25, "pl3": 35, "force": False},
                  lambda e: e["after"]["tdp"]["pl1"] == 15)):
             with self.subTest(kind=kind):
-                res = self.rollback(_entry(kind, state={kind: value}))
+                res = self.rollback(_entry(kind, state={kind: value}, profile="Balanced"))
                 self.assertTrue(res["ok"], res)
                 new = self.entries()[1:]   # the seeded entry comes first (each rollback reseeds the file)
                 self.assertEqual(len(new), 1, new)
@@ -121,7 +121,7 @@ class RollbackEntryTest(RollbackBase):
 
     def test_setting_failure_returns_ok_false_with_a_message_and_a_failed_entry(self):
         self.fh.fail("battery", out="write /dev/hidraw5: connection timed out")
-        res = self.rollback(_entry("battery_limit", state={"battery_limit": 85}))
+        res = self.rollback(_entry("battery_limit", state={"battery_limit": 85}, profile="Balanced"))
         self.assertFalse(res["ok"])
         self.assertTrue(res["message"])
         last = self.entries()[-1]
