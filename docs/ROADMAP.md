@@ -30,8 +30,8 @@ dated tick only where an issue comment already shows the evidence.
 
 **2026-11-16 update (device acceptance pass for 1.0, Z13, SteamOS 3.9.5, main 06c4826 unless noted):**
 - **PASS:** #203 Boondock TDP (the app clamps to the firmware floors 28/32/45 W and reports what applied; `z13ctl tdp --get` matched); #199 single state owner, M6 (0 fan-curve writes from z13ctl over 10 min idle, 9:43:35am to 9:53:35am); #201 M3 lightbar and themes, M4 Repair (the Updates panel shows the z13ctl update row; Repair from the panel finished All green, 99 ok, 0 failures) and M8 lightbar reset recovery; #200 support bundle preview (no identifiers); #80 and #61 five of five suspend/resume cycles on Turbo with Max Fans (the custom curve is back 3-6 s after wake); #235 dashboard scroll fix (PR #242; window minimum 579x480, nothing clipped); #122 changed-plugin repair reported "Decky frontend: pass" and All green; #30 one-hour RSS soak flat (all six processes; Decky backend 47.1 MiB), closed as not reproduced (the soak length is the owner's call: 1 h, not 24 h).
-- **FAILED:** M7 (`install.sh --post-update --only amdgpu,rocm`, #200), ran 2026-11-16 at 1:14pm, blocked by #244 and #245. #244: the amdgpu task failed ("no GRUB_CMDLINE_LINUX_DEFAULT line in /etc/default/grub-steamos"; 3.9.5 sets the parameters in a continued `GRUB_CMDLINE_LINUX` block) although the parameters are already applied and on `/proc/cmdline`; the backup was restored. #245: the rocm task reported done, but `rocminfo` still fails because `libfmt.so.11` is missing (the repo has fmt 12.2.0, which provides only `libfmt.so.12`). No reboot was needed or done.
-- **Still pending for 1.0:** nothing but the owner's word on the release PR and the v1.0.0 tag (#204). M7 passed 2026-11-16 after the #244 and #245 fixes, before and after the reboot (main 77c29ef). M9 moved after 1.0 (#250). The evidence record is `docs/releases/1.0.0.md`.
+- **FAILED, then fixed and passed the same day (see the next lines):** M7 (`install.sh --post-update --only amdgpu,rocm`, #200), ran 2026-11-16 at 1:14pm, blocked by #244 and #245. #244: the amdgpu task failed ("no GRUB_CMDLINE_LINUX_DEFAULT line in /etc/default/grub-steamos"; 3.9.5 sets the parameters in a continued `GRUB_CMDLINE_LINUX` block) although the parameters are already applied and on `/proc/cmdline`; the backup was restored. #245: the rocm task reported done, but `rocminfo` still fails because `libfmt.so.11` is missing (the repo has fmt 12.2.0, which provides only `libfmt.so.12`). No reboot was needed or done.
+- **Still pending for 1.0:** the owner's word on the release PR and the v1.0.0 tag (#204), and two device checks that ship as pending (built and tested in CI): M2, the live Desktop to Game Mode switch with Max Fans on, and M5, the Game Mode profile list, brightness and telemetry. M7 passed 2026-11-16 after the #244 and #245 fixes, before and after the reboot (main 77c29ef). M9 moved after 1.0 (#250). The evidence record is `docs/releases/1.0.0.md`.
 - **New, non-blocking, after 1.0:** #243, a desktop-launched instance hit a Qt SIGABRT about 10 s after start.
 
 ### Shipped and working
@@ -49,7 +49,7 @@ dated tick only where an issue comment already shows the evidence.
 
 ### Open bugs and test debt (updated 2026-10-30)
 - **#60** no-curve `NameError`: fixed via PR #83. Current repair PR CI is green; the old main-CI blocker no longer applies.
-- **#16** Decky Profile dropdown showing a state that never applied: ✅ fixed by PR #49 (`decky/src/profileSwitch.ts`), merged 2026-10-26; the on-device check is part of #61.
+- **#16** Decky Profile dropdown showing a state that never applied: ✅ fixed by PR #49 (`decky/src/profileSwitch.ts`), merged 2026-10-26; the Game Mode on-device check is pending (M5, `docs/releases/1.0.0.md`).
 - **#58** flaky and environment-dependent tests: closed 2026-11-02 (PR #149). Ten tests that still failed off-device in CI (session identity, Decky DMI write gate) were fixed by PR #206 (#198, 2026-11-11).
 - **#86** fan/power regression: the individual fixes (#89, #92, #93, #95, #97) merged 2026-10-30; root firmware causality and broader device verification remain open (Turbo power-state evidence 2026-11-06 is on the issue; the Boondock TDP floors and clamp are PR #213, #203, device comparison passed 2026-11-16, #203). See the release record for observed behaviour and rejected workarounds.
 - **#30** the reported 43 GB memory spike: closed 2026-11-16 as not reproduced. A 1-hour RSS soak on the Z13 (12:09pm to 1:09pm, main 06c4826; the length is the owner's call) was flat for all six processes, Decky backend 47.1 MiB. Source audit and preventive trace/RSS bounds are recorded in [fan-watchdog-memory.md](fan-watchdog-memory.md); no 24-hour run was done.
@@ -109,7 +109,7 @@ likely means Boondock's 20 W cap only holds while a custom curve is active). See
 3. **One state, two frontends.** Desktop app and Decky share files under `~/.config/z13-helper/`
    (`config.json`, `max-fans.json`, and now `profiles.json`). Shared saved state is re-read;
    widgets retain pending edits and the desktop power window may cache ranges for its lifetime.
-   app profiles are mirrored into z13ctl named profiles (`state_authority.mirror_profile`, #23 closed 2026-11-04); the on-device acceptance of the single owner is #199.
+   app profiles are mirrored into z13ctl named profiles (`state_authority.mirror_profile`, #23 closed 2026-11-04); the on-device acceptance of the single owner passed 2026-11-16 (#199, closed).
 4. **Order of writes:** platform profile → TDP → fan curve → undervolt → lighting → battery.
    A platform-profile write drops the custom curve and lets the firmware re-apply its own power limits,
    so it always goes first. (`src/profiles.py`) Max Fans enforcement is held off before these writes,
@@ -276,13 +276,13 @@ controller fix; the kernel comes with SteamOS; G-Helper is Windows).
 
 ---
 
-## 7. Phase 11 — Decky parity ✅ written 2026-10-11; on-device check partly done (TDP and charge-limit writes in Game Mode, 2026-11-07, #74; changed-plugin repair frontend check, 2026-11-16, #122), the rest pending (#61; M9 moved after 1.0, #250)
+## 7. Phase 11 — Decky parity ✅ written 2026-10-11; on-device check partly done (TDP and charge-limit writes in Game Mode, 2026-11-07, #74; changed-plugin repair frontend check, 2026-11-16, #122), the Game Mode profile list, brightness and telemetry check is pending (M5, `docs/releases/1.0.0.md`); M9 moved after 1.0, #250)
 Contracts the plugin depends on (don't change silently): `max-fans.json` schema, `profiles.json`
 schema + `z13-profile` CLI, z13ctl output formats parsed by `main.py`.
 - ✅ **Profile dropdown** from `profiles.json` (replaces the raw platform-profile list; falls back to it
-  if the store is missing). ✅ A failed switch now reverts to the backend's active profile and Max Fans is re-read after every switch (#16, PR #49, 2026-10-26; on-device check pending, #61; M9 moved after 1.0, #250).
+  if the store is missing). ✅ A failed switch now reverts to the backend's active profile and Max Fans is re-read after every switch (#16, PR #49, 2026-10-26; on-device check pending (M5, `docs/releases/1.0.0.md`); M9 moved after 1.0, #250).
 - ✅ fan-stall watchdog (today).
-- ✅ written 2026-10-11 (branch `claude/decky-parity`); on-device: TDP and charge-limit changes applied in Game Mode with every backend command rc 0, owner-confirmed 2026-11-07 (#74 comment, 2026-11-08), the changed-plugin repair frontend check passed 2026-11-16 (#122), the profile list, brightness and telemetry checks still pending (#61); M9 (Quick Access focus with a game running) moved after 1.0 (#250): **TDP sliders**
+- ✅ written 2026-10-11 (branch `claude/decky-parity`); on-device: TDP and charge-limit changes applied in Game Mode with every backend command rc 0, owner-confirmed 2026-11-07 (#74 comment, 2026-11-08), the changed-plugin repair frontend check passed 2026-11-16 (#122), the Game Mode profile list, brightness and telemetry check is pending (M5, `docs/releases/1.0.0.md`); M9 (Quick Access focus with a game running) moved after 1.0 (#250): **TDP sliders**
   SPL/sPPT/fPPT per-rail kernel bounds, 5…93 W fallback (sPPT ≥ SPL, fPPT ≥ sPPT, written on release),
   **Not set** when absent, + "Apply power limits" →
   active profile's `tdp` in `profiles.json`, then `z13ctl tdp --set` as deck (off →
@@ -430,7 +430,7 @@ side button, fans, profiles and the QAM plugin back without any other step.
 
 ---
 
-## 9b. Phase 12c — Post-update tasks in the Updates panel ✅ built (#27 and its sub-issues #67-#72 closed 2026-11-04/05); acceptance on a real SteamOS update pending (#200: support bundle preview passed 2026-11-16, M7 `--post-update --only amdgpu,rocm` ran 2026-11-16 and failed, blocked by #244 and #245)
+## 9b. Phase 12c — Post-update tasks in the Updates panel ✅ built (#27 and its sub-issues #67-#72 closed 2026-11-04/05); M7 acceptance passed 2026-11-16 (#200, closed): support bundle preview passed, the first `--post-update --only amdgpu,rocm` run failed (#244, #245), and after the fixes the run passed before and after the reboot
 
 **Why.** A SteamOS atomic update ("nuclear update") wipes `/usr`, Valve's grub file and the pacman
 keyring, and rolls `/etc` changes back unless they're registered. Today the maintainer re-applies
