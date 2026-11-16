@@ -355,3 +355,42 @@ def test_amdgpu_apply_error_names_both_variables():
     h = host(grub="GRUB_TIMEOUT=0\n")
     with pytest.raises(RuntimeError, match="GRUB_CMDLINE_LINUX_DEFAULT or GRUB_CMDLINE_LINUX"):
         recipe(h, "amdgpu").apply()
+
+
+# --- review of #247: GRUB combines LINUX and _DEFAULT ---------------------------------------
+
+def _both(default='quiet splash'):
+    return GRUB_395 + f'GRUB_CMDLINE_LINUX_DEFAULT="{default}"\n'
+
+
+def test_both_variables_all_params_in_linux_is_already_applied_and_not_edited():
+    h = host(grub=_both(), cmdline=CMDLINE_395)
+    r = recipe(h, "amdgpu")
+    assert r.check() == "ok"
+    r.apply()
+    assert h.writes == [] and h.files[GRUB_FILE] == _both()
+
+
+def test_both_variables_one_missing_is_added_once_to_the_variable_holding_amdgpu_args():
+    grub = _both().replace(" amdgpu.sg_display=0", "")
+    h = host(grub=grub, cmdline=CMDLINE_395)
+    recipe(h, "amdgpu").apply()
+    text = h.files[GRUB_FILE]
+    assert text.count("amdgpu.sg_display=0") == 1
+    assert text.endswith('amdgpu.sg_display=0 \\\n"\nGRUB_CMDLINE_LINUX_DEFAULT="quiet splash"\n')
+    for arg in AMDGPU_ARGS:
+        assert text.count(arg) == 1
+
+
+def test_both_variables_changed_value_in_linux_is_replaced_in_linux():
+    grub = _both().replace("amdgpu.gpu_recovery=1", "amdgpu.gpu_recovery=0")
+    h = host(grub=grub, cmdline=CMDLINE_395)
+    recipe(h, "amdgpu").apply()
+    assert h.files[GRUB_FILE] == _both()
+
+
+def test_both_variables_without_amdgpu_args_adds_to_default():
+    h = host(grub='GRUB_CMDLINE_LINUX="a"\nGRUB_CMDLINE_LINUX_DEFAULT="quiet"\n')
+    recipe(h, "amdgpu").apply()
+    text = h.files[GRUB_FILE]
+    assert text.startswith('GRUB_CMDLINE_LINUX="a"\nGRUB_CMDLINE_LINUX_DEFAULT="quiet amdgpu.')

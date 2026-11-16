@@ -81,54 +81,41 @@ _ASSIGN = re.compile(
     r'^([ \t]*)(GRUB_CMDLINE_LINUX_DEFAULT|GRUB_CMDLINE_LINUX)="((?:[^"\\]|\\[\s\S])*)"', re.MULTILINE)
 
 
-def _find_assign(text: str):
-    """The assignment read and edited: GRUB_CMDLINE_LINUX_DEFAULT when present, else GRUB_CMDLINE_LINUX."""
-    found = list(_ASSIGN.finditer(text or ""))
-    for name in ("GRUB_CMDLINE_LINUX_DEFAULT", "GRUB_CMDLINE_LINUX"):
-        for m in found:
-            if m.group(2) == name:
-                return m
-    return None
+def _assigns(text: str) -> list:
+    return list(_ASSIGN.finditer(text or ""))
+
+
+def _tokens(value: str) -> list:
+    return value.replace("\\\n", " ").split()
 
 
 def grub_value(text: str):
-    """Value of the kernel-argument assignment in a grub file, None when there is none.
+    """Combined value of the kernel-argument assignments in a grub file (GRUB joins
+    GRUB_CMDLINE_LINUX and GRUB_CMDLINE_LINUX_DEFAULT), None when there is none.
 
     Backslash-newline continuations read as whitespace."""
-    m = _find_assign(text)
-    return None if m is None else m.group(3).replace("\\\n", " ")
+    found = _assigns(text)
+    if not found:
+        return None
+    return " ".join(" ".join(_tokens(m.group(3))) for m in found)
 
 
-def add_grub_args_text(text: str, args: Sequence[str]) -> str:
-    """Add args to the kernel-argument assignment of a whole grub file.
+def _key_of(token: str) -> str:
+    return token.split("=", 1)[0]
 
-    A single-line value goes through add_grub_args. A value continued over lines is edited in
-    place: a same-key token is replaced where it stands, missing args are added as one new
-    continuation line before the closing quote. Returns text unchanged when nothing is missing.
 
-    Raises:
-        ValueError: no GRUB_CMDLINE_LINUX_DEFAULT or GRUB_CMDLINE_LINUX assignment, or a bad arg.
-    """
-    m = _find_assign(text)
-    if m is None:
-        raise ValueError("no GRUB_CMDLINE_LINUX_DEFAULT or GRUB_CMDLINE_LINUX line")
-    for arg in args:
-        if not arg or any(c.isspace() or c in '"\\$`' for c in arg):
-            raise ValueError(f"Not a single kernel argument: {arg!r}")
-    value = m.group(3)
+def _edit_value(value: str, args: Sequence[str]) -> str:
+    """value with args applied: same-key tokens replaced where they stand, the rest added
+    (a continued value gets one new continuation line before the closing quote)."""
     if "\n" not in value:
-        return text[:m.start()] + add_grub_args(m.group(0), args) + text[m.end():]
-
-    def key_of(token):
-        return token.split("=", 1)[0]
-
+        return " ".join(_edit_tokens(value.split(), args))
     new, added = value, []
     for arg in args:
-        tokens = new.replace("\\\n", " ").split()
+        tokens = _tokens(new)
         if arg in tokens or arg in added:
             continue
-        if any(key_of(t) == key_of(arg) for t in tokens):
-            new = re.sub(r'(?<![^\s"])' + re.escape(key_of(arg)) + r'=\S*', arg.replace("\\", r"\\"), new)
+        if any(_key_of(t) == _key_of(arg) for t in tokens):
+            new = re.sub(r'(?<![^\s"])' + re.escape(_key_of(arg)) + r'=\S*', arg.replace("\\", r"\\"), new)
         else:
             added.append(arg)
     if added:
@@ -136,7 +123,57 @@ def add_grub_args_text(text: str, args: Sequence[str]) -> str:
             new += " ".join(added) + " \\\n"        # one more continuation line, same style
         else:
             new = new.rstrip() + " " + " ".join(added)
-    if new == value:
-        return text
-    start, end = m.span(3)
-    return text[:start] + new + text[end:]
+    return new
+
+
+def _edit_tokens(tokens: list, args: Sequence[str]) -> list:
+    for arg in args:
+        if arg in tokens:
+            continue
+        if any(_key_of(t) == _key_of(arg) for t in tokens):
+            tokens = [arg if _key_of(t) == _key_of(arg) else t for t in tokens]
+        else:
+            tokens.append(arg)
+    return tokens
+
+
+def add_grub_args_text(text: str, args: Sequence[str]) -> str:
+    """Make the kernel arguments of a whole grub file carry args, judged on the COMBINED
+    GRUB_CMDLINE_LINUX + GRUB_CMDLINE_LINUX_DEFAULT values.
+
+    An arg already present with its value is left alone. One with a different value is
+    replaced in each variable that holds it. A missing one is added to the variable that
+    already holds amdgpu.* args, else GRUB_CMDLINE_LINUX_DEFAULT, else GRUB_CMDLINE_LINUX,
+    so no arg ends up in both. Returns text unchanged when nothing is missing.
+
+    Raises:
+        ValueError: no assignment of either variable, or a bad arg.
+    """
+    found = _assigns(text)
+    if not found:
+        raise ValueError("no GRUB_CMDLINE_LINUX_DEFAULT or GRUB_CMDLINE_LINUX line")
+    for arg in args:
+        if not arg or any(c.isspace() or c in '"\\$`' for c in arg):
+            raise ValueError(f"Not a single kernel argument: {arg!r}")
+    toks = [_tokens(m.group(3)) for m in found]
+    home = next((i for i, t in enumerate(toks) if any(x.startswith("amdgpu.") for x in t)), None)
+    if home is None:
+        home = next((i for i, m in enumerate(found) if m.group(2) == "GRUB_CMDLINE_LINUX_DEFAULT"), 0)
+    todo = [[] for _ in found]
+    for arg in args:
+        holders = [i for i, t in enumerate(toks) if any(_key_of(x) == _key_of(arg) for x in t)]
+        if holders:
+            for i in holders:
+                if any(x != arg and _key_of(x) == _key_of(arg) for x in toks[i]):
+                    todo[i].append(arg)      # changed value: replaced where it stands
+        else:
+            todo[home].append(arg)
+    out = text
+    for m, extra in sorted(zip(found, todo), key=lambda p: -p[0].start()):
+        if not extra:
+            continue
+        old = m.group(3)
+        new = _edit_value(old, extra)
+        if new != old:
+            out = out[:m.start(3)] + new + out[m.end(3):]
+    return out
