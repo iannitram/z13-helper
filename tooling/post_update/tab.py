@@ -94,7 +94,7 @@ def status(home: str, io: HostIO, recipes: Sequence, errors: Sequence = (),
         "updated": updated,
         "banner": banner_text(rows, reason) if updated else None,
         "reason": reason,
-        # Listed only after an update: do the ppt_* and fan attributes z13ctl writes still exist?
-        "armoury": su.armoury_check(io.listdir) if updated else None,
+        # Listed only after an update: do the ppt_* attributes and the fan-curve hwmon node z13ctl uses still exist?
+        "armoury": su.armoury_check(io.listdir, io.read) if updated else None,
         "rows": rows,
     }

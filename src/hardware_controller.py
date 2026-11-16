@@ -169,31 +169,17 @@ class HardwareController:
         errors = []
         for device in devices:
             argv = ["--device", device, "brightness", level]
-            try:
-                self._run_command(argv, timeout=Z13CTL_WRITE_TIMEOUT_S)
-            except RuntimeError as e:
-                if str(e).startswith("z13ctl write timed out after "):
-                    # A timed-out write may have reached the device. Do not
-                    # retry, recover the lightbar, or continue to another device.
-                    raise
-                if device == "lightbar":
-                    kind = profiles.lightbar_failure_kind(str(e))
-                    recover = {"wedged": profiles.recover_lightbar,
-                               "stale": profiles.recover_lightbar_stale}.get(kind)
-                    if recover:
-                        ok, msg = recover()
-                        if ok:
-                            try:
-                                self._run_command(argv, timeout=Z13CTL_WRITE_TIMEOUT_S)
-                                continue
-                            except RuntimeError as e2:
-                                if str(e2).startswith("z13ctl write timed out after "):
-                                    raise
-                                e = RuntimeError(f"{e2} (still failing after a {msg})")
-                        else:
-                            e = RuntimeError(f"{e}; {msg}")
+            ok, out, timed_out, recovered = profiles.write_lighting_with_recovery(
+                device,
+                lambda: self._run_command(argv, timeout=Z13CTL_WRITE_TIMEOUT_S),
+            )
+            if timed_out:
+                # A timed-out write may have reached the device. Do not
+                # retry, recover the lightbar, or continue to another device.
+                raise RuntimeError(out)
+            if not ok:
                 failed.append(device)
-                errors.append(f"{device}: {e}")
+                errors.append(f"{device}: {out}")
         if len(failed) == len(devices):
             raise RuntimeError("; ".join(errors))
         return failed
@@ -201,25 +187,13 @@ class HardwareController:
     def set_lighting(self, device: str, setting: dict, brightness: str = "high"):
         """Applies one device's lighting mode and colour, recovering a stale/wedged bar once."""
         argv = profiles.lighting_argv(device, setting, brightness, self.z13ctl_path)
-        try:
-            return self._run_command(argv[1:], timeout=Z13CTL_WRITE_TIMEOUT_S)
-        except RuntimeError as exc:
-            if str(exc).startswith("z13ctl write timed out after "):
-                raise
-            kind = profiles.lightbar_failure_kind(str(exc)) if device == "lightbar" else None
-            recover = {"wedged": profiles.recover_lightbar,
-                       "stale": profiles.recover_lightbar_stale}.get(kind)
-            if recover is None:
-                raise
-            ok, message = recover()
-            if not ok:
-                raise RuntimeError(f"{exc}; {message}") from exc
-            try:
-                return self._run_command(argv[1:], timeout=Z13CTL_WRITE_TIMEOUT_S)
-            except RuntimeError as retry_exc:
-                if str(retry_exc).startswith("z13ctl write timed out after "):
-                    raise
-                raise RuntimeError(f"{retry_exc} (still failing after {message})") from retry_exc
+        ok, out, timed_out, recovered = profiles.write_lighting_with_recovery(
+            device,
+            lambda: self._run_command(argv[1:], timeout=Z13CTL_WRITE_TIMEOUT_S),
+        )
+        if timed_out or not ok:
+            raise RuntimeError(out)
+        return out
 
     # --- CPU Boost (amd-pstate EPP); host helper, not z13ctl ---
 
@@ -306,8 +280,15 @@ class HardwareController:
             args.append("--force")
         return self._run_command(args)
 
+    def fit_tdp(self, tdp):
+        """(written, note): `tdp` clamped into the detected firmware ranges, as
+        profiles.apply_tdp does, so what is written is what gets reported."""
+        return profiles.fitted_tdp(tdp)
+
     def apply_tdp(self, tdp):
-        """Apply a profiles.json tdp dict ({pl1, pl2, pl3, force})."""
+        """Apply a profiles.json tdp dict ({pl1, pl2, pl3, force}), clamped into
+        the detected firmware ranges first (the firmware would clamp silently)."""
+        tdp, _ = self.fit_tdp(tdp)
         return self.set_tdp(tdp["pl1"], tdp["pl2"], tdp["pl3"], force=bool(tdp.get("force")))
 
     def reset_tdp(self):

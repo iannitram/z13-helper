@@ -31,8 +31,8 @@ def test_real_inventory_rows():
 def test_missing_kernel_args_are_named():
     rows = by_id(run_checks(collect_inventory(fake(GOOD))))
     assert not rows["kernel_args"].passed
-    assert "dcdebugmask=0x20e10" in rows["kernel_args"].detail
-    assert "gpu_recovery=1" not in rows["kernel_args"].detail
+    assert "amdgpu.dcdebugmask=0x20e10" in rows["kernel_args"].detail
+    assert "amdgpu.gpu_recovery=1" not in rows["kernel_args"].detail
 
 
 def test_ppt_value_with_group_write_for_users_is_healthy():
@@ -102,3 +102,28 @@ def test_bios_and_ec_are_each_checked():
     assert rows["ec"].passed and not rows["bios"].passed
     rows = checks_for()
     assert rows["bios"].passed and rows["ec"].passed
+
+
+def _unit_rows(unit, state):
+    table = dict(GOOD)
+    table[("systemctl", "is-enabled", unit)] = state + "\n"
+    return by_id(run_checks(collect_inventory(fake(table))))
+
+
+def test_on_demand_lightbar_unit_static_is_ok():
+    assert _unit_rows("z13-lightbar-reset.service", "static")["unit:system:z13-lightbar-reset.service"].passed
+
+
+def test_on_demand_lightbar_unit_disabled_still_fails():
+    assert not _unit_rows("z13-lightbar-reset.service", "disabled")["unit:system:z13-lightbar-reset.service"].passed
+
+
+def test_normal_unit_static_or_disabled_still_fails():
+    for state in ("static", "disabled"):
+        assert not _unit_rows("z13-fan-resume.service", state)["unit:system:z13-fan-resume.service"].passed
+
+
+def test_missing_firmware_package_still_fails():
+    table = dict(GOOD)
+    del table[("pacman", "-Q", "linux-firmware")]
+    assert not by_id(run_checks(collect_inventory(fake(table))))["firmware"].passed

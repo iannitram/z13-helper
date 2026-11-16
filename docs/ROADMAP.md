@@ -13,8 +13,8 @@ Status marks: ✅ shipped · 🔧 in progress · ⏳ planned · 🚧 gated (need
 
 ## 1. Where we are (reconciled 2026-11-07, `main` 84f0b1e)
 
-**2026-10-30 update:** Repair release **0.5.1** has Desktop fan/power checks on SteamOS
-**3.9.5 / kernel 7.2** with z13ctl 1.4.2. See the [release verification record](releases/0.5.1.md)
+**2026-10-30 update:** The repair release before 1.0 has Desktop fan/power checks on SteamOS
+**3.9.5 / kernel 7.2** with z13ctl 1.4.2. See the [release records](releases/)
 and [current code/connection map](../MAP/README.md). PRs #89, #92, #93, #95 and #97 merged
 2026-10-30. The remaining historical audit and upstream-watch tables below retain
 their dated observations; they are not current inventory. Interactive Game Mode, sustained load
@@ -22,11 +22,17 @@ and soak still need verification; 1.0 remains unfinished.
 
 **2026-11-11 update:** #23, #27, #58 and the Phase 7-12d code issues are closed; #74 and #75 (the
 SteamOS 3.9.5 device pass) closed 2026-11-11 with dated evidence comments; CI on main was fixed by
-PR #206 (#198). Open for 1.0: #30, #61, #66, #73, #80, #86 and #199-#205 (device acceptance, own-release
+PR #206 (#198). Open for 1.0 then: #30, #61, #66, #73, #80, #86 and #199-#205 (device acceptance, own-release
 update source, Boondock TDP, the release, this docs pass). Owner decisions 2026-11-11: **1.0 ships from
 main, and the post-1.0 branch merges after the tag**; **#66 keeps the 10 s daemon-absent backstop** (§8,
 PR #207, merged 2026-11-11). Per-mark device status is in the "on-device check pending" lines below; a mark turns into a
 dated tick only where an issue comment already shows the evidence.
+
+**2026-11-16 update (device acceptance pass for 1.0, Z13, SteamOS 3.9.5, main 06c4826 unless noted):**
+- **PASS:** #203 Boondock TDP (the app clamps to the firmware floors 28/32/45 W and reports what applied; `z13ctl tdp --get` matched); #199 single state owner, M6 (0 fan-curve writes from z13ctl over 10 min idle, 9:43:35am to 9:53:35am); #201 M3 lightbar and themes, M4 Repair (the Updates panel shows the z13ctl update row; Repair from the panel finished All green, 99 ok, 0 failures) and M8 lightbar reset recovery; #200 support bundle preview (no identifiers); #80 and #61 five of five suspend/resume cycles on Turbo with Max Fans (the custom curve is back 3-6 s after wake); #235 dashboard scroll fix (PR #242; window minimum 579x480, nothing clipped); #122 changed-plugin repair reported "Decky frontend: pass" and All green; #30 one-hour RSS soak flat (all six processes; Decky backend 47.1 MiB), closed as not reproduced (the soak length is the owner's call: 1 h, not 24 h).
+- **FAILED, then fixed and passed the same day (see the next lines):** M7 (`install.sh --post-update --only amdgpu,rocm`, #200), ran 2026-11-16 at 1:14pm, blocked by #244 and #245. #244: the amdgpu task failed ("no GRUB_CMDLINE_LINUX_DEFAULT line in /etc/default/grub-steamos"; 3.9.5 sets the parameters in a continued `GRUB_CMDLINE_LINUX` block) although the parameters are already applied and on `/proc/cmdline`; the backup was restored. #245: the rocm task reported done, but `rocminfo` still fails because `libfmt.so.11` is missing (the repo has fmt 12.2.0, which provides only `libfmt.so.12`). No reboot was needed or done.
+- **Still pending for 1.0:** the owner's word on the release PR and the v1.0.0 tag (#204), and two device checks that ship as pending (built and tested in CI): M2, the live Desktop to Game Mode switch with Max Fans on, and M5, the Game Mode profile list, brightness and telemetry. M7 passed 2026-11-16 after the #244 and #245 fixes, before and after the reboot (main 77c29ef). M9 moved after 1.0 (#250). The evidence record is `docs/releases/1.0.0.md`.
+- **New, non-blocking, after 1.0:** #243, a desktop-launched instance hit a Qt SIGABRT about 10 s after start.
 
 ### Shipped and working
 | Area | State |
@@ -34,19 +40,19 @@ dated tick only where an issue comment already shows the evidence.
 | Desktop app (PyQt6 Flatpak `io.github.iannitram.Z13Helper`) | ✅ profiles, TDP, 8-point curve (spinboxes), battery limit, brightness, telemetry, tray, single-instance, resident service |
 | Side button | ✅ Desktop: host evdev reader → window toggle. Game Mode: `z13-button-watcher` → QAM / Steam menu |
 | Max Fans | ✅ shared `max-fans.json`, watchdog in app + Decky, re-pinned at login/resume |
-| Decky plugin `z13-helper` | ✅ profile dropdown, Max Fans, TDP sliders, charge limit, per-device brightness, telemetry (§7; TDP and charge-limit writes in Game Mode checked 2026-11-07, #74; the rest of the on-device check pending, #61) |
+| Decky plugin `z13-helper` | ✅ profile dropdown, Max Fans, TDP sliders, charge limit, per-device brightness, telemetry (§7; TDP and charge-limit writes in Game Mode checked 2026-11-07, #74; changed-plugin repair frontend check passed 2026-11-16, #122; M9 Quick Access focus with a game running moved after 1.0, #250) |
 | Host profiles | ✅ profiles engine (`z13-profile`, §4); `z13-restore-profile.service` at login runs `z13-profile restore` |
-| Installer | ✅ `install.sh` / `--repair` + `install_check.py verify` (§9a); Repair button in the Updates panel (`./install.sh --repair` itself ran green on the device 2026-11-06 and 2026-11-07, #75; the button's on-device check pending, #201) |
-| Lightbar wedge | ✅ auto-recovery via `z13-lightbar-reset.service` + polkit rule (§3; reset and daemon restart found necessary on-device 2026-10-11; end-to-end recovery check pending, #61) |
-| App version | **0.5.1** (2026-10-30; `CHANGELOG.md`, desktop/Decky/AppStream aligned) |
-| Boondock | Earlier hardware/profile-hook checks: quiet + 20/30/40 W + screen 35 % (the built-in TDP is now 28/32/45 W, PR #213, #203; not re-run on the device). The Docker/VM steps are gone and `BG_SERVICES` names the user `llama-swap` unit (#65, closed 2026-11-01); a current device run of the profile is not recorded. |
+| Installer | ✅ `install.sh` / `--repair` + `install_check.py verify` (§9a); Repair button in the Updates panel (`./install.sh --repair` itself ran green on the device 2026-11-06 and 2026-11-07, #75; the button's on-device check passed 2026-11-16, #201) |
+| Lightbar wedge | ✅ auto-recovery via `z13-lightbar-reset.service` + polkit rule (§3; reset and daemon restart found necessary on-device 2026-10-11; reset recovery passed on the device 2026-11-16, M8, #201) |
+| App version | **1.0.0** (2026-11-16; `CHANGELOG.md`, desktop/Decky/AppStream aligned; tag pending the owner, #204) |
+| Boondock | Earlier hardware/profile-hook checks: quiet + 20/30/40 W + screen 35 % (the built-in TDP is now 28/32/45 W, PR #213, #203; not re-run on the device). The Docker/VM steps are gone and `BG_SERVICES` names the user `llama-swap` unit (#65, closed 2026-11-01); a current device run of the profile is not recorded. The 28/32/45 W TDP itself passed on the device 2026-11-16 (#203). |
 
 ### Open bugs and test debt (updated 2026-10-30)
 - **#60** no-curve `NameError`: fixed via PR #83. Current repair PR CI is green; the old main-CI blocker no longer applies.
-- **#16** Decky Profile dropdown showing a state that never applied: ✅ fixed by PR #49 (`decky/src/profileSwitch.ts`), merged 2026-10-26; the on-device check is part of #61.
+- **#16** Decky Profile dropdown showing a state that never applied: ✅ fixed by PR #49 (`decky/src/profileSwitch.ts`), merged 2026-10-26; the Game Mode on-device check is pending (M5, `docs/releases/1.0.0.md`).
 - **#58** flaky and environment-dependent tests: closed 2026-11-02 (PR #149). Ten tests that still failed off-device in CI (session identity, Decky DMI write gate) were fixed by PR #206 (#198, 2026-11-11).
-- **#86** fan/power regression: the individual fixes (#89, #92, #93, #95, #97) merged 2026-10-30; root firmware causality and broader device verification remain open (Turbo power-state evidence 2026-11-06 is on the issue; the Boondock TDP floors and clamp are PR #213, #203, device comparison still owed). See the release record for observed behaviour and rejected workarounds.
-- **#30** the reported 43 GB memory spike: open (investigation). Source audit and preventive trace/RSS bounds are recorded in [fan-watchdog-memory.md](fan-watchdog-memory.md); no completed 24-hour current-identity sampler result or leak attribution is claimed.
+- **#86** fan/power regression: the individual fixes (#89, #92, #93, #95, #97) merged 2026-10-30; root firmware causality and broader device verification remain open (Turbo power-state evidence 2026-11-06 is on the issue; the Boondock TDP floors and clamp are PR #213, #203, device comparison passed 2026-11-16, #203). See the release record for observed behaviour and rejected workarounds.
+- **#30** the reported 43 GB memory spike: closed 2026-11-16 as not reproduced. A 1-hour RSS soak on the Z13 (12:09pm to 1:09pm, main 06c4826; the length is the owner's call) was flat for all six processes, Decky backend 47.1 MiB. Source audit and preventive trace/RSS bounds are recorded in [fan-watchdog-memory.md](fan-watchdog-memory.md); no 24-hour run was done.
 - Also merged 2026-10-26: PR #3, `tooling/z13_gamemode_report.py` (reads a Game Mode session back from local logs).
 
 ### Fixed today (2026-10-09)
@@ -103,7 +109,7 @@ likely means Boondock's 20 W cap only holds while a custom curve is active). See
 3. **One state, two frontends.** Desktop app and Decky share files under `~/.config/z13-helper/`
    (`config.json`, `max-fans.json`, and now `profiles.json`). Shared saved state is re-read;
    widgets retain pending edits and the desktop power window may cache ranges for its lifetime.
-   app profiles are mirrored into z13ctl named profiles (`state_authority.mirror_profile`, #23 closed 2026-11-04); the on-device acceptance of the single owner is #199.
+   app profiles are mirrored into z13ctl named profiles (`state_authority.mirror_profile`, #23 closed 2026-11-04); the on-device acceptance of the single owner passed 2026-11-16 (#199, closed).
 4. **Order of writes:** platform profile → TDP → fan curve → undervolt → lighting → battery.
    A platform-profile write drops the custom curve and lets the firmware re-apply its own power limits,
    so it always goes first. (`src/profiles.py`) Max Fans enforcement is held off before these writes,
@@ -134,8 +140,8 @@ Remaining:
   unit are gone; `BG_SERVICES` points at the user unit (`systemctl --user`). Its built-in TDP moved from 20/30/40 W (below the firmware floors on kernel 7.2) to the armoury
   floors 28/32/45 W (`src/profiles.py` `BOONDOCK_TDP`, `tooling/boondock` `TDP_PL1`), and every TDP write is
   clamped by the app (`power_range.fit_tdp`); PR #213, merged 2026-11-11, Refs #203. The `z13ctl tdp --get`
-  comparison on the device is still owed on #203.
-- ✅ written 2026-10-12; end-to-end on-device check pending (#61) **Lightbar wedge auto-recovery.** Root oneshot
+  comparison on the device passed 2026-11-16 (#203): PL1 28 / PL2 32 / PL3 45 W, same as the app.
+- ✅ written 2026-10-12; end-to-end on-device check passed 2026-11-16 (M8, #201) **Lightbar wedge auto-recovery.** Root oneshot
   `z13-lightbar-reset.service` → `/etc/systemd/system/z13-lightbar-reset.sh` finds the USB device by
   ID `0b05:18c6` (never by port) and writes `authorized` 0 → 1; polkit rule
   `/etc/polkit-1/rules.d/50-z13-lightbar-reset.rules` lets deck **start** that one unit, nothing else.
@@ -145,7 +151,7 @@ Remaining:
   once. Installed by `install.sh` (asks first; in MANIFEST + keep-list); `verify` only runs
   `systemctl cat` on it. Manual: `systemctl start z13-lightbar-reset.service`;
   log: `journalctl -t z13-lightbar-reset`.
-- ✅ **Lightbar auto-recovery, as-built (the stale hidraw path was found on-device 2026-10-11; the full recovery check is still pending, #61).** The reset above worked but the
+- ✅ **Lightbar auto-recovery, as-built (the stale hidraw path was found on-device 2026-10-11; the full recovery check passed 2026-11-16, M8, #201: after the reset unit ran, one write hit ENODEV, recovered and returned ok in 2.6 s; the shared helper is #237, PR #241).** The reset above worked but the
   retry still hit `write /dev/hidrawN: no such device`: the lightbar re-enumerates under *new* hidraw
   nodes, and the socket-activated `z13ctl.service` user daemon caches the old path. Fix: after the
   reset unit + its settle wait, `recover_lightbar()` now also runs `systemctl --user restart
@@ -270,13 +276,13 @@ controller fix; the kernel comes with SteamOS; G-Helper is Windows).
 
 ---
 
-## 7. Phase 11 — Decky parity ✅ written 2026-10-11; on-device check partly done (TDP and charge-limit writes in Game Mode, 2026-11-07, #74), the rest pending (#61)
+## 7. Phase 11 — Decky parity ✅ written 2026-10-11; on-device check partly done (TDP and charge-limit writes in Game Mode, 2026-11-07, #74; changed-plugin repair frontend check, 2026-11-16, #122), the Game Mode profile list, brightness and telemetry check is pending (M5, `docs/releases/1.0.0.md`); M9 moved after 1.0, #250)
 Contracts the plugin depends on (don't change silently): `max-fans.json` schema, `profiles.json`
 schema + `z13-profile` CLI, z13ctl output formats parsed by `main.py`.
 - ✅ **Profile dropdown** from `profiles.json` (replaces the raw platform-profile list; falls back to it
-  if the store is missing). ✅ A failed switch now reverts to the backend's active profile and Max Fans is re-read after every switch (#16, PR #49, 2026-10-26; on-device check pending, #61).
+  if the store is missing). ✅ A failed switch now reverts to the backend's active profile and Max Fans is re-read after every switch (#16, PR #49, 2026-10-26; on-device check pending (M5, `docs/releases/1.0.0.md`); M9 moved after 1.0, #250).
 - ✅ fan-stall watchdog (today).
-- ✅ written 2026-10-11 (branch `claude/decky-parity`); on-device: TDP and charge-limit changes applied in Game Mode with every backend command rc 0, owner-confirmed 2026-11-07 (#74 comment, 2026-11-08), the profile list, brightness and telemetry checks still pending (#61): **TDP sliders**
+- ✅ written 2026-10-11 (branch `claude/decky-parity`); on-device: TDP and charge-limit changes applied in Game Mode with every backend command rc 0, owner-confirmed 2026-11-07 (#74 comment, 2026-11-08), the changed-plugin repair frontend check passed 2026-11-16 (#122), the Game Mode profile list, brightness and telemetry check is pending (M5, `docs/releases/1.0.0.md`); M9 (Quick Access focus with a game running) moved after 1.0 (#250): **TDP sliders**
   SPL/sPPT/fPPT per-rail kernel bounds, 5…93 W fallback (sPPT ≥ SPL, fPPT ≥ sPPT, written on release),
   **Not set** when absent, + "Apply power limits" →
   active profile's `tdp` in `profiles.json`, then `z13ctl tdp --set` as deck (off →
@@ -353,7 +359,7 @@ independent of this decision.
 
 ---
 
-## 9a. Phase 12b — One-shot installer / repair script ✅ (shipped 2026-10-11; `--repair` ran green on the device 2026-11-06 and 2026-11-07, #75; Updates-panel button written 2026-10-12, on-device check pending, #201)
+## 9a. Phase 12b — One-shot installer / repair script ✅ (shipped 2026-10-11; `--repair` ran green on the device 2026-11-06 and 2026-11-07, #75; Updates-panel button written 2026-10-12, on-device check passed 2026-11-16, #201)
 
 **As built (2026-10-11):** `install.sh` (repo root) + `tooling/install_check.py` (host-file manifest,
 keep-list entries, `flatpak-diff`, and `verify` = §12 as code) + `src/installers.py repair z13ctl|decky`.
@@ -376,7 +382,7 @@ keep-list entries, `flatpak-diff`, and `verify` = §12 as code) + `src/installer
 - Verified live 2026-10-11: dry runs against the real and an empty `$HOME`; `--repair` rebuilt the
   Flatpak and came back **52 ok / 1 warn (wedged lightbar) / 0 fail**; a second run changed nothing;
   the loader restart path exercised on its own ("up" in 1 s, one listener on :1337).
-- ✅ written 2026-10-12, button check pending on the device (#201): **"Repair install"** button in the Updates panel.
+- ✅ written 2026-10-12, button check passed on the device 2026-11-16 (#201): **"Repair install"** button in the Updates panel.
   `install.sh` records `repo_path` (and `log`) in `install.json` (existing keys kept); the dialog shows
   "Last install/repair: <date> (<mode>, green/red)", the plan, asks, then streams
   `flatpak-spawn --host bash <repo>/install.sh --repair` with the final green/red line. Disabled (with
@@ -424,7 +430,7 @@ side button, fans, profiles and the QAM plugin back without any other step.
 
 ---
 
-## 9b. Phase 12c — Post-update tasks in the Updates panel ✅ built (#27 and its sub-issues #67-#72 closed 2026-11-04/05); acceptance on a real SteamOS update pending (#200)
+## 9b. Phase 12c — Post-update tasks in the Updates panel ✅ built (#27 and its sub-issues #67-#72 closed 2026-11-04/05); M7 acceptance passed 2026-11-16 (#200, closed): support bundle preview passed, the first `--post-update --only amdgpu,rocm` run failed (#244, #245), and after the fixes the run passed before and after the reboot
 
 **Why.** A SteamOS atomic update ("nuclear update") wipes `/usr`, Valve's grub file and the pacman
 keyring, and rolls `/etc` changes back unless they're registered. Today the maintainer re-applies
@@ -487,7 +493,7 @@ recipe, its wiki row changes to "Z13-Helper post-update task `<id>`", so the two
 **Done when:** after a real SteamOS update, the tray says so; one tab shows what's broken; ticking
 amdgpu + ROCm and pressing Run fixes both with a single reboot; the health report is green.
 
-## 9c. Phase 12d — SteamOS 3.9 compatibility ✅ #74-#79 closed; #80 (resume hook, PR #196 merged) open for its five-cycle device check (3.9.5 stable 2026-10-23)
+## 9c. Phase 12d — SteamOS 3.9 compatibility ✅ #74-#79 closed; #80 (resume hook, PR #196 merged) five-cycle device check passed 2026-11-16 (3.9.5 stable 2026-10-23)
 
 Valve's 3.9.5 post: https://store.steampowered.com/news/app/1675200/view/694275728822244963 (2026-10-23). Valve's page doesn't render to our fetcher, so the item list comes from GamingOnLinux's copy of the notes (2026-10-24), cross-checked with SteamDeckHQ (https://steamdeckhq.com/news/steamos-3-9-update-improves-idle-battery-life/, 2026-10-24) and MIXED (https://mixed-news.com/en/steamos-3-9-stable-steam-deck-idle-power-streaming-fixes/, 2026-10-24). Confidence: **RN** = in the release notes, **U** = user report, **PR** = press, **?** = unknown.
 
@@ -512,7 +518,7 @@ Not issues (checked, nothing to do): the RDNA1/2 dedicated-GPU resume fix (Strix
 **Status:** #76-#79 are closed with their code integrated. The remaining sequence is #74/#75 device passes with #61, plus the five-cycle #80 resume evidence and the separate #73 VRR matrix. Kernel-major and BUILD_ID triggers for the post-update tab are tracked by #70 and #71.
 
 **Done when:** #74 and #75 are green on 3.9.5, #76–#79 are merged, and #80 is merged or closed with measurements.
-**Status 2026-11-11:** #74 and #75 closed 2026-11-11 with dated evidence (comments of 2026-11-06 and 2026-11-08); #76–#79 closed; #80's resume hook merged (PR #196) and its five-cycle device check remains open.
+**Status 2026-11-11:** #74 and #75 closed 2026-11-11 with dated evidence (comments of 2026-11-06 and 2026-11-08); #76–#79 closed; #80's resume hook merged (PR #196) and its five-cycle device check passed 2026-11-16 (5 of 5 on Turbo with Max Fans, #80 and #61).
 
 ## 10. Phase 14 — Feature backlog 💤 (from the 2026-10-09 research, priority order)
 0. ✅ **Crash and error log** (2026-10-12, v0.4.1): `src/app_log.py` + Help → Error log; app log, crash reports and hard-crash recovery under `~/.local/state/z13-helper/`. The diagnostics panel below can grow out of the same window.
@@ -593,7 +599,7 @@ Installed/pinned versions as of **2026-10-12**; SteamOS, kernel and Decky rows u
 
 | Component | Repo / source | Installed here | Latest | Watch for |
 |---|---|---|---|---|
-| Z13-Helper (this project) | `iannitram/z13-helper` releases | **0.5.1** (installed app version) | no v1.0.0 published yet | The Updates panel lists this project's own releases as an update source, neutral until v1.0.0 exists or when GitHub is unreachable (`src/update_watch.py`, PR #209, merged 2026-11-11, Refs #202). Code merged; the on-device check of the Updates panel is pending (#202). |
+| Z13-Helper (this project) | `iannitram/z13-helper` releases | **1.0.0** (version in the repo; tag pending the owner, #204) | no v1.0.0 published yet | The Updates panel lists this project's own releases as an update source, neutral until v1.0.0 exists or when GitHub is unreachable (`src/update_watch.py`, PR #209, merged 2026-11-11, Refs #202). **Done (#202):** code merged in PR #209; only the on-device check of the Updates panel is still open. |
 | **z13ctl** (backend) | `dahui/z13ctl` releases | **1.4.2** (daemon `--no-button`; 1.1.6 kept as rollback) | **1.4.2** (2026-10-09; still the latest 2026-10-26; ran on kernel 7.2.7 in the #74 pass, 2026-11-06) | a release tested on 7.2 / SteamOS 3.9; hard-lock reports after 1.4.x; asus-armoury path on Valve kernels; `subscribe` API changes (§8) |
 | Decky Loader | `SteamDeckHomebrew/decky-loader` | **3.3.1** | **3.3.0** (2026-10-18; 3.3.1 is installed, newest release not re-checked 2026-11-11; **minimum** since the 2026-10-13 Steam client, #77) | `@decky/api`/`@decky/ui` breaking changes; `_root` flag policy; the new unvetted-plugin warning |
 | asusctl | `OpenGamingCollective/asusctl` | not installed (reference) | 6.5.0 | GZ302 Aura/LampArray support; boot-hang race with hid-asus (#718) — reason we don't run asusd |
@@ -624,7 +630,7 @@ for r in dahui/z13ctl OpenGamingCollective/asusctl SteamDeckHomebrew/decky-loade
    allow the firmware ramp to settle, and correlate the trace with shared intent, the configured
    curve and backend saved TDP. Non-zero RPM and `pwm1_enable = 1` alone do not prove response;
    frozen tach requires corroboration. Repeat with the resident app to expose recovery races.
-   Never poll Armoury live PPT values. See the 0.5.1 record for bounded checks already performed.
+   Never poll Armoury live PPT values. See the repair-release record in `docs/releases/` for bounded checks already performed.
 5. Brightness: `z13ctl --device keyboard brightness low` and `… lightbar …` both return 0.
 6. Decky: inspect `journalctl -u plugin_loader.service` for backend startup/errors; verify one loader
    and walk through the QAM with a game running. A loaded backend does not establish interactive success.
@@ -639,7 +645,8 @@ for r in dahui/z13ctl OpenGamingCollective/asusctl SteamDeckHomebrew/decky-loade
 |---|---|
 | `CLAUDE.md` | cold-start orientation |
 | `MAP/README.md`, `MAP/decky.md` | current module, process, state and installation connections |
-| `docs/releases/0.5.1.md` | repair PR dependencies, evidence and outstanding device checks |
+| `docs/releases/1.0.0.md` | 1.0 evidence record: each Must, its status and evidence links, known open bugs |
+| `docs/releases/` | one record per release; the repair release before 1.0 is a dated snapshot |
 | **`docs/ROADMAP.md`** | **this plan — the only forward-looking doc** |
 | `docs/plan/Phase_1…6.md` | historical record of how we got here (frozen; banner added) |
 | `docs/BUTTON-AND-INPUTPLUMBER.md` | side-button root cause + fix |

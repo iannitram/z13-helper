@@ -107,7 +107,7 @@ def boost_ui(profiles_env, monkeypatch):
         setattr(control, name, methods[name].__get__(control))
     methods = _methods("dashboard_ui.py", "DashboardUI",
                        ["_build_epp_ui", "_refresh_epp_ui", "_on_epp"],
-                       {"QComboBox": Combo, "QHBoxLayout": Layout, "QLabel": Label,
+                       {"ComboBox": Combo, "QHBoxLayout": Layout, "QLabel": Label,
                         "epp": epp})
     ui = SimpleNamespace(control=control, controller=controller,
                          perf=SimpleNamespace(body=SimpleNamespace(addLayout=rows.append)))

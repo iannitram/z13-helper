@@ -12,7 +12,7 @@ It also makes the Armoury Crate side button useful in both. Behind both front-en
 [**z13ctl**](https://github.com/dahui/z13ctl) does the hardware access; Z13-Helper is the interface,
 the glue and the self-repair around it.
 
-> **Status:** version **0.5.1**, built and tested on one Z13 (GZ302EA, SteamOS 3.9.5, kernel
+> **Status:** version **1.0.0**, built and tested on one Z13 (GZ302EA, SteamOS 3.9.5, kernel
 > 7.2, z13ctl 1.4.2). It writes power limits and fan curves, so read what it does before you run
 > it. Not affiliated with ASUS, Valve or any project credited below. Licensed under the
 > [GPL-3.0](LICENSE).
@@ -20,7 +20,7 @@ the glue and the self-repair around it.
 > Plan and status: [`docs/ROADMAP.md`](docs/ROADMAP.md) · Changes: [`CHANGELOG.md`](CHANGELOG.md)
 > · The side-button story: [`docs/BUTTON-AND-INPUTPLUMBER.md`](docs/BUTTON-AND-INPUTPLUMBER.md)
 > · Code and connections: [`MAP/README.md`](MAP/README.md)
-> · Repair verification: [`docs/releases/0.5.1.md`](docs/releases/0.5.1.md)
+> · 1.0 evidence: [`docs/releases/1.0.0.md`](docs/releases/1.0.0.md)
 
 ---
 
@@ -32,18 +32,18 @@ the glue and the self-repair around it.
 
 ![Help → Error log → Fan trace: one line per reading with temperature, both fan RPMs, the ACPI fan, curve mode, Max Fans and how long each reading has been unchanged](docs/screenshots/fan-trace.png)
 
-These earlier screenshots predate the 0.5.1 power-label changes. They were rendered from the real app with live readings: `tooling/screenshots.py`, offscreen, nothing
+These earlier screenshots predate the power-label changes and the 1.0 design pass. They were rendered from the real app with live readings: `tooling/screenshots.py`, offscreen, nothing
 written to the hardware. A Game Mode (Decky) screenshot is still to come; Game Mode can't be
 captured from Desktop Mode.
 
 ## What works so far
 
-**0.5.1 repair checks on SteamOS 3.9.5 / kernel 7.2 (2026-10-30):**
-desktop unset-power controls and host range detection; installed Max Fans ON/OFF/ON;
-two Turbo/Balanced/Turbo cycles with the resident app; stale backend custom-TDP cleanup;
-and installer health checks. Automated tests: 679 pytest, 80 backend unittest and 5 frontend
-tests. See the [verification record](docs/releases/0.5.1.md) for evidence and limits.
-Interactive Game Mode, suspend/resume, cold boot and a sustained load/soak remain pending.
+**1.0 acceptance on the Z13 (SteamOS 3.9.5 / kernel 7.2, 2026-11-16):**
+one state owner shared by the app, Decky and `z13ctl` (M6); the post-update repair run before and after a reboot (M7);
+the Repair install button, lightbar recovery and the Boondock TDP floors; five suspend/resume cycles with Max Fans
+on; and a one-hour memory soak with every process flat. M9 (Quick Access focus with a game running, and the
+48-180 Hz VRR profile) moved after 1.0 (#250). Known issues: #243, #86, #80, #73.
+See the [1.0 evidence record](docs/releases/1.0.0.md) for each Must, its status and its evidence links.
 
 **Earlier device checks** (GZ302EA, SteamOS 3.8.28; not all repeated on 3.9.5):
 - ✅ Desktop app: mode tiles, profiles, power limits, the fan curve editor, Max Fans, keyboard and

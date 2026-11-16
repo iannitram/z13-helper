@@ -15,7 +15,10 @@ from post_update_state import read_build_id
 
 STATE_REL = os.path.join(".local", "share", "z13-helper", "post-update-state.json")
 ARMOURY_DIR = "/sys/class/firmware-attributes/asus-armoury/attributes"
-# The ppt_* attributes z13ctl writes (src/power_range.py) and, by name, any fan attribute.
+HWMON_ROOT = "/sys/class/hwmon"
+FAN_CURVE_HWMON = "asus_custom_fan_curve"
+# The ppt_* attributes z13ctl writes (src/power_range.py). Fans are not asus-armoury
+# attributes on this kernel: they live under the asus_custom_fan_curve hwmon node.
 PPT_ATTRS = ("ppt_pl1_spl", "ppt_pl2_sppt", "ppt_pl3_fppt")
 REVERIFY_TEXT = "SteamOS updated, re-verify hardware"
 
@@ -88,8 +91,9 @@ def acknowledge(state: dict) -> dict:
     return {**state, "reverify": False, "reason": ""}
 
 
-def armoury_check(listdir: Callable[[str], Sequence[str]]) -> dict:
-    """Read-only: do the ppt_* and fan attributes z13ctl writes still exist?
+def armoury_check(listdir: Callable[[str], Sequence[str]],
+                  read: Callable[[str], Optional[str]]) -> dict:
+    """Read-only: do the ppt_* attributes and the custom-fan-curve hwmon node still exist?
 
     {"state": "na"|"ok"|"needs", "missing": [...]}; "na" when the attributes folder is absent.
     """
@@ -97,6 +101,7 @@ def armoury_check(listdir: Callable[[str], Sequence[str]]) -> dict:
     if not names:
         return {"state": "na", "missing": []}
     missing = [a for a in PPT_ATTRS if a not in names]
-    if not any("fan" in n for n in names):
-        missing.append("fan attributes")
+    if not any((read(f"{HWMON_ROOT}/{h}/name") or "").strip() == FAN_CURVE_HWMON
+               for h in listdir(HWMON_ROOT)):
+        missing.append("fan curve hwmon")
     return {"state": "needs" if missing else "ok", "missing": missing}

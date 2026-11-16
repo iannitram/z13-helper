@@ -1,8 +1,8 @@
 import { DialogButton, Focusable, PanelSectionRow } from "@decky/ui";
-import { accentColors, spacing, touchTargetMin } from "../tokens";
 import { toaster } from "@decky/api";
 import { useEffect, useState } from "react";
 import { BrightnessLevel, isWriteTimeout, PowerState, setBrightness } from "../backend";
+import { colour, spacing, TOUCH_MIN_PX } from "../tokens";
 
 const LEVELS: { level: BrightnessLevel; label: string }[] = [
   { level: "off", label: "Off" },
@@ -56,9 +56,9 @@ export function KeyboardBrightness({ state }: { state: PowerState | null }) {
                 flex: 1,
                 minWidth: 0,
                 padding: `${spacing.sm}px 0`,
-                minHeight: `${touchTargetMin}px`,
+                minHeight: `${TOUCH_MIN_PX}px`,
                 ...(current === level
-                  ? { background: accentColors.balanced, color: "#fff" }
+                  ? { background: colour("accent"), color: colour("on_accent") }
                   : {}),
               }}
             >
@@ -69,7 +69,7 @@ export function KeyboardBrightness({ state }: { state: PowerState | null }) {
       </PanelSectionRow>
       {msg && (
         <PanelSectionRow>
-          <div style={{ fontSize: "12px", opacity: 0.85, color: warn ? "#ffb02e" : undefined }}>
+          <div style={{ fontSize: "12px", opacity: 0.85, color: warn ? colour("warn") : undefined }}>
             {msg}
           </div>
         </PanelSectionRow>

@@ -5,7 +5,7 @@ import os
 import pytest
 
 from post_update.builtin_4_6 import (
-    ROCM_LD_CONF, ROCM_LD_TEXT, ROCM_PROFILE, ROCM_PROFILE_TEXT, SNAPSHOT_DEST_REL,
+    ROCM_COMPAT_LIBS, ROCM_LD_CONF, ROCM_LD_TEXT, ROCM_LIB_DIR, ROCM_PROFILE, ROCM_PROFILE_TEXT, SNAPSHOT_DEST_REL,
     SNAPSHOT_SRC, Sys, builtin_recipes_4_6, etc_snapshot_recipe, rocm_recipe,
 )
 from post_update.runner import Env, check_all, run_plan
@@ -17,7 +17,8 @@ DEST = os.path.join(HOME, SNAPSHOT_DEST_REL)
 class FakeHost:
     """A fake tree. Records every write so tests can assert checks never write."""
 
-    def __init__(self, dirs=None, files=None, rc=None):
+    def __init__(self, dirs=None, files=None, rc=None, ldd_out=""):
+        self.ldd_out = ldd_out
         self.dirs = dict(dirs or {})          # path -> list of names
         self.files = dict(files or {})        # path -> text
         self.rc = dict(rc or {})              # argv[0] -> exit code (default 0)
@@ -32,7 +33,14 @@ class FakeHost:
             run=self._run,
             write=self._write,
             copy_tree=self._copy,
+            run_out=self._run_out,
         )
+
+    def _run_out(self, argv):
+        self.log.append(("run", tuple(argv)))
+        if argv[0] == "ldd":
+            return 0, self.ldd_out
+        return self.rc.get(argv[0], 0), ""
 
     def _run(self, argv):
         self.log.append(("run", tuple(argv)))
@@ -124,17 +132,88 @@ def test_rocm_check_never_writes_or_installs():
     assert all(x[0] == "run" and x[1] == ("/opt/rocm/bin/rocminfo",) for x in h.log)
 
 
+_LIB = ROCM_COMPAT_LIBS[0]
+_PKG = HOME + "/.cache/z13-helper/rocm-compat/" + _LIB["url"].rsplit("/", 1)[1]
+_COMPAT_FETCH = [
+    ("run", ("curl", "-fL", "--create-dirs", "-o", _PKG, _LIB["url"])),
+    ("run", ("sh", "-c", f'echo "{_LIB["sha256"]}  {_PKG}" | sha256sum -c -')),
+    ("run", ("bsdtar", "-xf", _PKG, "-C", ROCM_LIB_DIR, "--strip-components=2", "usr/lib/libfmt.so.11*")),
+]
+_LIBFMT11 = ROCM_LIB_DIR + "/libfmt.so.11"
+
+
 def test_rocm_apply_installs_then_writes_then_ldconfig_in_order():
     h = FakeHost(dirs={"/opt/rocm": []})
     rocm_recipe(h.sys()).apply()
     assert h.log == [
-        ("run", ("pacman", "-S", "--needed", "--noconfirm", "fmt", "google-glog")),
+        ("run", ("pacman", "-S", "--needed", "--noconfirm", "google-glog")),
+        *_COMPAT_FETCH,
         ("write", ROCM_LD_CONF),
         ("run", ("ldconfig",)),
         ("write", ROCM_PROFILE),
+        ("run", ("ldd", "/opt/rocm/bin/rocminfo")),
+        ("run", ("/opt/rocm/bin/rocminfo",)),
     ]
     assert h.files[ROCM_LD_CONF] == ROCM_LD_TEXT
     assert h.files[ROCM_PROFILE] == ROCM_PROFILE_TEXT
+
+
+def test_rocm_postcheck_fails_naming_the_missing_library(capsys):
+    h = FakeHost(dirs={"/opt/rocm": []},
+                 ldd_out="\tlibfmt.so.11 => not found\n\tlibc.so.6 => /usr/lib/libc.so.6 (0x1)\n")
+    with pytest.raises(RuntimeError, match=r"libfmt\.so\.11"):
+        rocm_recipe(h.sys()).apply()
+    assert "libfmt.so.11" in capsys.readouterr().out
+
+
+def test_rocm_postcheck_failure_marks_task_failed_and_rolls_back():
+    h = FakeHost(dirs={"/opt/rocm": []}, ldd_out="\tlibfmt.so.11 => not found\n")
+    restored = []
+    env = Env(backup=lambda p: None, readonly_disable=lambda: None, readonly_enable=lambda: None,
+              restore=lambda p, b: restored.append((p, b)))
+    assert run_plan((rocm_recipe(h.sys()),), env) == [("rocm", "failed")]
+    assert (_LIBFMT11, None) in restored  # the compat library this run added is removed again
+
+
+def test_rocm_postcheck_fails_when_rocminfo_itself_exits_nonzero():
+    h = FakeHost(dirs={"/opt/rocm": []}, rc={"/opt/rocm/bin/rocminfo": 3})
+    with pytest.raises(RuntimeError, match="rocminfo exited with code 3"):
+        rocm_recipe(h.sys()).apply()
+
+
+def test_rocm_postcheck_passes_is_done(capsys):
+    h = FakeHost(dirs={"/opt/rocm": []}, ldd_out="\tlibfmt.so.11 => /opt/rocm/lib/libfmt.so.11 (0x1)\n")
+    env = Env(backup=lambda p: None, readonly_disable=lambda: None, readonly_enable=lambda: None)
+    assert run_plan((rocm_recipe(h.sys()),), env) == [("rocm", "done")]
+    assert capsys.readouterr().out == ""
+
+
+def test_rocm_compat_library_already_present_downloads_nothing():
+    h = FakeHost(dirs={"/opt/rocm": []}, files={_LIBFMT11: "x"})
+    r = rocm_recipe(h.sys())
+    assert r.creates() == []
+    r.apply()
+    argvs = [x[1][0] for x in h.log if x[0] == "run"]
+    assert "curl" not in argvs and "bsdtar" not in argvs
+
+
+def test_rocm_compat_download_failure_stops_before_any_file_is_written():
+    h = FakeHost(dirs={"/opt/rocm": []}, rc={"curl": 22})
+    with pytest.raises(RuntimeError, match="libfmt.so.11"):
+        rocm_recipe(h.sys()).apply()
+    assert ROCM_LD_CONF not in h.files
+
+
+def test_rocm_compat_checksum_failure_stops_before_extracting():
+    h = FakeHost(dirs={"/opt/rocm": []}, rc={"sh": 1})
+    with pytest.raises(RuntimeError, match="checksum"):
+        rocm_recipe(h.sys()).apply()
+    assert "bsdtar" not in [x[1][0] for x in h.log if x[0] == "run"]
+
+
+def test_rocm_creates_lists_both_compat_files_when_absent():
+    h = FakeHost(dirs={"/opt/rocm": []})
+    assert rocm_recipe(h.sys()).creates() == [_LIBFMT11, ROCM_LIB_DIR + "/libfmt.so.11.2.0"]
 
 
 def test_rocm_apply_stops_when_pacman_fails():
@@ -171,3 +250,47 @@ def test_rocm_runs_through_runner_with_backups_and_readonly_toggle():
 
 def test_builtin_recipes_4_6_in_order():
     assert [r.id for r in builtin_recipes_4_6(FakeHost().sys())] == ["etc-snapshot", "rocm"]
+
+
+# ---- review fix: per-file created/backup decisions for the compat library ----
+
+_REAL = ROCM_LIB_DIR + "/libfmt.so.11.2.0"
+
+
+def _run_with_restore(h):
+    restored = []
+    env = Env(backup=lambda p: None, readonly_disable=lambda: None, readonly_enable=lambda: None,
+              restore=lambda p, b: restored.append((p, b)))
+    return run_plan((rocm_recipe(h.sys()),), env), restored
+
+
+def test_rocm_partial_install_only_links_and_rollback_removes_only_the_symlink():
+    h = FakeHost(dirs={"/opt/rocm": []}, files={_REAL: "x"}, ldd_out="\tlibfmt.so.11 => not found\n")
+    assert rocm_recipe(h.sys()).creates() == [_LIBFMT11]
+    results, restored = _run_with_restore(h)
+    assert results == [("rocm", "failed")]            # the post-check still fails here
+    argvs = [x[1][0] for x in h.log if x[0] == "run"]
+    assert "curl" not in argvs and "bsdtar" not in argvs
+    assert ("run", ("ln", "-sf", "libfmt.so.11.2.0", _LIBFMT11)) in h.log
+    assert (_LIBFMT11, None) in restored and (_REAL, None) not in restored
+
+
+def test_rocm_partial_install_passes_when_post_check_passes():
+    h = FakeHost(dirs={"/opt/rocm": []}, files={_REAL: "x"})
+    assert _run_with_restore(h)[0] == [("rocm", "done")]
+
+
+def test_rocm_failed_link_step_leaves_preexisting_real_file_alone():
+    # real file present but the link step fails: the real file must never be restored-to-absent
+    h = FakeHost(dirs={"/opt/rocm": []}, files={_REAL: "x"}, rc={"ln": 1})
+    results, restored = _run_with_restore(h)
+    assert results == [("rocm", "failed")]
+    assert all(p != _REAL for p, _b in restored)
+
+
+def test_rocm_nothing_present_creates_both_and_rollback_removes_both():
+    h = FakeHost(dirs={"/opt/rocm": []}, rc={"curl": 22})
+    assert rocm_recipe(h.sys()).creates() == [_LIBFMT11, _REAL]
+    results, restored = _run_with_restore(h)
+    assert results == [("rocm", "failed")]
+    assert (_LIBFMT11, None) in restored and (_REAL, None) in restored

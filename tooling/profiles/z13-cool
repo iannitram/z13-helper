@@ -12,5 +12,3 @@ mkdir -p "$HOME/.config/z13-profiles"
 printf "longevity-cool-stable\n" > "$HOME/.config/z13-profiles/current-profile"
 
 echo "Z13 profile set to: Longevity / Cool & Stable"
-echo
-z13ctl status

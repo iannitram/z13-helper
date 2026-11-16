@@ -58,8 +58,9 @@ def test_z13_balanced_matches_balanced_curve():
     assert _script_spec("z13-balanced") == _spec(profiles.BALANCED_CURVE)
 
 
-def test_z13_max_has_no_live_status_read():
-    assert "z13ctl status" not in (ROOT / "tooling/profiles/z13-max").read_text()
+@pytest.mark.parametrize("name", ["z13-max", "z13-balanced", "z13-cool"])
+def test_profile_scripts_have_no_live_status_read(name):
+    assert "z13ctl status" not in (ROOT / "tooling/profiles" / name).read_text()
 
 
 def test_widget_default_curve_first_anchor_and_shape():

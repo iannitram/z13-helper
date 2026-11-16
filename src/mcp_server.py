@@ -11,7 +11,7 @@ ownership.
 Tools mirror the CLI leaves:
 
     status, version
-    profile list|get|set|apply
+    profile list|get|set|apply|create|rename|delete
     tdp get|set|reset
     fans curve get|set, max-fans status|on|off
     battery get|set
@@ -118,6 +118,33 @@ def _tool_specs():
             },
             required=("name",),
             annotations=_WRITE,
+        ),
+        _tool(
+            "profile_create",
+            "Add a new profile, a copy of `from` or a Balanced-base profile, through the state authority.",
+            {
+                "name": {"type": "string"},
+                "from": {"type": "string", "description": "profile to copy"},
+            },
+            required=("name",),
+            annotations=_WRITE,
+        ),
+        _tool(
+            "profile_rename",
+            "Rename a custom profile through the state authority; built-ins keep their names.",
+            {
+                "name": {"type": "string"},
+                "new_name": {"type": "string"},
+            },
+            required=("name", "new_name"),
+            annotations=_WRITE,
+        ),
+        _tool(
+            "profile_delete",
+            "Delete a custom profile (built-ins are refused). Deleting the active one applies Balanced.",
+            {"name": {"type": "string"}},
+            required=("name",),
+            annotations=_DANGER,
         ),
         _tool("tdp_get", "Show the active profile's TDP override and kernel ranges."),
         _tool(
@@ -316,6 +343,19 @@ def _profile_apply(args):
     return argv + (["--no-hooks"] if args.get("no_hooks") else [])
 
 
+def _profile_create(args):
+    argv = ["profile", "create", str(args["name"])]
+    return argv + (["--from", str(args["from"])] if _present(args, "from") else [])
+
+
+def _profile_rename(args):
+    return ["profile", "rename", str(args["name"]), str(args["new_name"])]
+
+
+def _profile_delete(args):
+    return ["profile", "delete", str(args["name"])]
+
+
 def _tdp_set(args):
     argv = ["tdp", "set"]
     if _present(args, "values"):
@@ -368,6 +408,9 @@ _BUILDERS = {
     ),
     "profile_set": _profile_set,
     "profile_apply": _profile_apply,
+    "profile_create": _profile_create,
+    "profile_rename": _profile_rename,
+    "profile_delete": _profile_delete,
     "tdp_get": lambda args: ["tdp", "get"],
     "tdp_set": _tdp_set,
     "tdp_reset": lambda args: ["tdp", "reset"],
@@ -596,6 +639,12 @@ def _validated(name, arguments):
         _validate_curve(arguments)
     if name == "profile_set":
         _validate_profile_set(arguments)
+    if name in ("profile_create", "profile_rename", "profile_delete"):
+        # A name starting with "-" would be read by the CLI as an option.
+        for key in ("name", "new_name", "from"):
+            value = arguments.get(key)
+            if isinstance(value, str) and value.startswith("-"):
+                raise ToolError(f"{key} must not start with '-'")
     return arguments
 
 

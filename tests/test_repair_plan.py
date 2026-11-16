@@ -400,3 +400,11 @@ def test_each_bios_ec_and_package_check_has_its_own_step():
     plan = plan_for([CheckResult("vulkan_radeon", False, ""), CheckResult("ec", False, "")], m.io())
     assert [s.check_id for s in plan.steps] == ["vulkan_radeon", "ec"]
     assert "vulkan-radeon" in plan.steps[0].description and "mesa " not in plan.steps[0].description
+
+
+def test_kernel_args_on_a_grub_cmdline_linux_block_without_default_line():
+    grub = 'GRUB_CMDLINE_LINUX="${GRUB_CMDLINE_LINUX} \\\nlog_buf_len=4M \\\n"\n'
+    m = Machine({GRUB_FILE: grub})
+    _, results = one(m, "kernel_args")
+    assert results == [("kernel_args", "applied")]
+    assert m.files[GRUB_FILE].startswith(grub[:-2]) and all(a in m.files[GRUB_FILE] for a in AMDGPU_ARGS)

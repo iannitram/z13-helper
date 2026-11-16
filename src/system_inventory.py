@@ -36,6 +36,10 @@ ARMOURY_DIR = "/sys/class/firmware-attributes/asus-armoury/attributes"
 USER_UNITS = ("z13-button-watcher.service", "z13-helper.service",
               "z13-restore-profile.service", "z13ctl.socket")
 SYSTEM_UNITS = ("z13-fan-resume.service", "z13-lightbar-reset.service")
+# System units with no [Install] section by design: started on demand, so `static` is healthy.
+ON_DEMAND_UNITS = ("system:z13-lightbar-reset.service",)
+# Firmware package names, first installed wins (SteamOS ships the -neptune one).
+FIRMWARE_PACKAGES = ("linux-firmware", "linux-firmware-neptune")
 # Files the helper depends on: the ppt attribute z13ctl writes and its udev rule.
 PERMISSION_PATHS = (
     ARMOURY_DIR + "/ppt_pl1_spl/current_value",
@@ -79,6 +83,14 @@ def _pacman_version(read, package):
     return parts[1] if len(parts) == 2 and parts[0] == package else None
 
 
+def _first_pacman_version(read, packages):
+    for package in packages:
+        version = _pacman_version(read, package)
+        if version:
+            return version
+    return None
+
+
 def collect_inventory(read=None) -> dict:
     """Return one entry per inventory key. Every read goes through `read`; None = unknown."""
     if read is None:
@@ -97,7 +109,7 @@ def collect_inventory(read=None) -> dict:
         "kernel": _text(read, KERNEL_RELEASE),
         "bios": _text(read, BIOS_VERSION),
         "ec": _text(read, EC_VERSION),
-        "firmware": _pacman_version(read, "linux-firmware"),
+        "firmware": _first_pacman_version(read, FIRMWARE_PACKAGES),
         "mesa": _pacman_version(read, "mesa"),
         "vulkan_radeon": _pacman_version(read, "vulkan-radeon"),
         "backend_version": _first_version(_text(read, ("z13ctl", "--version"))),

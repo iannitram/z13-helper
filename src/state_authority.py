@@ -424,3 +424,48 @@ def delete_named_profile(profile):
     if client is not None:
         client.request('profile-delete', set=client.mapped_profile_name(profile))
     return 'Named profile removed'
+
+
+@serialized
+def create_profile(name, from_name=None):
+    """Store a new app profile (a copy of `from_name`, else Balanced-based).
+
+    Store-only: its z13ctl named profile is mirrored on first apply or edit.
+    """
+    import profiles
+    return profiles.create_profile(name, from_name=from_name)
+
+
+@serialized
+def rename_profile(old, new_name):
+    """Rename an app profile and keep its z13ctl named profile reachable."""
+    import profiles
+    from z13ctl_client import Z13CtlClient
+    current = profiles.get_profile(old)
+    pin = Z13CtlClient.mapped_profile_name(current) if current is not None else None
+    return profiles.rename_profile(old, new_name, pin_backend=pin)
+
+
+@serialized
+def delete_profile(name):
+    """Delete a custom app profile and its named z13ctl profile.
+
+    Removing the active profile falls back to Balanced and applies it, as the
+    desktop app does. Returns {'removed', 'active', 'steps'}; steps is [] when
+    nothing was applied.
+    """
+    import profiles
+    profile = profiles.get_profile(name)
+    if profile is None:
+        raise KeyError(name)
+    was_active = profiles.active_name() == name
+    profiles.delete_profile(name)          # refuses built-ins before anything is touched
+    steps = []
+    try:
+        delete_named_profile(profile)
+    except (OSError, Z13CtlError) as exc:
+        # The app profile is gone either way; a stale daemon profile is harmless.
+        logger.warning("could not remove the %s named profile: %s", name, exc)
+    if was_active:
+        steps = apply_profile('Balanced')
+    return {'removed': name, 'active': profiles.active_name(), 'steps': steps}

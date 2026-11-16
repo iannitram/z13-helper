@@ -493,9 +493,14 @@ class FanWatchdog:
             tdp = self._active_tdp()
             if not tdp:
                 return head
-            self.fans.apply_tdp(tdp)
+            # Report what was written: the active profile's values clamped into
+            # the firmware range (a fans object without fit_tdp writes them as is).
+            fit = getattr(self.fans, "fit_tdp", None)
+            written, note = fit(tdp) if fit else (tdp, "")
+            self.fans.apply_tdp(written)
             self.fans.reset_fancurve()
-            return f"{head}, TDP {tdp['pl1']}/{tdp['pl2']}/{tdp['pl3']} W re-applied"
+            text = f"TDP {written['pl1']}/{written['pl2']}/{written['pl3']} W re-applied"
+            return f"{head}, {text} ({note})" if note else f"{head}, {text}"
         except Exception as e:  # noqa: BLE001
             return f"{head}, but TDP re-apply failed: {e}"
 

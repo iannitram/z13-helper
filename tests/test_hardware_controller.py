@@ -196,6 +196,62 @@ def test_set_lighting_builds_per_device_argv(device, mode):
                         Z13CTL_WRITE_TIMEOUT_S)]
 
 
+def test_stale_mode_write_one_daemon_restart_one_retry(recover, recover_stale):
+    # ENODEV on mode write triggers exactly one daemon restart and one retry.
+    c = Fake(lambda a, calls: STALE if a[1] == "lightbar" and len(calls) == 1 else None)
+    c.set_lighting("lightbar", {"mode": "static", "color": "red"})
+    assert devs(c) == ["lightbar", "lightbar"]
+    assert len(recover_stale.seen) == 1
+    assert recover.seen == []
+
+
+def test_wedged_mode_write_one_reset_one_retry(recover, recover_stale):
+    # Timeout on mode write triggers the USB reset path and one retry.
+    c = Fake(lambda a, calls: WEDGED if a[1] == "lightbar" and len(calls) == 1 else None)
+    c.set_lighting("lightbar", {"mode": "static", "color": "red"})
+    assert devs(c) == ["lightbar", "lightbar"]
+    assert len(recover.seen) == 1
+    assert recover_stale.seen == []
+
+
+def test_mode_write_keyboard_never_retried(recover, recover_stale):
+    # Keyboard failure on mode write is never retried and triggers no recovery.
+    c = Fake(lambda a, calls: STALE if a[1] == "keyboard" else None)
+    with pytest.raises(RuntimeError):
+        c.set_lighting("keyboard", {"mode": "static", "color": "red"})
+    assert devs(c) == ["keyboard"]
+    assert recover.seen == []
+    assert recover_stale.seen == []
+
+
+def test_mode_write_unclassified_failure_no_recovery(recover, recover_stale):
+    # Non-lightbar or unclassified failure does not recover.
+    c = Fake(lambda a, calls: "z13ctl command failed: invalid color" if a[1] == "lightbar" else None)
+    with pytest.raises(RuntimeError):
+        c.set_lighting("lightbar", {"mode": "static", "color": "red"})
+    assert devs(c) == ["lightbar"]
+    assert recover.seen == []
+    assert recover_stale.seen == []
+
+
+def test_mode_write_timeout_stops_and_propagates_exact_message(recover, recover_stale):
+    message = "z13ctl write timed out after 20 s (kernel asus-wmi hang?)"
+    c = Fake(lambda a, calls: message if a[1] == "lightbar" else None)
+    with pytest.raises(RuntimeError) as err:
+        c.set_lighting("lightbar", {"mode": "static", "color": "red"})
+    assert str(err.value) == message
+    assert devs(c) == ["lightbar"]
+    assert recover.seen == [] and recover_stale.seen == []
+
+
+def test_mode_write_still_stale_after_daemon_restart_raises(recover, recover_stale):
+    c = Fake(lambda a, calls: STALE if a[1] == "lightbar" else None)
+    with pytest.raises(RuntimeError, match="still failing after a daemon restarted"):
+        c.set_lighting("lightbar", {"mode": "static", "color": "red"})
+    assert devs(c) == ["lightbar", "lightbar"]
+    assert len(recover_stale.seen) == 1
+
+
 @pytest.mark.parametrize("given,want", [(10, "40"), (39, "40"), (40, "40"),
                                         (80, "80"), (100, "100"), (150, "100")])
 def test_set_battery_limit_clamps_40_100(fake_host, given, want):
@@ -241,3 +297,14 @@ def test_set_fancurve_pwm_clamps_0_255(fake_host):
     HardwareController(z13ctl_path="z13ctl").set_fancurve_pwm(curve)
     spec = fake_host.argvs[0][-1]
     assert spec == "20:0,30:0,40:128,50:255,60:255,70:255,80:255,90:255"
+
+
+def test_apply_tdp_clamps_into_the_detected_firmware_ranges(fake_host, monkeypatch):
+    import power_range
+    ranges = {"pl1": (28, 80), "pl2": (32, 92), "pl3": (45, 93)}
+    monkeypatch.setattr(profiles, "_tdp_ranges", lambda: ranges)
+    c = HardwareController(z13ctl_path="z13ctl")
+    c.apply_tdp({"pl1": 20, "pl2": 30, "pl3": 40, "force": False})
+    assert fake_host.argvs == [["z13ctl", "tdp", "--set", "28", "--pl2", "32", "--pl3", "45"]]
+    written, note = c.fit_tdp({"pl1": 20, "pl2": 30, "pl3": 40, "force": False})
+    assert written["pl1"] == 28 and "outside the firmware range" in note
