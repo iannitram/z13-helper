@@ -8,6 +8,7 @@ import random
 
 import pytest
 
+import fps_source
 import goal_control as gc
 import power_range
 
@@ -244,6 +245,75 @@ def test_trace_hold_fps_converges_without_oscillation():
         tdp, state = out["tdp"], out["state"]
         now += gc.MIN_DWELL_S
     assert trace == [35, 40, 40, 40, 40, 40, 40, 40, 40, 40]
+
+
+def test_trace_fps_target_off_the_step_grid_settles_inside_the_band():
+    """Plant: fps = 20 + pl1. Target 62 is one watt past the 40 W step's 60 fps."""
+    goal = {"kind": "fps", "target_fps": 62}
+    tdp, state, now = dict(TDP), {}, 0.0
+    trace = []
+    for _ in range(6):
+        fps = 20 + tdp["pl1"]
+        out = gc.step(goal, {"fps": fps}, {"tdp": tdp, "fan_curve": CURVE}, RANGES,
+                      now_s=now, state=state)
+        trace.append(out["tdp"]["pl1"])
+        tdp, state = out["tdp"], out["state"]
+        now += gc.MIN_DWELL_S
+    assert trace == [35, 40, 40, 40, 40, 40]
+    assert abs(62 - (20 + 40)) <= gc.HYSTERESIS_FPS
+    assert "hysteresis" in out["reason"]
+
+
+def test_trace_missing_fps_holds_then_recovers():
+    """A source that cannot read FPS holds every setpoint until readings return."""
+    goal = {"kind": "fps", "target_fps": 60}
+    tdp, state, now = dict(TDP), {}, 0.0
+    trace = []
+    for tick in range(6):
+        fps = None if tick < 3 else 20 + tdp["pl1"]
+        out = gc.step(goal, {"fps": fps}, {"tdp": tdp, "fan_curve": CURVE}, RANGES,
+                      now_s=now, state=state)
+        trace.append(out["tdp"]["pl1"])
+        if tick < 3:
+            assert out["tdp"] == TDP
+            assert out["fan_curve"] == CURVE
+            assert out["reason"].startswith("Waiting for ")
+            assert "last_change_at" not in out["state"]
+        tdp, state = out["tdp"], out["state"]
+        now += gc.MIN_DWELL_S
+    assert trace == [30, 30, 30, 35, 40, 40]
+
+
+def test_unsupported_fps_source_stays_fail_closed():
+    goal = {"kind": "fps", "target_fps": 60}
+    tdp, state = dict(TDP), {}
+    for now in (0.0, gc.MIN_DWELL_S, 2 * gc.MIN_DWELL_S):
+        fps = fps_source.read()
+        assert fps is None
+        out = gc.step(goal, {"fps": fps}, {"tdp": tdp, "fan_curve": CURVE}, RANGES,
+                      now_s=now, state=state)
+        assert out["tdp"] == TDP and out["fan_curve"] == CURVE
+        assert out["reason"] == "Waiting for fps reading"
+        assert "last_change_at" not in out["state"]
+        tdp, state = out["tdp"], out["state"]
+
+
+def test_trace_fps_dropout_mid_run_holds_the_last_setpoints():
+    """A dropout after power has moved holds the last setpoints, not the initial ones."""
+    goal = {"kind": "fps", "target_fps": 60}
+    tdp, state, now = dict(TDP), {}, 0.0
+    trace = []
+    for tick in range(6):
+        fps = None if tick in (2, 3) else 20 + tdp["pl1"]
+        out = gc.step(goal, {"fps": fps}, {"tdp": tdp, "fan_curve": CURVE}, RANGES,
+                      now_s=now, state=state)
+        trace.append(out["tdp"]["pl1"])
+        if tick in (2, 3):
+            assert out["tdp"]["pl1"] == 40
+            assert out["reason"].startswith("Waiting for ")
+        tdp, state = out["tdp"], out["state"]
+        now += gc.MIN_DWELL_S
+    assert trace == [35, 40, 40, 40, 40, 40]
 
 
 def test_trace_constant_input_never_oscillates():
