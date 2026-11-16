@@ -53,3 +53,42 @@ def test_add_grub_args_empty_value():
 def test_add_grub_args_rejects_other_lines(line):
     with pytest.raises(ValueError):
         add_grub_args(line, ("a=1",))
+
+
+# --- whole-file helpers: GRUB_CMDLINE_LINUX and backslash continuations (#244) ---------------
+
+from post_update.cmdline import add_grub_args_text, grub_value
+
+BLOCK = 'A=1\nGRUB_CMDLINE_LINUX="${GRUB_CMDLINE_LINUX} \\\nlog_buf_len=4M \\\nfoo=1 bar=2 \\\n"\nB=2\n'
+
+
+def test_grub_value_reads_continuations_as_whitespace():
+    v = grub_value(BLOCK)
+    assert v.split() == ["${GRUB_CMDLINE_LINUX}", "log_buf_len=4M", "foo=1", "bar=2"]
+
+
+def test_grub_value_none_without_an_active_line():
+    assert grub_value('# GRUB_CMDLINE_LINUX="x"\nGRUB_TIMEOUT=0\n') is None
+
+
+def test_add_text_appends_a_continuation_line_and_keeps_the_rest():
+    out = add_grub_args_text(BLOCK, ("baz=3",))
+    assert out == BLOCK.replace('bar=2 \\\n"', 'bar=2 \\\nbaz=3 \\\n"')
+
+
+def test_add_text_replaces_a_changed_value_in_place():
+    assert add_grub_args_text(BLOCK, ("foo=9",)) == BLOCK.replace("foo=1", "foo=9")
+
+
+def test_add_text_no_change_when_present():
+    assert add_grub_args_text(BLOCK, ("foo=1", "bar=2")) == BLOCK
+
+
+def test_add_text_does_not_match_a_longer_key():
+    out = add_grub_args_text(BLOCK.replace("foo=1", "xfoo=1"), ("foo=9",))
+    assert "xfoo=1" in out and out.count("foo=9") == 1
+
+
+def test_add_text_raises_without_an_assignment():
+    with pytest.raises(ValueError):
+        add_grub_args_text("GRUB_TIMEOUT=0\n", ("a=1",))

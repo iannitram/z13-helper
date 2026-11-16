@@ -29,6 +29,7 @@ import { KeyboardBrightness } from "./components/KeyboardBrightness";
 import { ComputeHealth } from "./components/ComputeHealth";
 import { PostUpdate } from "./components/PostUpdate";
 import { Timeline } from "./components/Timeline";
+import { TOKEN_CSS } from "./tokens";
 
 const PLATFORM_PROFILES = [
   { data: "quiet", label: "Quiet" },
@@ -95,6 +96,7 @@ function Content() {
 
   return (
     <>
+      <style>{TOKEN_CSS}</style>
       <PanelSection title="Z13-Helper">
         <TelemetryRow />
         <PanelSectionRow>

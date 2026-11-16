@@ -23,7 +23,7 @@ import crash_report as cr
 BUILD = {
     "base": "https://drop.invalid/reports",
     "token": "test-only-token-r3",
-    "version": "0.5.1",
+    "version": "1.0.0",
     "commit": "abc1234",
 }
 CUT = "\n... [cut] ...\n"

@@ -1,6 +1,6 @@
 """Shared version constraints and comparisons for host and UI checks."""
 
-APP_VERSION = "0.5.1"
+APP_VERSION = "1.0.0"
 DECKY_MIN = "3.3.0"
 
 

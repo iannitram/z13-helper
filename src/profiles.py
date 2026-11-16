@@ -37,6 +37,7 @@ CLI:
 
 import argparse
 import contextlib
+import copy
 import stat
 import errno
 import fcntl
@@ -221,6 +222,36 @@ def _sync_goal(p):
             p["goal"] = {"kind": "max"}
     else:
         p["max_fans"] = p["goal"]["kind"] == "max"
+
+
+# z13ctl backend names (Z13CtlClient.backend_profile_name): "z13h-<slug>-<8 hex>".
+# They are the daemon's private identity for a profile, never an app profile name
+# (#227: a backend Balanced once leaked into the list as its own profile).
+BACKEND_NAME = re.compile(r"z13h-[a-z0-9-]+-[0-9a-f]{8}")
+NAME_MAX = 64
+
+
+def is_backend_name(name):
+    return isinstance(name, str) and BACKEND_NAME.fullmatch(name) is not None
+
+
+def check_new_name(name, store, *, own=None):
+    """Return the stripped name for a new or renamed profile, or raise ValueError.
+
+    `own` is the current name of the profile being renamed (it may not clash with itself).
+    Clashes are checked case-insensitively, so "balanced" can't shadow "Balanced".
+    """
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("a profile needs a name")
+    name = name.strip()
+    if len(name) > NAME_MAX or any(ord(c) < 32 for c in name):
+        raise ValueError(f"profile names are 1..{NAME_MAX} printable characters")
+    if is_backend_name(name):
+        raise ValueError(f"{name!r} is a z13ctl backend name, not a profile name")
+    taken = {p["name"].casefold() for p in store["profiles"] if p["name"] != own}
+    if name.casefold() in taken:
+        raise ValueError(f"a profile named {name!r} already exists")
+    return name
 
 
 def default_profiles():
@@ -859,6 +890,60 @@ def upsert_profile(profile):
     return store
 
 
+def create_profile(name, from_name=None):
+    """Add a profile named `name`: a copy of `from_name`, else a Balanced-base profile.
+
+    The copy is a custom profile (never built in) and drops its z13ctl backend
+    pin, so it gets its own named profile when it is first mirrored.
+    """
+    with store_lock():
+        store = load_store()
+        name = check_new_name(name, store)
+        if from_name is None:
+            profile = _profile(name, "balanced")
+        else:
+            src = get_profile(from_name, store)
+            if src is None:
+                raise KeyError(from_name)
+            profile = copy.deepcopy(src)
+            profile.pop("z13ctl_profile", None)
+            profile["name"] = name
+        profile["builtin"] = False
+        validate(profile)
+        store["profiles"].append(profile)
+        save_store(store)
+    return get_profile(name)
+
+
+def rename_profile(old, new_name, *, pin_backend=None):
+    """Rename a custom profile; the active name follows it.
+
+    `pin_backend` is the z13ctl name the profile is mirrored under now. It is
+    stored on the profile (unless one is already pinned) so the rename cannot
+    orphan the daemon's named profile.
+    """
+    with store_lock():
+        store = load_store()
+        p = get_profile(old, store)
+        if p is None:
+            raise KeyError(old)
+        if p.get("builtin"):
+            raise ValueError(f"{old} is built in and keeps its name")
+        new_name = check_new_name(new_name, store, own=old)
+        if new_name == old:
+            raise ValueError(f"{old!r} already has that name")
+        if pin_backend and "z13ctl_profile" not in p:
+            p["z13ctl_profile"] = pin_backend
+        p["name"] = new_name
+        was_active = store.get("active") == old
+        if was_active:
+            store["active"] = new_name
+        save_store(store)
+        if was_active:
+            _mirror_legacy(new_name)
+    return get_profile(new_name)
+
+
 def delete_profile(name):
     with store_lock():
         store = load_store()
@@ -883,6 +968,8 @@ def validate(p):
     name = p.get("name")
     if not isinstance(name, str) or not name.strip():
         raise ValueError("profile needs a name")
+    if is_backend_name(name):
+        raise ValueError(f"{name!r} is a z13ctl backend name, not a profile name")
     if p.get("base") not in BASES:
         raise ValueError(f"base must be one of {BASES}")
     tdp = p.get("tdp")
@@ -1071,6 +1158,88 @@ def recover_lightbar_stale(*, sleep=time.sleep, now=time.time):
     if not ok:
         return False, msg
     return restart_lightbar_daemon(sleep=sleep)
+
+
+def write_lighting_with_recovery(
+    device: str,
+    write_fn,
+    *,
+    recover_wedged=None,
+    recover_stale=None,
+    timeout_s=None,
+):
+    """One shared write -> classify -> recover once -> retry once helper for lighting writes.
+
+    Executes write_fn for device (keyboard or lightbar).
+    - The keyboard is written without recovery or retry.
+    - For the lightbar:
+      * Success returns (True, out, False, False).
+      * A host/asus-wmi timeout ("z13ctl write timed out after ...") is never retried;
+        returns (False, out, True, False).
+      * An ENODEV failure ('stale') triggers recover_stale() (daemon restart) and one retry.
+      * A USB endpoint timeout ('wedged') triggers recover_wedged() (USB reset + daemon restart)
+        and one retry.
+      * An unclassified failure returns (False, out, False, False) without recovery or retry.
+      * If recovery fails or is rate-limited, returns (False, error_with_reason, False, False).
+      * If retry succeeds, returns (True, out, False, True).
+      * If retry fails, returns (False, retry_error_annotated, False, False).
+
+    write_fn can either:
+    - return Result(rc, out, timed_out) / (rc, out, timed_out)
+    - return str (success) or raise RuntimeError / Exception (failure/timeout)
+
+    Returns (ok, out, timed_out, recovered).
+    decky/main.py carries a copy of this.
+    """
+    if recover_wedged is None:
+        recover_wedged = recover_lightbar
+    if recover_stale is None:
+        recover_stale = recover_lightbar_stale
+    if timeout_s is None:
+        timeout_s = Z13CTL_WRITE_TIMEOUT_S
+
+    def _exec():
+        try:
+            res = write_fn()
+            if isinstance(res, tuple) or hasattr(res, "rc"):
+                rc = getattr(res, "rc", res[0])
+                out = getattr(res, "out", res[1])
+                hit_timeout = getattr(res, "timed_out", res[2] if len(res) > 2 else False)
+                if hit_timeout:
+                    msg = out or f"z13ctl write timed out after {timeout_s} s (kernel asus-wmi hang?)"
+                    if not msg.startswith("z13ctl write timed out after "):
+                        msg = f"z13ctl write timed out after {timeout_s} s (kernel asus-wmi hang?)"
+                    return False, msg, True
+                if rc != 0:
+                    return False, out or f"rc={rc}", False
+                return True, out or "", False
+            return True, str(res or ""), False
+        except Exception as exc:
+            msg = str(exc)
+            if msg.startswith("z13ctl write timed out after "):
+                return False, msg, True
+            return False, msg, False
+
+    ok, out, timed_out = _exec()
+    if timed_out or ok or device != "lightbar":
+        return ok, out, timed_out, False
+
+    kind = lightbar_failure_kind(out)
+    recover = {"wedged": recover_wedged, "stale": recover_stale}.get(kind)
+    if not recover:
+        return False, out, False, False
+
+    rec_ok, rec_msg = recover()
+    if not rec_ok:
+        return False, f"{out}; {rec_msg}", False, False
+
+    retry_ok, retry_out, retry_timed_out = _exec()
+    if retry_timed_out:
+        return False, retry_out, True, False
+    if retry_ok:
+        return True, retry_out, False, True
+
+    return False, f"{retry_out} (still failing after a {rec_msg})", False, False
 
 
 def _max_fans_state():
@@ -1510,45 +1679,36 @@ def _apply_steps(profile, *, previous=None, z13ctl=Z13CTL,
         if setting:
             level = br or "high"
             argv = lighting_argv(dev, setting, level, z13ctl)
-            rc, out, timed_out = authority.run(argv, timeout=Z13CTL_WRITE_TIMEOUT_S)
+            ok, out, timed_out, recovered = write_lighting_with_recovery(
+                dev,
+                lambda: authority.run(argv, timeout=Z13CTL_WRITE_TIMEOUT_S),
+            )
             if timed_out:
-                out = f"z13ctl write timed out after {Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)"
-            results.append((f"lighting ({dev})", rc == 0,
-                            f"{setting['mode']} / {setting['color']} / {level}" if rc == 0
-                            else (out or f"rc={rc}")))
-            if timed_out:
+                results.append((f"lighting ({dev})", False, out))
                 return finish(results)
+            if ok:
+                msg = f"{setting['mode']} / {setting['color']} / {level}"
+                if recovered:
+                    msg += " (lightbar recovered)"
+                results.append((f"lighting ({dev})", True, msg))
+            else:
+                results.append((f"lighting ({dev})", False, out))
         elif br:
             argv = [z13ctl, "--device", dev, "brightness", br]
-            rc, out, hit_timeout = authority.run(argv, timeout=Z13CTL_WRITE_TIMEOUT_S)
-            timed_out = hit_timeout
-            if hit_timeout:
-                out = f"z13ctl write timed out after {Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)"
-            if not hit_timeout and rc != 0 and dev == "lightbar":
-                kind = lightbar_failure_kind(out)
-                if kind == "wedged":
-                    rec_ok, rec_msg = recover_lightbar()
-                elif kind == "stale":
-                    rec_ok, rec_msg = recover_lightbar_stale()
-                else:
-                    rec_ok = None
-                if rec_ok is not None:
-                    if rec_ok:
-                        rc, out, hit_timeout = authority.run(argv, timeout=Z13CTL_WRITE_TIMEOUT_S)
-                        timed_out = hit_timeout
-                        if hit_timeout:
-                            out = f"z13ctl write timed out after {Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)"
-                        if rc == 0:
-                            results.append((f"brightness ({dev})", True,
-                                            f"{br} (lightbar recovered)"))
-                            continue
-                        if not hit_timeout:
-                            out = f"{out or f'rc={rc}'} (still failing after a {rec_msg})"
-                    else:
-                        out = f"{out}; {rec_msg}"
-            results.append((f"brightness ({dev})", rc == 0, br if rc == 0 else (out or f"rc={rc}")))
+            ok, out, timed_out, recovered = write_lighting_with_recovery(
+                dev,
+                lambda: authority.run(argv, timeout=Z13CTL_WRITE_TIMEOUT_S),
+            )
             if timed_out:
+                results.append((f"brightness ({dev})", False, out))
                 return finish(results)
+            if ok:
+                msg = br
+                if recovered:
+                    msg += " (lightbar recovered)"
+                results.append((f"brightness ({dev})", True, msg))
+            else:
+                results.append((f"brightness ({dev})", False, out))
 
     # 7. Battery charge limit.
     # A login restore passes login_battery_default=80: a profile that sets no limit

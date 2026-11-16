@@ -49,6 +49,16 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="1.0.0" date="2026-11-16">
+      <description>
+        <p>First 1.0 release for the ASUS ROG Flow Z13 on SteamOS.</p>
+        <ul>
+          <li>One state owner (z13ctl) shared by the desktop app, the Decky plugin and the CLI.</li>
+          <li>Post-update repair for SteamOS updates, with a plan, backups and a rollback record.</li>
+          <li>Updates panel lists this project's own releases; Boondock TDP matches the firmware floors.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.5.1" date="2026-10-30">
       <description>
         <p>Repair power ranges and fan/profile transitions on SteamOS 3.9.5.</p>

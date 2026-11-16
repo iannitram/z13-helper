@@ -952,6 +952,18 @@ def auto(env, **kw):
     return env.make(max_fans=False, enabled=False, **kw)
 
 
+def test_auto_stall_reports_the_clamped_tdp_it_wrote(env):
+    # Boondock below the firmware floors: the write and the message carry the
+    # clamped values, never the stored 20/30/40.
+    ns = auto(env, tdp=BOONDOCK_TDP)
+    clamped = {"pl1": 28, "pl2": 32, "pl3": 45, "force": False}
+    ns.ctl.fit_tdp = lambda tdp: (clamped, "requested 20/30/40 W, outside the firmware range")
+    msgs = run(ns, AUTO_TICKS)
+    assert ns.ctl.calls == [("rewrite_profile",), ("apply_tdp", clamped), ("reset_fancurve",)]
+    assert msgs[-1] == ("Fans stopped in auto mode at 70 °C; profile rewritten, "
+                        "TDP 28/32/45 W re-applied (requested 20/30/40 W, outside the firmware range)")
+
+
 def test_rule5_auto_stall_rewrites_profile_then_restores_tdp(env):
     # 2026-10-19: quiet profile, APU 69 -> 75 C, both fans 0 RPM in auto.
     ns = auto(env, tdp=BOONDOCK_TDP)

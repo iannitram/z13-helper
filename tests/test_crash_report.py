@@ -10,7 +10,7 @@ import pytest
 import crash_report as cr
 
 NOW = datetime(2026, 10, 31, 17, 42, 34, 978000, tzinfo=timezone.utc)
-KW = dict(version="0.5.1", commit="34a1284", os_name="SteamOS 3.9.5", kernel="7.2.7-valve2",
+KW = dict(version="1.0.0", commit="34a1284", os_name="SteamOS 3.9.5", kernel="7.2.7-valve2",
           python="3.13.1", now=NOW, install_id="9f2c")
 
 
@@ -51,7 +51,7 @@ def test_build_report_fields():
     rep = cr.build_report(boom(), **KW)
     assert set(rep) == {"app", "version", "commit", "os", "kernel", "python", "exception_type",
                         "message", "traceback", "timestamp", "install_id"}
-    assert (rep["app"], rep["version"], rep["commit"], rep["os"]) == ("z13-helper", "0.5.1", "34a1284", "SteamOS 3.9.5")
+    assert (rep["app"], rep["version"], rep["commit"], rep["os"]) == ("z13-helper", "1.0.0", "34a1284", "SteamOS 3.9.5")
     assert (rep["kernel"], rep["python"], rep["install_id"]) == ("7.2.7-valve2", "3.13.1", "9f2c")
     assert (rep["exception_type"], rep["message"]) == ("ValueError", "bad slider")
     assert rep["timestamp"] == "2026-10-31T17:42:34Z"

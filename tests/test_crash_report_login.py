@@ -27,7 +27,7 @@ def test_report_is_built_when_login_name_cannot_be_read(tmp_path, monkeypatch):
     monkeypatch.setattr(getpass, "getuser", no_login)
     monkeypatch.setattr(cr.platform, "freedesktop_os_release",
                         lambda: {"PRETTY_NAME": "SteamOS 3.9.5"}, raising=False)
-    build = {"version": "0.5.1", "commit": "34a1284", "base": "https://example.invalid", "token": "tok"}
+    build = {"version": "1.0.0", "commit": "34a1284", "base": "https://example.invalid", "token": "tok"}
     reporter = cr.CrashReporter(build, str(tmp_path / "settings.json"), tmp_path,
                                 logging.getLogger("z13-login-test"))
 

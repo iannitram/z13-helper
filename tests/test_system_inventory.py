@@ -9,7 +9,7 @@ GOOD = {
     "/proc/sys/kernel/osrelease": "7.2.7-valve2-2-neptune\n",
     "/sys/class/dmi/id/bios_version": "GZ302EA.313\n",
     "/sys/class/dmi/id/ec_firmware_release": "0.1\n",
-    "/proc/cmdline": "quiet gpu_recovery=1\n",
+    "/proc/cmdline": "quiet amdgpu.gpu_recovery=1\n",
     ("pacman", "-Q", "linux-firmware"): "linux-firmware 20261020-1\n",
     ("pacman", "-Q", "mesa"): "mesa 26.0.1-1\n",
     ("pacman", "-Q", "vulkan-radeon"): "vulkan-radeon 26.0.1-1\n",
@@ -44,7 +44,7 @@ def test_every_key_is_collected_from_the_seam():
     assert inv["firmware"] == "20261020-1"
     assert inv["mesa"] == "26.0.1-1" and inv["vulkan_radeon"] == "26.0.1-1"
     assert inv["backend_version"] == "1.4.2"
-    assert inv["kernel_args"] == "quiet gpu_recovery=1"
+    assert inv["kernel_args"] == "quiet amdgpu.gpu_recovery=1"
     assert inv["units"]["user:z13-helper.service"] == "enabled"
     assert inv["units"]["user:z13ctl.socket"] is None
     assert set(inv["units"]) == {"user:" + u for u in USER_UNITS} | {"system:" + u for u in SYSTEM_UNITS}
@@ -68,3 +68,16 @@ def test_reads_are_only_files_and_non_mutating_commands():
         if isinstance(target, tuple):
             assert target[0] in {"pacman", "z13ctl", "systemctl", "stat"}
             assert target[:2] != ("pacman", "-S") and "enable" not in target
+
+
+def test_firmware_falls_back_to_the_steamos_neptune_package():
+    table = dict(GOOD)
+    del table[("pacman", "-Q", "linux-firmware")]
+    table[("pacman", "-Q", "linux-firmware-neptune")] = "linux-firmware-neptune jupiter.20260910.1-1\n"
+    assert collect_inventory(fake(table))["firmware"] == "jupiter.20260910.1-1"
+
+
+def test_firmware_is_none_with_no_package():
+    table = dict(GOOD)
+    del table[("pacman", "-Q", "linux-firmware")]
+    assert collect_inventory(fake(table))["firmware"] is None

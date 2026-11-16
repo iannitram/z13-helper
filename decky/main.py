@@ -112,6 +112,14 @@ BRIGHTNESS_LEVELS = ("off", "low", "medium", "high")
 Z13CTL_WRITE_TIMEOUT_S = host.Z13CTL_WRITE_TIMEOUT_S
 PROFILE_APPLY_TIMEOUT_S = 180
 
+# Wedged-lightbar recovery and shared lighting write helper: copies of src/profiles.py
+# (this backend runs as root/deck and can't import src/). Keep the two in step.
+LIGHTBAR_RESET_UNIT = "z13-lightbar-reset.service"
+LIGHTBAR_RESET_MIN_GAP_S = 120
+LIGHTBAR_RESET_SETTLE_S = 3
+LIGHTBAR_DAEMON_RESTART_WAIT_S = 2
+Z13CTL_SERVICE = "z13ctl.service"
+
 
 def _post_update_env(repo):
     """Copy of src/post_update_view._env: the installed library first only when it is complete
@@ -292,6 +300,145 @@ def _atomic_write_text(path, text, *, mode=0o644, owner=None):
         _write_in_dir(dfd, os.path.basename(path), text, mode, owner)
     finally:
         os.close(dfd)
+
+
+def lightbar_stamp_path():
+    """Copy of profiles.lightbar_stamp_path (keep in step with src/profiles.py)."""
+    base = os.environ.get("XDG_RUNTIME_DIR")
+    if not base or not os.path.isdir(base):
+        base = "/run/user/1000" if os.path.isdir("/run/user/1000") else "/tmp"
+    return os.path.join(base, "z13-lightbar-reset.stamp")
+
+
+def lightbar_daemon_stamp_path():
+    """Copy of profiles.lightbar_daemon_stamp_path (keep in step with src/profiles.py)."""
+    base = os.environ.get("XDG_RUNTIME_DIR")
+    if not base or not os.path.isdir(base):
+        base = "/run/user/1000" if os.path.isdir("/run/user/1000") else "/tmp"
+    return os.path.join(base, "z13-lightbar-daemon-restart.stamp")
+
+
+def lightbar_failure_kind(out):
+    """Copy of profiles.lightbar_failure_kind (keep in step with src/profiles.py)."""
+    low = (out or "").lower()
+    if "timed out" in low or "timeout" in low:
+        return "wedged"
+    if "no such device" in low or "enodev" in low:
+        return "stale"
+    return None
+
+
+def lightbar_timed_out(out):
+    """Copy of profiles.lightbar_timed_out (keep in step with src/profiles.py)."""
+    return lightbar_failure_kind(out) == "wedged"
+
+
+def _stamp_rate_limited(stamp, now, skipped_msg):
+    try:
+        age = now() - os.stat(stamp).st_mtime
+        if 0 <= age < LIGHTBAR_RESET_MIN_GAP_S:
+            return False, skipped_msg(int(age))
+    except OSError:
+        pass
+    try:
+        _atomic_write_text(stamp, f"{now():.0f}\n", owner=(DECK_UID, DECK_GID))
+    except OSError:
+        pass
+    return True, None
+
+
+def restart_lightbar_daemon(*, sleep=time.sleep):
+    """Copy of profiles.restart_lightbar_daemon (keep in step with src/profiles.py)."""
+    rc, out, _ = host.run(["systemctl", "--user", "restart", "--no-ask-password", Z13CTL_SERVICE], timeout=30)
+    if rc != 0:
+        return False, f"daemon restart failed ({out or f'rc={rc}'})"
+    sleep(LIGHTBAR_DAEMON_RESTART_WAIT_S)
+    return True, "daemon restarted"
+
+
+def recover_lightbar(*, sleep=time.sleep, now=time.time):
+    """Copy of profiles.recover_lightbar (keep in step with src/profiles.py)."""
+    ok, msg = _stamp_rate_limited(lightbar_stamp_path(), now,
+                                   lambda age: f"lightbar reset skipped (last one {age} s ago)")
+    if not ok:
+        return False, msg
+    rc, out, _ = host.run(["systemctl", "start", "--no-ask-password", LIGHTBAR_RESET_UNIT], timeout=30)
+    if rc != 0:
+        return False, f"lightbar reset failed ({out or f'rc={rc}'})"
+    sleep(LIGHTBAR_RESET_SETTLE_S)
+    daemon_ok, daemon_msg = restart_lightbar_daemon(sleep=sleep)
+    if not daemon_ok:
+        return True, f"lightbar reset, but {daemon_msg}"
+    return True, "lightbar reset"
+
+
+def recover_lightbar_stale(*, sleep=time.sleep, now=time.time):
+    """Copy of profiles.recover_lightbar_stale (keep in step with src/profiles.py)."""
+    ok, msg = _stamp_rate_limited(lightbar_daemon_stamp_path(), now,
+                                   lambda age: f"daemon restart skipped (last one {age} s ago)")
+    if not ok:
+        return False, msg
+    return restart_lightbar_daemon(sleep=sleep)
+
+
+def write_lighting_with_recovery(
+    device: str,
+    write_fn,
+    *,
+    recover_wedged=None,
+    recover_stale=None,
+    timeout_s=None,
+):
+    """Copy of profiles.write_lighting_with_recovery (keep in step with src/profiles.py)."""
+    if recover_wedged is None:
+        recover_wedged = recover_lightbar
+    if recover_stale is None:
+        recover_stale = recover_lightbar_stale
+    if timeout_s is None:
+        timeout_s = Z13CTL_WRITE_TIMEOUT_S
+
+    def _exec():
+        try:
+            res = write_fn()
+            if isinstance(res, tuple) or hasattr(res, "rc"):
+                rc = getattr(res, "rc", res[0])
+                out = getattr(res, "out", res[1])
+                hit_timeout = getattr(res, "timed_out", res[2] if len(res) > 2 else False)
+                if hit_timeout:
+                    msg = out or f"z13ctl write timed out after {timeout_s} s (kernel asus-wmi hang?)"
+                    if not msg.startswith("z13ctl write timed out after "):
+                        msg = f"z13ctl write timed out after {timeout_s} s (kernel asus-wmi hang?)"
+                    return False, msg, True
+                if rc != 0:
+                    return False, out or f"rc={rc}", False
+                return True, out or "", False
+            return True, str(res or ""), False
+        except Exception as exc:
+            msg = str(exc)
+            if msg.startswith("z13ctl write timed out after "):
+                return False, msg, True
+            return False, msg, False
+
+    ok, out, timed_out = _exec()
+    if timed_out or ok or device != "lightbar":
+        return ok, out, timed_out, False
+
+    kind = lightbar_failure_kind(out)
+    recover = {"wedged": recover_wedged, "stale": recover_stale}.get(kind)
+    if not recover:
+        return False, out, False, False
+
+    rec_ok, rec_msg = recover()
+    if not rec_ok:
+        return False, f"{out}; {rec_msg}", False, False
+
+    retry_ok, retry_out, retry_timed_out = _exec()
+    if retry_timed_out:
+        return False, retry_out, True, False
+    if retry_ok:
+        return True, retry_out, False, True
+
+    return False, f"{retry_out} (still failing after a {rec_msg})", False, False
 
 
 def _state_path():
@@ -706,6 +853,7 @@ class DeckyFans:
         tdp = (active_profile(_read_store()) or {}).get("tdp")
         if not tdp:
             return None
+        tdp, _ = self.fit_tdp(tdp)
         rc, out = _run(tdp_argv(tdp), timeout=Z13CTL_WRITE_TIMEOUT_S, as_deck=True)
         if rc != 0:
             if out.startswith("z13ctl write timed out after "):
@@ -735,8 +883,14 @@ class DeckyFans:
     def set_fancurve_pwm(self, points):
         self._z13ctl("fancurve", "--set", ",".join(f"{int(t)}:{int(p)}" for t, p in points))
 
+    def fit_tdp(self, tdp):
+        """(written, note): the stored tdp clamped into the detected firmware
+        ranges, so the write and the watchdog's message agree (#203)."""
+        return power_range.fit_tdp(tdp, tdp_ranges())
+
     def apply_tdp(self, tdp):
         # As deck, like apply_tdp() (the TDP slider's write).
+        tdp, _ = self.fit_tdp(tdp)
         self._z13ctl(*tdp_argv(tdp)[1:], as_deck=True)
 
     def reset_fancurve(self):
