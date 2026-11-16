@@ -19,7 +19,7 @@ import time
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QSlider, QStatusBar, QSystemTrayIcon, QMenu, QMessageBox,
+    QSlider, QStatusBar, QSystemTrayIcon, QMenu, QMessageBox, QScrollArea,
 )
 from PyQt6.QtCore import QTimer, Qt, pyqtSlot, pyqtSignal
 from PyQt6.QtDBus import QDBusConnection
@@ -113,10 +113,10 @@ class DashboardUI(QMainWindow):
         max_fans_state.migrate_legacy(config)
 
         self.setWindowTitle("Z13-Helper")
+        self.setMinimumHeight(SIZE["window_min_h"])
         # Dark or light from the design tokens: the system's choice unless View → Theme says otherwise.
         theme.apply(QApplication.instance(), config.get("theme", design_tokens.DEFAULT_CHOICE))
-        # No fixed minimum: the layout's own minimum keeps the title row (profile
-        # name + live sensors) from being clipped, which a hard 430 px allowed.
+        # Keep the title row readable while allowing compact screens to scroll.
         self._app_icon = self._make_app_icon()
         self.setWindowIcon(self._app_icon)
         QApplication.instance().setWindowIcon(self._app_icon)
@@ -376,7 +376,13 @@ class DashboardUI(QMainWindow):
 
         root = QWidget()
         root.setObjectName("root")
-        self.setCentralWidget(root)
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setObjectName("dashboardScrollArea")
+        self.scroll_area.setFrameShape(QScrollArea.Shape.NoFrame)
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll_area.setWidget(root)
+        self.setCentralWidget(self.scroll_area)
         col = QVBoxLayout(root)
         col.setContentsMargins(SPACE["md"], SPACE["sm"], SPACE["md"], SPACE["xs"])
         col.setSpacing(SPACE["sm"])
