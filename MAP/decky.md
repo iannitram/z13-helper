@@ -1,6 +1,6 @@
 # Decky / Game Mode code map
 
-Refreshed 2026-11-11 from origin/main 8724767. #153 (state owner) and #154 (post-update repair) are on main (bf7a478 and bf6e412). Open PRs are not reflected; #207 (fan-watchdog comment and test) merged 2026-11-11. This describes the Decky source on `main` as of that commit. It is not a claim that all Game Mode behavior has been verified on the device; dated device evidence (TDP and charge-limit writes in Game Mode, 2026-11-07) is on #74. The current code map is [`README.md`](README.md); the pending verification checklist is in [`docs/ROADMAP.md`](../docs/ROADMAP.md).
+Refreshed 2026-11-16 from origin/main 06c4826. #153 (state owner) and #154 (post-update repair) are on main (bf7a478 and bf6e412). Open PRs are not reflected; #207 (fan-watchdog comment and test) merged 2026-11-11. This describes the Decky source on `main` as of that commit. It is not a claim that all Game Mode behavior has been verified on the device; dated device evidence (TDP and charge-limit writes in Game Mode, 2026-11-07) is on #74; the changed-plugin repair frontend check passed 2026-11-16 (#122); M9 (Quick Access focus with a game running, #201) is still pending. The current code map is [`README.md`](README.md); the pending verification checklist is in [`docs/ROADMAP.md`](../docs/ROADMAP.md).
 
 ## Runtime and data flow
 
@@ -92,7 +92,7 @@ The Game Mode watchdog uses the same `src/fan_watchdog.py` implementation as the
 
 CI runs the pytest suite and Decky backend unittest suite. The Node profile-switch test is separate and is run manually. These tests verify API shape, command construction, shared store behavior, locking and pure transition logic; they do not verify the live Decky QAM or actual firmware response. On-device Game Mode, suspend/resume, and cold-boot behavior remain owner-device checks recorded in the roadmap.
 
-Memory investigation: [`docs/fan-watchdog-memory.md`](../docs/fan-watchdog-memory.md) records the source audit and containment limitations. `tests/test_backend_memory.py` covers the monitor and plugin lifecycle; `tests/test_fan_trace.py` covers trace bounds. #30 remains open until a completed 24-hour sampler run is interpreted.
+Memory investigation: [`docs/fan-watchdog-memory.md`](../docs/fan-watchdog-memory.md) records the source audit and containment limitations. `tests/test_backend_memory.py` covers the monitor and plugin lifecycle; `tests/test_fan_trace.py` covers trace bounds. #30 was closed 2026-11-16 as not reproduced: the 1-hour soak (12:09pm to 1:09pm) kept all six processes flat, and the Decky backend held at 47.1 MiB.
 
 Named fan recovery uses the authority to restore the same target after its base
 rewrite, without profile hooks. Legacy recovery retains its existing checks and
