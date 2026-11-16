@@ -21,7 +21,23 @@ ROCM_LD_CONF = "/etc/ld.so.conf.d/00-rocm.conf"
 ROCM_PROFILE = "/etc/profile.d/rocm.sh"
 ROCM_LD_TEXT = "/opt/rocm/lib\n/opt/rocm/lib64\n"
 ROCM_PROFILE_TEXT = 'export ROCM_PATH=/opt/rocm\nexport PATH="$ROCM_PATH/bin:$PATH"\n'
-ROCM_PACKAGES = ["fmt", "google-glog"]
+ROCM_PACKAGES = ["google-glog"]
+ROCM_LIB_DIR = "/opt/rocm/lib"
+# The ROCm in /opt/rocm (6.4.1, not a pacman package) links libfmt.so.11, but the repos now ship
+# fmt 12 (libfmt.so.12) and a pacman -U of fmt 11 would replace fmt 12 under everything else.
+# So only the soname is extracted from the pinned Arch Linux Archive package into /opt/rocm/lib,
+# which is on the ld.so path, on its own partition, and untouched by pacman and SteamOS updates.
+# This is the one soname list: add a row here for the next library the post-check names.
+FMT11_PKG = "fmt-11.2.0-1-x86_64.pkg.tar.zst"
+ROCM_COMPAT_LIBS = (
+    {
+        "soname": "libfmt.so.11",
+        "real": "libfmt.so.11.2.0",
+        "url": "https://archive.archlinux.org/packages/f/fmt/" + FMT11_PKG,
+        "sha256": "509b15e66cb605572bea50ce9b25475e29e5e720d09f683887f9cdf264b4ed60",
+    },
+)
+ROCM_COMPAT_CACHE_REL = os.path.join(".cache", "z13-helper", "rocm-compat")
 
 
 @dataclass(frozen=True)
@@ -35,6 +51,7 @@ class Sys:
     run: Callable[[Sequence[str]], int]          # exit code; 127 when the command is missing
     write: Callable[[str, str], None]            # write text, creating parent folders
     copy_tree: Callable[[str, str], None]        # copy a folder, creating parent folders
+    run_out: Callable[[Sequence[str]], tuple] | None = None  # (exit code, output); None when not wired
 
 
 def etc_snapshot_recipe(sys_: Sys) -> Recipe:
@@ -66,8 +83,28 @@ def etc_snapshot_recipe(sys_: Sys) -> Recipe:
     )
 
 
+def _missing_libs(sys_: Sys) -> list:
+    """Shared libraries the ROCm tools cannot load: the names ldd reports as 'not found'."""
+    if sys_.run_out is None:
+        return []
+    _rc, out = sys_.run_out(["ldd", ROCM_ROCMINFO])
+    names = []
+    for line in (out or "").splitlines():
+        if "not found" in line:
+            name = line.split("=>")[0].strip()
+            if name and name not in names:
+                names.append(name)
+    return names
+
+
 def rocm_recipe(sys_: Sys) -> Recipe:
     """Task 6: ROCm pack. Shown only when /opt/rocm exists (otherwise check says 'na')."""
+
+    def _lib_path(lib: dict, key: str = "soname") -> str:
+        return os.path.join(ROCM_LIB_DIR, lib[key])
+
+    def _absent_compat() -> list:
+        return [lib for lib in ROCM_COMPAT_LIBS if not sys_.exists(_lib_path(lib))]
 
     def check() -> str:
         if not sys_.exists(ROCM_DIR):
@@ -78,25 +115,59 @@ def rocm_recipe(sys_: Sys) -> Recipe:
             return "needs"
         return "ok"
 
+    def creates() -> list:
+        out = []
+        for lib in _absent_compat():
+            out += [_lib_path(lib), _lib_path(lib, "real")]
+        return out
+
+    def _install_compat(lib: dict) -> None:
+        pkg = os.path.join(sys_.home, ROCM_COMPAT_CACHE_REL, lib["url"].rsplit("/", 1)[1])
+        if sys_.run(["curl", "-fL", "--create-dirs", "-o", pkg, lib["url"]]) != 0:
+            raise RuntimeError(f"could not download {lib['soname']} from the Arch Linux Archive")
+        if sys_.run(["sh", "-c", f'echo "{lib["sha256"]}  {pkg}" | sha256sum -c -']) != 0:
+            raise RuntimeError(f"the downloaded package for {lib['soname']} failed its checksum")
+        member = "usr/lib/" + lib["soname"] + "*"
+        if sys_.run(["bsdtar", "-xf", pkg, "-C", ROCM_LIB_DIR, "--strip-components=2", member]) != 0:
+            raise RuntimeError(f"could not extract {lib['soname']} into {ROCM_LIB_DIR}")
+
     def apply() -> None:
         if sys_.run(["pacman", "-S", "--needed", "--noconfirm", *ROCM_PACKAGES]) != 0:
-            raise RuntimeError("pacman could not install fmt and google-glog")
+            raise RuntimeError("pacman could not install " + " and ".join(ROCM_PACKAGES))
+        for lib in _absent_compat():
+            _install_compat(lib)
         sys_.write(ROCM_LD_CONF, ROCM_LD_TEXT)
         if sys_.run(["ldconfig"]) != 0:
             raise RuntimeError("ldconfig failed")
         sys_.write(ROCM_PROFILE, ROCM_PROFILE_TEXT)
+        _post_check()
+
+    def _post_check() -> None:
+        """Fail, naming the library, when rocminfo still cannot load (never report a false done)."""
+        missing = _missing_libs(sys_)
+        if missing:
+            msg = "rocminfo still cannot load: " + ", ".join(missing)
+            print("rocm: FAILED - " + msg, flush=True)
+            raise RuntimeError(msg)
+        rc = sys_.run([ROCM_ROCMINFO])
+        if rc != 0:
+            msg = f"rocminfo exited with code {rc} after the fix"
+            print("rocm: FAILED - " + msg, flush=True)
+            raise RuntimeError(msg)
 
     return Recipe(
         id="rocm",
         title="ROCm pack (local LLMs)",
-        fixes="the update strips fmt and google-glog and the ld.so and profile entries, so rocminfo won't run",
+        fixes="the update strips google-glog, the ld.so and profile entries and the libfmt.so.11 ROCm needs, so rocminfo won't run",
         check=check,
         apply=apply,
         sudo=True,
         network=True,
         pacman=True,
         replaces=(ROCM_LD_CONF, ROCM_PROFILE),
-        undo="installed ROCm packages stay; remove them with pacman -R if you do not want them",
+        creates=creates,
+        undo=(f"installed packages stay (remove google-glog with pacman -R if unwanted); the libfmt.so.11 files "
+              f"this task added to {ROCM_LIB_DIR} are listed above and are removed on rollback"),
     )
 
 

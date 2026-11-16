@@ -101,7 +101,8 @@ def make_sys(home: str, escalate: bool = True) -> Sys:
         _write(path, text)
 
     return Sys(home=home, listdir=lambda p: _listdir(p) or None, exists=os.path.exists,
-               read=_read, run=lambda argv: _run(argv, escalate=escalate)[0], write=write, copy_tree=copy_tree)
+               read=_read, run=lambda argv: _run(argv, escalate=escalate)[0], write=write, copy_tree=copy_tree,
+               run_out=lambda argv: _run(argv, escalate=escalate))
 
 
 def readonly_cmd(tool_name: Callable[[str], str] | None = None) -> str:
