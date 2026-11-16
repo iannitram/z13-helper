@@ -33,7 +33,7 @@ The first 1.0 release. Evidence for each 1.0 Must: [`docs/releases/1.0.0.md`](do
 
 - **Version 0.5.1 to 1.0.0** in `src/versions.py`, `decky/package.json`, the AppStream release list, README, AGENTS.md, PIPELINE.md, SPEC.md and MAP/README.md; crash-report test fixtures follow.
 - **Device acceptance pass of 2026-11-16 recorded:** M3, M4 (Repair install), M6, M7 (before and after a reboot, after the #244 and #245 fixes) and M8, plus #122, #30, #235, #203, #80 and #61 (evidence on the issues).
-- **Known issues shipping in 1.0:** #243, #86, #80, #73 and #249 (fix in PR #251); see the release record.
+- **Known issues shipping in 1.0:** #243, #86, #80 and #73; #249 is fixed (PR #251); see the release record.
 
 ### Changes since 0.5.1
 

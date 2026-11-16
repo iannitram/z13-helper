@@ -42,7 +42,7 @@ captured from Desktop Mode.
 one state owner shared by the app, Decky and `z13ctl` (M6); the post-update repair run before and after a reboot (M7);
 the Repair install button, lightbar recovery and the Boondock TDP floors; five suspend/resume cycles with Max Fans
 on; and a one-hour memory soak with every process flat. M9 (Quick Access focus with a game running, and the
-48-180 Hz VRR profile) moved after 1.0 (#250). Known issues: #243, #86, #80, #73, #249.
+48-180 Hz VRR profile) moved after 1.0 (#250). Known issues: #243, #86, #80, #73.
 See the [1.0 evidence record](docs/releases/1.0.0.md) for each Must, its status and its evidence links.
 
 **Earlier device checks** (GZ302EA, SteamOS 3.8.28; not all repeated on 3.9.5):
