@@ -49,6 +49,7 @@ Built from `git log` between the 0.5.1 merge (34a1284) and main; no `v0.5.1` tag
 - **This project's own releases are an update source (#202, PR #209);** neutral until a v1.0.0 release exists or when GitHub is unreachable.
 - **Lightbar: every lighting write path recovers a stale daemon handle or wedged endpoint once (#237, PR #241; M8).** Checked on the device: one ENODEV recovered and returned ok in 2.6 s.
 - **Boondock TDP uses the firmware floors 28/32/45 W and reports only limits that applied (#203, PR #213);** the watchdog and Decky TDP restore clamp to the firmware ranges and no longer read live status (PR #217). Checked on the device: `z13ctl tdp --get` read 28/32/45 W, matching the app.
+- **Boondock stops, starts and restores `llama-swap` as a `systemctl --user` service; the Docker container and VM handling are removed (#65, PR #101).** Old `ctr` and `vm` snapshot keys are discarded on restore.
 - **`--system-check` no longer reports two false FAILs on SteamOS 3.9.5 (#249, PR #251).**
 
 **Desktop app**
@@ -61,6 +62,8 @@ Built from `git log` between the 0.5.1 merge (34a1284) and main; no `v0.5.1` tag
 - **Telemetry history: temperatures and fan speeds recorded and graphed over time (PR #163);** labeled sensors report unavailable instead of 0 and pick the GPU by device (#25, PR #173).
 - **Desktop refresh-rate choice with rollback, Game Mode display notes (#28, PR #167).**
 - **Hibernation (SteamOS 3.9, preliminary): state is restored after resume from hibernate (PR #164).**
+- **Memory and compute health (Refs #26, 1812326):** File → Memory and compute… on the desktop and a Memory and compute panel in Decky show Linux RAM, reserved VRAM, GTT and the ROCm/HIP and Vulkan runtimes, with an on-request HIP allocation smoke test.
+- **Controls are gated by the detected platform capability (Refs #22, cf5a939):** the dashboard and the Fans window disable a control the machine does not expose and give the reason; the desktop and Decky backends make no ASUS writes on unsupported machines.
 
 **Fans, power and resume**
 - **Resume restore defers to z13ctl 1.4.2+ when its saved state matches (#80, PR #196).** Checked on the device 2026-11-16: 5/5 suspend/resume cycles on Turbo with Max Fans on.
@@ -69,6 +72,7 @@ Built from `git log` between the 0.5.1 merge (34a1284) and main; no `v0.5.1` tag
 - **Fallback fan curves are anchored at 20 °C (#86, PR #208).**
 - **A goal field in the profile schema (#124, PR #178);** charger-aware autoswitch logic (#24, PR #177) and the lighting signal mapping (#129, PR #171) are in as pure logic with no caller yet.
 - **Profile-apply timeout messages name the failed step (#79, PR #141);** the profile enter/exit hook timeout is back to 120 s (PR #121); z13ctl write timeouts are capped at 20 s (PR #88).
+- **Code audit 2026-11-04 fixes (PR #166):** a hook timeout no longer suspends Max Fans and a failed apply restores it; the Decky profile switch goes through the profile engine; wrapper TDP values are clamped and partial TDP calls rejected; the battery limit is saved through the profile; the resume script drops its fallback sysfs fan-enable write.
 
 **Game Mode and Decky**
 - **Decky repair avoids live file-watcher reload storms (#100, PR #104) and checks the Steam frontend separately (#122, PR #139).** The changed-plugin repair frontend check passed on the device 2026-11-16: loader entry HTTP 200 JavaScript, plugin registered, 99 ok, 0 failures.
