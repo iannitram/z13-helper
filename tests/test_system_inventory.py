@@ -68,3 +68,16 @@ def test_reads_are_only_files_and_non_mutating_commands():
         if isinstance(target, tuple):
             assert target[0] in {"pacman", "z13ctl", "systemctl", "stat"}
             assert target[:2] != ("pacman", "-S") and "enable" not in target
+
+
+def test_firmware_falls_back_to_the_steamos_neptune_package():
+    table = dict(GOOD)
+    del table[("pacman", "-Q", "linux-firmware")]
+    table[("pacman", "-Q", "linux-firmware-neptune")] = "linux-firmware-neptune jupiter.20260910.1-1\n"
+    assert collect_inventory(fake(table))["firmware"] == "jupiter.20260910.1-1"
+
+
+def test_firmware_is_none_with_no_package():
+    table = dict(GOOD)
+    del table[("pacman", "-Q", "linux-firmware")]
+    assert collect_inventory(fake(table))["firmware"] is None
