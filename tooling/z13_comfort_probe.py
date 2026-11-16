@@ -51,9 +51,12 @@ def fit(rows):
         pts = []
         for r in rows:
             try:
-                pts.append((float(r[cand]), float(r["external_c"])))
+                x, y = float(r[cand]), float(r["external_c"])
             except (KeyError, TypeError, ValueError):
                 continue
+            if not (math.isfinite(x) and math.isfinite(y)):
+                continue
+            pts.append((x, y))
         n = len(pts)
         if n < 3:
             continue
@@ -69,12 +72,22 @@ def fit(rows):
     return sorted(out, key=lambda t: t[3])
 
 
+def _external_c(text):
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"--external-c must be a number from 0 to 80 (degrees C), got {text!r}")
+    if not math.isfinite(value) or not 0.0 <= value <= 80.0:
+        raise argparse.ArgumentTypeError(f"--external-c must be a number from 0 to 80 (degrees C), got {text!r}")
+    return value
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("sample")
     s.add_argument("--phase", required=True, choices=("idle", "game", "load"))
-    s.add_argument("--external-c", required=True, type=float)
+    s.add_argument("--external-c", required=True, type=_external_c)
     s.add_argument("--out", default=DEFAULT_OUT)
     s = sub.add_parser("fit")
     s.add_argument("file")
