@@ -19,11 +19,11 @@ import time
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QSlider, QStatusBar, QSystemTrayIcon, QMenu, QMessageBox, QComboBox, QCheckBox, QFrame,
+    QSlider, QStatusBar, QSystemTrayIcon, QMenu, QMessageBox,
 )
 from PyQt6.QtCore import QTimer, Qt, pyqtSlot, pyqtSignal
 from PyQt6.QtDBus import QDBusConnection
-from PyQt6.QtGui import QFont, QIcon, QPainter, QColor, QPixmap, QAction
+from PyQt6.QtGui import QFont, QIcon, QPainter, QPixmap, QAction, QActionGroup
 
 from hardware_controller import HardwareController
 from sensor_reader import SensorReader
@@ -49,8 +49,10 @@ from profile_control import ProfileControl
 from fans_window import FansWindow
 from compute_dialog import ComputeDialog
 from updates_dialog import UpdatesDialog, UpdateCheckThread, PostUpdateThread
-from theme import (STYLESHEET, ModeTile, Panel, pill, tip, ECO, STANDARD, TURBO, CUSTOM,
-                   ACCENT_FOR_BASE, BORDER)
+import design_tokens
+import theme
+from theme import (ModeTile, Panel, StatTile, CheckBox, ComboBox, card, divider, pill, set_tone, qcolor,
+                   ECO, STANDARD, TURBO, CUSTOM, ACCENT_FOR_BASE, SIZE, SPACE)
 from evdev_listener import find_side_button_device, EvdevListener
 from versions import APP_VERSION
 
@@ -110,7 +112,8 @@ class DashboardUI(QMainWindow):
         max_fans_state.migrate_legacy(config)
 
         self.setWindowTitle("Z13-Helper")
-        self.setStyleSheet(STYLESHEET)
+        # Dark or light from the design tokens: the system's choice unless View → Theme says otherwise.
+        theme.apply(QApplication.instance(), config.get("theme", design_tokens.DEFAULT_CHOICE))
         # No fixed minimum: the layout's own minimum keeps the title row (profile
         # name + live sensors) from being clipped, which a hard 430 px allowed.
         self._app_icon = self._make_app_icon()
@@ -196,13 +199,13 @@ class DashboardUI(QMainWindow):
             if not icon.isNull():
                 return icon
         px = QPixmap(64, 64)
-        px.fill(QColor(0, 0, 0, 0))
+        px.fill(Qt.GlobalColor.transparent)
         p = QPainter(px)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.setBrush(QColor("#1a1d21"))
+        p.setBrush(qcolor("brand_surface"))
         p.setPen(Qt.PenStyle.NoPen)
         p.drawRoundedRect(0, 0, 64, 64, 12, 12)
-        p.setPen(QColor("#76b900"))
+        p.setPen(qcolor("brand_mark"))
         p.setFont(QFont("DejaVu Sans", 36, QFont.Weight.Black))
         p.drawText(px.rect(), Qt.AlignmentFlag.AlignCenter, "Z")
         p.end()
@@ -230,6 +233,16 @@ class DashboardUI(QMainWindow):
         quit_action.setShortcut("Ctrl+Q")
         quit_action.triggered.connect(self._user_quit)
         file_menu.addAction(quit_action)
+        view_menu = mb.addMenu("&View")
+        theme_menu = view_menu.addMenu("Theme")
+        self._theme_actions = QActionGroup(self)
+        for choice, label in (("system", "Follow System"), ("dark", "Dark"), ("light", "Light")):
+            act = QAction(label, self)
+            act.setCheckable(True)
+            act.setChecked(choice == theme.choice())
+            act.triggered.connect(lambda _checked, c=choice: self._set_theme(c))
+            self._theme_actions.addAction(act)
+            theme_menu.addAction(act)
         help_menu = mb.addMenu("&Help")
         err_log = QAction("Error log…", self)
         err_log.setShortcut("Ctrl+L")
@@ -239,6 +252,11 @@ class DashboardUI(QMainWindow):
         about = QAction("About Z13-Helper", self)
         about.triggered.connect(self._show_about)
         help_menu.addAction(about)
+
+    def _set_theme(self, choice):
+        """View → Theme: "system" follows the desktop; "dark"/"light" pin one. Remembered in config.json."""
+        self.config.set("theme", choice)
+        theme.apply(QApplication.instance(), choice)
 
     def _show_about(self):
         QMessageBox.about(
@@ -359,82 +377,91 @@ class DashboardUI(QMainWindow):
         root.setObjectName("root")
         self.setCentralWidget(root)
         col = QVBoxLayout(root)
-        col.setContentsMargins(6, 4, 6, 4)
-        col.setSpacing(0)
+        col.setContentsMargins(SPACE["md"], SPACE["sm"], SPACE["md"], SPACE["xs"])
+        col.setSpacing(SPACE["sm"])
 
-        # 1. Performance Mode
+        # 1. Status: the four live readings, one glance
+        self.stat_cpu = StatTile("CPU")
+        self.stat_gpu = StatTile("GPU")
+        self.stat_fans = StatTile("Fans, RPM")
+        self.stat_batt = StatTile("Battery")
+        self.power_label = self.stat_batt.note        # "On battery · 14.2 W" / "On AC · charging"
+        self.status_card = card(self.stat_cpu, divider(vertical=True), self.stat_gpu, divider(vertical=True),
+                                self.stat_fans, divider(vertical=True), self.stat_batt, horizontal=True)
+        col.addWidget(self.status_card)
+
+        # 2. Performance Mode
         self.perf = Panel("Performance Mode")
         self.maxfans_pill = pill("MAX FANS", orange=True)
         self.maxfans_pill.setToolTip("Both fans at 100%. Off restores the profile's curve.")
         self.maxfans_pill.clicked.connect(self._toggle_max_fans)
-        self.maxfans_pill.setFixedHeight(28)
         tiles = QHBoxLayout()
-        tiles.setSpacing(6)
+        tiles.setSpacing(SPACE["sm"])
         self._tiles = {}
         for name, accent, icon in _TILES:
-            t = ModeTile(name, accent, height=60, icon=icon)
+            t = ModeTile(name, accent, icon=icon)
             t.clicked.connect(lambda checked, n=name: self._tile_clicked(n))
             tiles.addWidget(t)
             self._tiles[name] = t
-        self.fans_tile = ModeTile("Fans + Power", CUSTOM, secondary=True, height=60, icon="fan")
+        self.fans_tile = ModeTile("Fans + Power", CUSTOM, secondary=True, icon="fan")
         self.fans_tile.clicked.connect(self._fans_tile_clicked)
         tiles.addWidget(self.fans_tile)
         self.perf.body.addLayout(tiles)
         prow = QHBoxLayout()
-        prow.addWidget(QLabel("Profile"))
-        self.profile_combo = QComboBox()
+        prow.setSpacing(SPACE["sm"])
+        prow.addWidget(self._row_label("Profile"))
+        self.profile_combo = ComboBox()
         self.profile_combo.currentTextChanged.connect(self._combo_changed)
         prow.addWidget(self.profile_combo, 1)
         prow.addWidget(self.maxfans_pill)
         self.perf.body.addLayout(prow)
         self._build_epp_ui()
+        self._epp_label.setMinimumWidth(SIZE["row_label_w"] - 24)      # lines up with "Profile" above
         col.addWidget(self.perf)
-        col.addWidget(self._sep())
 
-        # 2. Keyboard & Rear Light
+        # 3. Keyboard & Rear Light
         self.light = Panel("Keyboard & Rear Light")
-        self.light_target = QComboBox()
+        self.light_target = ComboBox()
         for label, _devs in _LIGHT_TARGETS:
             self.light_target.addItem(label)
-        self.light_target.setFixedWidth(110)
+        self.light_target.setFixedWidth(120)
         self.light.add_head_widget(self.light_target)
         self._lighting_syncing = False
         self._lighting_combos = {}
         for device, label in (("lightbar", "Rear Light"), ("keyboard", "Laptop Keyboard")):
             lrow = QHBoxLayout()
-            lrow.setSpacing(6)
-            lrow.addWidget(QLabel(label))
-            mode_combo = QComboBox()
+            lrow.setSpacing(SPACE["sm"])
+            lrow.addWidget(self._row_label(label))
+            mode_combo = ComboBox()
             for text, value in _LIGHT_MODES:
                 mode_combo.addItem(text, value)
-            mode_combo.setMinimumWidth(125)
-            color_combo = QComboBox()
+            color_combo = ComboBox()
             for text, value in _LIGHT_COLORS:
                 color_combo.addItem(text, value)
-            color_combo.setMinimumWidth(95)
             mode_combo.currentIndexChanged.connect(
                 lambda _index, dev=device: self._lighting_changed(dev))
             color_combo.currentIndexChanged.connect(
                 lambda _index, dev=device: self._lighting_changed(dev))
-            lrow.addWidget(mode_combo)
-            lrow.addWidget(color_combo)
+            lrow.addWidget(mode_combo, 3)
+            lrow.addWidget(color_combo, 2)
             self.light.body.addLayout(lrow)
             self._lighting_combos[device] = (mode_combo, color_combo)
         brow = QHBoxLayout()
-        brow.setSpacing(6)
+        brow.setSpacing(SPACE["sm"])
         self.light_target.currentIndexChanged.connect(lambda _index: self._refresh_profile_ui())
         self._bright_tiles = {}
         for label, level in _BRIGHTNESS:
-            t = ModeTile(label, STANDARD, height=36)
+            t = ModeTile(label, STANDARD, height=SIZE["tile_small_h"])
             t.clicked.connect(lambda checked, lv=level, lb=label: self._change_brightness(lv, lb))
             brow.addWidget(t)
             self._bright_tiles[level] = t
         self.light.body.addLayout(brow)
         col.addWidget(self.light)
-        col.addWidget(self._sep())
 
-        # 3. Screen Brightness (the display backlight; Keyboard & Rear Light is above)
-        self.screen_panel = Panel("Screen Brightness: --%")
+        # 4. Screen and battery: one card, one setting per line (label · control · value)
+        # Screen Brightness is the display backlight; Keyboard & Rear Light is the card above.
+        self.screen_panel = Panel("Screen Brightness", inline=True)
+        self.screen_panel.value.setText("--%")
         self.screen_slider = QSlider(Qt.Orientation.Horizontal)
         self.screen_slider.setRange(MIN_PERCENT, 100)
         self.screen_slider.setSingleStep(1)
@@ -448,14 +475,13 @@ class DashboardUI(QMainWindow):
         if not self.screen.available():
             self.screen_slider.setEnabled(False)
             self.screen_panel.right.setText("no backlight control found")
-        col.addWidget(self.screen_panel)
-        col.addWidget(self._sep())
 
-        # 3b. Screen refresh: only the rates the panel advertises (display_modes.py)
+        # Screen refresh: only the rates the panel advertises (display_modes.py)
         self._refresh_ctl = RefreshControl()
-        self.refresh_panel = Panel("Screen Refresh")
+        self.refresh_panel = Panel("Screen Refresh", inline=True)
         rrow = QHBoxLayout()
-        self.refresh_combo = QComboBox()
+        rrow.setSpacing(SPACE["sm"])
+        self.refresh_combo = ComboBox()
         self.refresh_combo.setEnabled(False)
         self.refresh_combo.activated.connect(self._refresh_picked)
         self.refresh_back = QPushButton("Back")
@@ -465,77 +491,73 @@ class DashboardUI(QMainWindow):
         rrow.addWidget(self.refresh_combo, 1)
         rrow.addWidget(self.refresh_back)
         self.refresh_panel.body.addLayout(rrow)
+        self.refresh_panel.value.hide()
         self._refreshChoices.connect(self._fill_refresh_choices)
         self._refreshDone.connect(self._refresh_finished)
-        col.addWidget(self.refresh_panel)
-        col.addWidget(self._sep())
 
-        # 4. Battery Charge Limit
-        self.batt = Panel("Battery Charge Limit: --%")
+        # Battery Charge Limit
+        self.batt = Panel("Battery Charge Limit", inline=True)
+        self.batt.value.setText("--%")
         srow = QHBoxLayout()
+        srow.setSpacing(SPACE["sm"])
         self.battery_slider = QSlider(Qt.Orientation.Horizontal)
         self.battery_slider.setRange(40, 100)
         self.battery_slider.setSingleStep(5)
-        self.battery_slider.valueChanged.connect(lambda v: self.batt.title.setText(f"Battery Charge Limit: {v}%"))
+        self.battery_slider.valueChanged.connect(lambda v: self.batt.value.setText(f"{v}%"))
         self.battery_slider.sliderReleased.connect(self._apply_battery_limit)
         srow.addWidget(self.battery_slider, 1)
         self.batt_100 = pill("100%")
         self.batt_100.clicked.connect(self._battery_100)
         srow.addWidget(self.batt_100)
         self.batt.body.addLayout(srow)
-        col.addWidget(self.batt)
-        self._batt_sep = self._sep()
-        col.addWidget(self._batt_sep)
+        self._batt_sep = self._sep()      # hidden with the battery line (_apply_capabilities)
+        col.addWidget(card(self.screen_panel, self._sep(), self.refresh_panel, self._batt_sep, self.batt))
         self._support = None
         self._support_probed = 0.0
         self.reprobe_capabilities()
 
-        # 5. Run on Startup · power source
-        row4 = QHBoxLayout()
-        row4.setContentsMargins(10, 6, 10, 6)
-        self.startup = QCheckBox("Run on Startup")
+        # 5. Run on Startup · version and side button status · Updates · Quit
+        foot = QHBoxLayout()
+        foot.setContentsMargins(SPACE["xs"], 0, 0, 0)
+        foot.setSpacing(SPACE["md"])
+        self.startup = CheckBox("Run on Startup")
         self.startup.setToolTip("Enable the resident z13-helper user service (tray + side button).")
         self.startup.toggled.connect(self._toggle_startup)
-        row4.addWidget(self.startup)
-        row4.addStretch(1)
-        self.power_label = QLabel("")
-        self.power_label.setObjectName("dim")
-        row4.addWidget(self.power_label)
-        col.addLayout(row4)
-
-        # 6. Version · side button status
-        row5 = QHBoxLayout()
-        row5.setContentsMargins(10, 2, 10, 6)
+        foot.addWidget(self.startup)
+        foot.addStretch(1)
+        notes = QVBoxLayout()
+        notes.setSpacing(0)
         self.version_label = QLabel(f"Version: {APP_VERSION}")
-        self.version_label.setObjectName("dim")
         self.version_label.setCursor(Qt.CursorShape.PointingHandCursor)
         self.version_label.mousePressEvent = lambda _e: self._open_updates()
-        row5.addWidget(self.version_label)
-        row5.addStretch(1)
         self.button_label = QLabel("")
-        self.button_label.setObjectName("dim")
-        row5.addWidget(self.button_label)
-        col.addLayout(row5)
-
-        # 7. Footer
-        foot = QHBoxLayout()
-        foot.setContentsMargins(10, 4, 10, 4)
-        foot.setSpacing(6)
+        for label in (self.version_label, self.button_label):
+            label.setObjectName("tip")
+            label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            notes.addWidget(label)
+        foot.addLayout(notes)
         self.btn_updates = QPushButton("Updates")
         self.btn_updates.clicked.connect(self._open_updates)
         self.btn_quit = QPushButton("Quit")
         self.btn_quit.clicked.connect(self._user_quit)
-        foot.addWidget(self.btn_updates)
-        foot.addWidget(self.btn_quit)
+        buttons = QHBoxLayout()
+        buttons.setSpacing(SPACE["sm"])
+        buttons.addWidget(self.btn_updates)
+        buttons.addWidget(self.btn_quit)
+        foot.addLayout(buttons)
         col.addLayout(foot)
         col.addStretch(1)
 
     @staticmethod
     def _sep():
-        f = QFrame()
-        f.setFrameShape(QFrame.Shape.HLine)
-        f.setStyleSheet(f"color: {BORDER};")
-        return f
+        return divider()
+
+    @staticmethod
+    def _row_label(text):
+        """The label of one line in a card; one shared width so the controls line up."""
+        label = QLabel(text)
+        label.setMinimumWidth(SIZE["row_label_w"] - 24)
+        return label
 
     def _load_initial_state(self):
         # #22: the charge limit is read through z13ctl only on a supported machine that has one.
@@ -627,8 +649,9 @@ class DashboardUI(QMainWindow):
 
     def _build_epp_ui(self):
         row = QHBoxLayout()
-        row.addWidget(QLabel("CPU Boost"))
-        self.epp_combo = QComboBox()
+        self._epp_label = QLabel("CPU Boost")
+        row.addWidget(self._epp_label)
+        self.epp_combo = ComboBox()
         epp.fill_combo(self.epp_combo, self.controller.get_epp_choices())
         self.epp_combo.currentIndexChanged.connect(self._on_epp)
         row.addWidget(self.epp_combo, 1)
@@ -657,9 +680,10 @@ class DashboardUI(QMainWindow):
             self._highlight_brightness(("off", "low", "medium", "high")[level])
         active = self.control.shown()       # the clicked profile lights up at once
         name = active["name"]
-        # Title: "Performance Mode: Balanced+ 20W" — '+' = custom curve, W = custom SPL
-        suffix = ("+" if active.get("fan_curve") else "") + (f" {active['tdp']['pl1']}W" if active.get("tdp") else "")
-        self.perf.title.setText(f"Performance Mode: {name}{suffix}")
+        # Beside the title: "Balanced · custom curve · 20 W" (the profile, then what it overrides)
+        extras = (["custom curve"] if active.get("fan_curve") else []) + (
+            [f"{active['tdp']['pl1']} W"] if active.get("tdp") else [])
+        self.perf.value.setText(" · ".join([name] + extras))
         builtin = name in self._tiles
         for n, t in self._tiles.items():
             t.setChecked(n == name)
@@ -705,7 +729,7 @@ class DashboardUI(QMainWindow):
             w.hide()
             return
         w.select(self.control.active_name())
-        w.resize(675, max(self.height(), 540))
+        w.resize(SIZE["fans_window_w"], max(self.height(), SIZE["fans_window_h"]))
         w.move(max(0, self.x() - w.width() - 5), self.y())
         w.show()
         w.raise_()
@@ -807,7 +831,7 @@ class DashboardUI(QMainWindow):
     # ------------------------------------------------------------------
 
     def _screen_slider_moved(self, value):
-        self.screen_panel.title.setText(f"Screen Brightness: {value}%")
+        self.screen_panel.value.setText(f"{value}%")
         if not self._screen_write_timer.isActive():
             self._screen_write_timer.start()
 
@@ -834,7 +858,7 @@ class DashboardUI(QMainWindow):
         self.screen_slider.blockSignals(True)
         self.screen_slider.setValue(value)
         self.screen_slider.blockSignals(False)
-        self.screen_panel.title.setText(f"Screen Brightness: {value}%")
+        self.screen_panel.value.setText(f"{value}%")
 
     # ------------------------------------------------------------------
     # Battery
@@ -878,11 +902,13 @@ class DashboardUI(QMainWindow):
         n = len(new)
         if n:
             self.version_label.setText(f"Version: {APP_VERSION} — {n} upstream update{'s' if n > 1 else ''}")
-            self.version_label.setStyleSheet(f"color: {TURBO}; text-decoration: underline;")
+            self.version_label.setProperty("link", True)
+            set_tone(self.version_label, "accent")
             self.btn_updates.setText(f"Updates ({n})")
         else:
             self.version_label.setText(f"Version: {APP_VERSION}")
-            self.version_label.setStyleSheet("")
+            self.version_label.setProperty("link", False)
+            set_tone(self.version_label, "")
             self.btn_updates.setText("Updates")
         keys = sorted(f"{r['id']}:{r['latest']}" for r in new)
         if keys and keys != self.config.get("updates_notified", []) and self._tray is not None:
@@ -1064,7 +1090,7 @@ class DashboardUI(QMainWindow):
             else:
                 parts.append("Fans unavailable")
             text = "  ".join(parts)
-            self.perf.right.setText(text)
+            self._show_readings(cpu, gpu, fan1, fan2)
             if self._tray is not None:
                 self._tray.setToolTip("Z13-Helper\n" + text.replace("  ", "\n"))
         except Exception:
@@ -1072,7 +1098,7 @@ class DashboardUI(QMainWindow):
         try:
             b = self.sensors.get_battery()
             cap, st, pw = b.get("capacity"), b.get("status") or "", b.get("power_w")
-            self.batt.right.setText(f"Charge: {cap}%" if cap is not None else "")
+            self.stat_batt.value.setText(f"{cap}%" if cap is not None else "--")
             if st == "Discharging":
                 self.power_label.setText(f"On battery · {pw:.1f} W" if pw else "On battery")
             elif st:
@@ -1083,6 +1109,20 @@ class DashboardUI(QMainWindow):
         self._show_fan_message(self._fan_runner.tick())
         if self.isVisible():
             self._sync_screen_brightness()
+
+    def _show_readings(self, cpu, gpu, fan1, fan2):
+        """The status strip: temperatures with the sensor they come from, both fan speeds."""
+        for tile, got in ((self.stat_cpu, cpu), (self.stat_gpu, gpu)):
+            if got is None:
+                tile.set("--", "unavailable")
+            else:
+                tile.set(f"{got[0]:.0f}°C", str(got[1]))
+        if fan1 is not None and fan2 is not None:
+            self.stat_fans.set(f"{fan1} · {fan2}", "CPU side · GPU side")
+        elif fan1 is not None or fan2 is not None:
+            self.stat_fans.set(str(fan1 if fan1 is not None else fan2), "one fan reporting")
+        else:
+            self.stat_fans.set("--", "unavailable")
 
     def _show_fan_message(self, msg):
         if msg:

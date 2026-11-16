@@ -10,15 +10,18 @@ Semantics copied from seerge/g-helper `app/Fans.cs`:
   Arrow keys nudge the focused point (Shift = ×5).
 - A floating "65°C, 3600 RPM" label follows the dragged point.
 - The series is drawn grey when the curve isn't applied.
+- Colours come from the design tokens (theme.py) at paint time, so the chart
+  follows the dark and light themes; the accent is a token name.
 
 Pure QPainter; no QtCharts dependency.
 """
 
 from PyQt6.QtCore import Qt, QPointF, QRectF, pyqtSignal
-from PyQt6.QtGui import QColor, QPainter, QPen, QBrush, QFont
+from PyQt6.QtGui import QPainter, QPainterPath, QPen, QBrush, QFont
 from PyQt6.QtWidgets import QWidget, QSizePolicy
 
 from profiles import fan_curve_floor_pct as floor_pct
+from theme import FONT, RADIUS, qcolor
 
 TEMP_MIN, TEMP_MAX = 20, 110
 PCT_MIN, PCT_MAX = 0, 100
@@ -41,7 +44,7 @@ class FanCurveWidget(QWidget):
         self._rpm_labels = True
         self._clamp_grid = False
         self._max_rpm = 8900          # observed at 100% on this GZ302EA
-        self._accent = QColor("#3AAEEF")
+        self._accent = "balanced"     # a colour token name (theme.py)
         self._drag = None             # index being dragged
         self._focus = None            # index for arrow-key nudges
         self._drag_all_y0 = None      # shift-drag: starting pcts
@@ -51,11 +54,6 @@ class FanCurveWidget(QWidget):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setMouseTracking(True)
-        # Colours (dark theme defaults; set via setPalette for light)
-        self.col_bg = QColor("#232323")
-        self.col_grid = QColor("#464646")
-        self.col_text = QColor("#B0B0B0")
-        self.col_inactive = QColor("#7A7A7A")
 
     # ---------------- public API ----------------
 
@@ -72,8 +70,9 @@ class FanCurveWidget(QWidget):
         self._applied = bool(applied)
         self.update()
 
-    def setAccent(self, color):
-        self._accent = QColor(color)
+    def setAccent(self, token):
+        """`token` names a colour in the design tokens, e.g. "balanced" or "custom"."""
+        self._accent = token
         self.update()
 
     def setClampToGrid(self, on: bool):
@@ -92,15 +91,11 @@ class FanCurveWidget(QWidget):
         self._live = (temp, rpm) if temp is not None else None
         self.update()
 
-    def setColors(self, bg, grid, text):
-        self.col_bg, self.col_grid, self.col_text = QColor(bg), QColor(grid), QColor(text)
-        self.update()
-
     # ---------------- geometry ----------------
 
     def _plot_rect(self) -> QRectF:
         # Left margin fits "8800" / "100%", bottom fits the °C labels, top fits the title.
-        return QRectF(44, 22, max(10, self.width() - 56), max(10, self.height() - 44))
+        return QRectF(48, 30, max(10, self.width() - 64), max(10, self.height() - 56))
 
     def _to_px(self, temp, pct) -> QPointF:
         r = self._plot_rect()
@@ -229,66 +224,76 @@ class FanCurveWidget(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         r = self._plot_rect()
-        p.fillRect(self.rect(), self.col_bg)
+        surface, ink, grid = qcolor("inset"), qcolor("text_muted"), qcolor("chart_grid")
+        p.setPen(QPen(qcolor("border"), 1))
+        p.setBrush(surface)
+        p.drawRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5), RADIUS["md"], RADIUS["md"])
 
         font = QFont(self.font())
-        font.setPointSizeF(7.5)
+        font.setPointSizeF(FONT["caption_pt"])
         p.setFont(font)
 
-        # Title (top-left, like the chart title in G-Helper)
-        p.setPen(self.col_text)
-        p.drawText(QRectF(r.left(), 2, r.width(), 18), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, self._title)
+        # Title, top-left above the plot
+        p.setPen(ink)
+        p.drawText(QRectF(r.left(), 6, r.width(), 18), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, self._title)
 
-        # Grid + axis labels: every 10 °C, every 10 %
-        grid_pen = QPen(self.col_grid, 1)
-        p.setPen(grid_pen)
+        # Grid every 10 °C and every 10 %; the Y labels thin out on a short chart
+        grid_pen = QPen(grid, 1)
         for t in range(TEMP_MIN, TEMP_MAX + 1, 10):
             x = self._to_px(t, 0).x()
             p.setPen(grid_pen)
             p.drawLine(QPointF(x, r.top()), QPointF(x, r.bottom()))
-            p.setPen(self.col_text)
-            p.drawText(QRectF(x - 16, r.bottom() + 2, 32, 16), Qt.AlignmentFlag.AlignCenter, f"{t}")
+            p.setPen(ink)
+            p.drawText(QRectF(x - 16, r.bottom() + 4, 32, 16), Qt.AlignmentFlag.AlignCenter, f"{t}")
+        label_step = 10 if r.height() >= 260 else 20
         for pct in range(PCT_MIN, PCT_MAX + 1, 10):
             y = self._to_px(TEMP_MIN, pct).y()
             p.setPen(grid_pen)
             p.drawLine(QPointF(r.left(), y), QPointF(r.right(), y))
-            p.setPen(self.col_text)
-            p.drawText(QRectF(0, y - 8, r.left() - 4, 16), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, self._y_label(pct))
+            if pct % label_step == 0:
+                p.setPen(ink)
+                p.drawText(QRectF(0, y - 8, r.left() - 6, 16), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, self._y_label(pct))
 
         # Live marker (optional): thin vertical line at the current temperature
         if self._live is not None:
             lt, lrpm = self._live
             if lt is not None and TEMP_MIN <= lt <= TEMP_MAX:
                 x = self._to_px(lt, 0).x()
-                live_pen = QPen(QColor(self._accent), 1, Qt.PenStyle.DashLine)
-                p.setPen(live_pen)
+                p.setPen(QPen(ink, 1, Qt.PenStyle.DashLine))
                 p.drawLine(QPointF(x, r.top()), QPointF(x, r.bottom()))
 
-        # Series
-        color = self._accent if self._applied else self.col_inactive
-        pen = QPen(color, 2)
-        p.setPen(pen)
+        # Series: a light wash under the curve, a 2 px line, ringed markers
+        color = qcolor(self._accent if self._applied else "text_faint")
         pts = [self._to_px(t, pc) for t, pc in self._points]
+        area = QPainterPath(QPointF(pts[0].x(), r.bottom()))
+        for pt in pts:
+            area.lineTo(pt)
+        area.lineTo(QPointF(pts[-1].x(), r.bottom()))
+        area.closeSubpath()
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(qcolor(self._accent if self._applied else "text_faint", 30))
+        p.drawPath(area)
+        p.setPen(QPen(color, 2))
         for a, b in zip(pts, pts[1:]):
             p.drawLine(a, b)
         p.setBrush(QBrush(color))
         for i, pt in enumerate(pts):
             rad = MARKER_R + (2 if i in (self._drag, self._focus) else 0)
-            p.setPen(QPen(self.col_bg, 1.5))
+            p.setPen(QPen(surface, 2))
             p.drawEllipse(pt, rad, rad)
 
-        # Floating label while dragging / focused
+        # Floating label while dragging
         idx = self._drag if self._drag is not None else None
         if idx is not None:
             t, pc = self._points[idx]
             label = f"{int(round(t))}°C, {self._rpm_for(pc)} RPM" if self._rpm_labels else f"{int(round(t))}°C, {int(round(pc))}%"
             pt = pts[idx]
-            box = QRectF(pt.x() + 10, pt.y() - 22, 110, 18)
+            box = QRectF(pt.x() + 10, pt.y() - 24, 116, 20)
             if box.right() > self.width():
                 box.moveRight(pt.x() - 10)
             p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QColor(0, 0, 0, 170))
-            p.drawRoundedRect(box, 3, 3)
-            p.setPen(QColor("#F0F0F0"))
+            p.setBrush(qcolor("tooltip"))
+            p.drawRoundedRect(box, RADIUS["sm"], RADIUS["sm"])
+            p.setPen(qcolor("on_tooltip"))
             p.drawText(box, Qt.AlignmentFlag.AlignCenter, label)
         p.end()

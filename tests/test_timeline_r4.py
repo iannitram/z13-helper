@@ -287,6 +287,11 @@ def _install_qt_stub(monkeypatch):
                 raise AttributeError(name)
             return _Any()
 
+        def __add__(self, other):    # enum arithmetic at import, e.g. Qt.ItemDataRole.UserRole + 1
+            return _Any()
+
+        __radd__ = __add__
+
     class _Meta(type):
         def __getattr__(cls, name):
             if name.startswith("__"):
