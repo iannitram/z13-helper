@@ -96,6 +96,7 @@
     "tile_small_h": 36,
     "fans_side_w": 296,
     "fans_window_w": 740,
-    "fans_window_h": 640
+    "fans_window_h": 640,
+    "window_min_h": 480
   }
 }

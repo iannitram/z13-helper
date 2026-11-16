@@ -18,10 +18,10 @@ import threading
 import time
 
 from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QSlider, QStatusBar, QSystemTrayIcon, QMenu, QMessageBox,
+    QStyle, QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QSlider, QStatusBar, QSystemTrayIcon, QMenu, QMessageBox, QScrollArea,
 )
-from PyQt6.QtCore import QTimer, Qt, pyqtSlot, pyqtSignal
+from PyQt6.QtCore import QEvent, QSize, QTimer, Qt, pyqtSlot, pyqtSignal
 from PyQt6.QtDBus import QDBusConnection
 from PyQt6.QtGui import QFont, QIcon, QPainter, QPixmap, QAction, QActionGroup
 
@@ -96,6 +96,39 @@ SCREEN_WRITE_MS = 40            # coalesce slider steps into one backlight write
 SCREEN_FOLLOW_GRACE_S = 1.5     # after our own write, don't snap the slider back to a stale read
 
 
+class _ColumnScroll(QScrollArea):
+    """Vertical-only scroll area that reports its column's live size hints (#235).
+
+    A plain QScrollArea's hints are small, so the window would open small and could be
+    resized narrower than the column (the horizontal bar is off, so the right side clipped).
+    These hints follow the column as its text changes; only the height may drop below
+    the column's minimum, and then the column scrolls instead of squeezing.
+    """
+
+    def __init__(self, column, parent=None):
+        super().__init__(parent)
+        self.setFrameShape(QScrollArea.Shape.NoFrame)
+        self.setWidgetResizable(True)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setWidget(column)
+        column.installEventFilter(self)
+
+    def _extra_w(self):
+        return self.style().pixelMetric(QStyle.PixelMetric.PM_ScrollBarExtent) + 2 * self.frameWidth()
+
+    def sizeHint(self):
+        hint = self.widget().sizeHint()
+        return QSize(hint.width() + self._extra_w(), hint.height() + 2 * self.frameWidth())
+
+    def minimumSizeHint(self):
+        return QSize(self.widget().minimumSizeHint().width() + self._extra_w(), 0)
+
+    def eventFilter(self, obj, event):
+        if obj is self.widget() and event.type() == QEvent.Type.LayoutRequest:
+            self.updateGeometry()      # the column's hints changed: let the window re-read ours
+        return super().eventFilter(obj, event)
+
+
 class DashboardUI(QMainWindow):
     sideButtonPressed = pyqtSignal()
     # From app_log listeners, which run on whatever thread logged / crashed.
@@ -113,10 +146,10 @@ class DashboardUI(QMainWindow):
         max_fans_state.migrate_legacy(config)
 
         self.setWindowTitle("Z13-Helper")
+        self.setMinimumHeight(SIZE["window_min_h"])
         # Dark or light from the design tokens: the system's choice unless View → Theme says otherwise.
         theme.apply(QApplication.instance(), config.get("theme", design_tokens.DEFAULT_CHOICE))
-        # No fixed minimum: the layout's own minimum keeps the title row (profile
-        # name + live sensors) from being clipped, which a hard 430 px allowed.
+        # Keep the title row readable while allowing compact screens to scroll.
         self._app_icon = self._make_app_icon()
         self.setWindowIcon(self._app_icon)
         QApplication.instance().setWindowIcon(self._app_icon)
@@ -376,7 +409,9 @@ class DashboardUI(QMainWindow):
 
         root = QWidget()
         root.setObjectName("root")
-        self.setCentralWidget(root)
+        self.scroll_area = _ColumnScroll(root)
+        self.scroll_area.setObjectName("dashboardScrollArea")
+        self.setCentralWidget(self.scroll_area)
         col = QVBoxLayout(root)
         col.setContentsMargins(SPACE["md"], SPACE["sm"], SPACE["md"], SPACE["xs"])
         col.setSpacing(SPACE["sm"])
@@ -552,6 +587,20 @@ class DashboardUI(QMainWindow):
         foot.addLayout(buttons)
         col.addLayout(foot)
         col.addStretch(1)
+        self._fit_to_column()
+
+    def _fit_to_column(self):
+        """Open at the column's natural size, clamped to the screen (#235).
+
+        Without an explicit size Qt caps a new window at 2/3 of the screen, which on the
+        Z13's 1280x800 logical screen would open the dashboard short and scrolled.
+        """
+        self.scroll_area.widget().layout().activate()
+        size = self.sizeHint()
+        screen = QApplication.primaryScreen()   # (self.screen is the ScreenBrightness control)
+        if screen is not None:
+            size = size.boundedTo(screen.availableGeometry().size())
+        self.resize(size)
 
     @staticmethod
     def _sep():
