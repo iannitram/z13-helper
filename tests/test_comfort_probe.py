@@ -1,5 +1,9 @@
 """Phase 15e probe tooling: candidate readings are read-only, the fit ranks sensors."""
 
+import os
+
+import pytest
+
 import z13_comfort_probe as probe
 from sensor_reader import SensorReader
 
@@ -90,3 +94,46 @@ def test_battery_none_when_no_source(tmp_path, monkeypatch):
     reader = make_reader(tmp_path, monkeypatch)
     monkeypatch.setattr(reader, "_read_int", lambda p: None)
     assert reader.get_comfort_candidates()["battery"] is None
+
+
+@pytest.mark.parametrize("bad", ["nan", "inf", "-inf", "-0.1", "80.1", "95", "abc"])
+def test_external_c_rejects_out_of_range_and_non_finite(tmp_path, monkeypatch, bad):
+    import sensor_reader
+    monkeypatch.setattr(sensor_reader, "HWMON_ROOT", str(tmp_path / "none"))
+    out = str(tmp_path / "p.csv")
+    with pytest.raises(SystemExit) as exc:
+        probe.main(["sample", "--phase", "idle", "--external-c", bad, "--out", out])
+    assert exc.value.code == 2
+    assert not os.path.exists(out)
+
+
+@pytest.mark.parametrize("value", ["0", "80", "36.5"])
+def test_external_c_accepts_the_inclusive_bounds(tmp_path, monkeypatch, value):
+    import sensor_reader
+    root = tmp_path / "hwmon"
+    d = root / "hwmon0"
+    d.mkdir(parents=True)
+    (d / "name").write_text("k10temp\n")
+    (d / "temp1_input").write_text("52000\n")
+    monkeypatch.setattr(sensor_reader, "HWMON_ROOT", str(root))
+    out = str(tmp_path / "p.csv")
+    assert probe.main(["sample", "--phase", "idle", "--external-c", value, "--out", out]) == 0
+    got = probe.read_rows(out)[0]["external_c"]
+    assert float(got) == float(value)
+    if value == "36.5":
+        assert got == value
+
+
+def test_fit_ignores_rows_with_non_finite_values():
+    rows = [{"tctl": "40", "external_c": "30"},
+            {"tctl": "50", "external_c": "35"},
+            {"tctl": "60", "external_c": "40"},
+            {"tctl": "55", "external_c": "nan"},
+            {"tctl": "inf", "external_c": "33"}]
+    result = probe.fit(rows)
+    assert len(result) == 1
+    cand, offset, slope, rmse, n = result[0]
+    assert cand == "tctl" and n == 3
+    assert offset == pytest.approx(10.0)
+    assert slope == pytest.approx(0.5)
+    assert rmse == pytest.approx(0.0, abs=1e-9)
