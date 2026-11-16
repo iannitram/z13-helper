@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 from post_update.builtin import AMDGPU_ARGS
 from post_update.cmdline import missing_args
-from system_inventory import PERMISSION_PATHS
+from system_inventory import ON_DEMAND_UNITS, PERMISSION_PATHS
 
 _PRESENT = (
     ("steamos_build", "SteamOS build"),
@@ -79,7 +79,7 @@ def run_checks(inventory) -> list:
                                    "amdgpu arguments present" if not missing
                                    else "missing: " + " ".join(missing)))
     for name, state in sorted((inv.get("units") or {}).items()):
-        results.append(CheckResult("unit:" + name, state == "enabled",
+        results.append(CheckResult("unit:" + name, state == "enabled" or (name in ON_DEMAND_UNITS and state == "static"),
                                    f"{name} is {state or 'unknown'}"))
     perms = inv.get("permissions") or {}
     for path in PERMISSION_PATHS:
