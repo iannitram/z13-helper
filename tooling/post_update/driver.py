@@ -32,7 +32,7 @@ _log = logging.getLogger(__name__)
 BACKUP_ROOT = os.path.join(".local", "state", "z13-helper", "post-update-backups")
 RECORD_NAME = "rollback-record.json"
 # Commands that must run as root; anything else runs as the current user.
-_ROOT_CMDS = {"update-grub", "pacman-key", "pacman", "ldconfig", "mkdir", "bsdtar", "chmod", "systemctl", "udevadm"}
+_ROOT_CMDS = {"update-grub", "pacman-key", "pacman", "ldconfig", "mkdir", "bsdtar", "chmod", "ln", "systemctl", "udevadm"}
 
 
 def _host():
@@ -102,7 +102,8 @@ def make_sys(home: str, escalate: bool = True) -> Sys:
         _write(path, text)
 
     return Sys(home=home, listdir=lambda p: _listdir(p) or None, exists=os.path.exists,
-               read=_read, run=lambda argv: _run(argv, escalate=escalate)[0], write=write, copy_tree=copy_tree)
+               read=_read, run=lambda argv: _run(argv, escalate=escalate)[0], write=write, copy_tree=copy_tree,
+               run_out=lambda argv: _run(argv, escalate=escalate))
 
 
 def readonly_cmd(tool_name: Callable[[str], str] | None = None) -> str:

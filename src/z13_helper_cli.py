@@ -1094,6 +1094,7 @@ def _host_sys(privileged=False):
         run=lambda argv: _host_run(argv, privileged)[0],
         write=write,
         copy_tree=lambda src, dest: _host_copy_tree(src, dest, privileged),
+        run_out=lambda argv: _host_run(argv, privileged),
     )
 
 
