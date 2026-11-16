@@ -66,7 +66,7 @@ compatibility test coverage; production setters use the shared authority.
 | Installed plugin `py_modules/compute_health.py` | Root-owned installed copy of `src/compute_health.py`; memory/compute report and on-request allocation smoke test. |
 | Installed plugin `py_modules/timeline.py` | Root-owned installed copy of `src/timeline.py`; append-only `timeline.jsonl` reader/writer with size-capped rotation and partial-line skipping. |
 | Installed plugin `py_modules/crash_report.py`, `crash_scrub.py`, `crash_queue.py`, `_crash_build.json` | Root-owned shared crash reporting and build configuration. Startup installs Python/thread/asyncio hooks; unload restores them. Reports share the desktop queue and preference; see [`docs/crash-reporting.md`](../docs/crash-reporting.md). |
-| `decky/rollup.config.js`, `decky/tsconfig.json`, `decky/package.json`, `decky/pnpm-lock.yaml` | Bundle build for the plugin front end (`pnpm build` writes `dist/index.js`, which `install.sh` installs). |
+| `decky/rollup.config.js`, `decky/tsconfig.json`, `decky/package.json`, `decky/pnpm-workspace.yaml`, `decky/pnpm-lock.yaml` | Bundle build for the plugin front end (`pnpm build` writes `dist/index.js`, which `install.sh` installs). |
 | `decky/plugin.json` | Decky plugin manifest: name `Z13-Helper`, `api_version` 1, store metadata. Installed beside `main.py`. |
 | `decky/README.md` | Plugin-specific notes: what the panel offers, how it is built and installed. |
 | `decky/tests/test_backend.py` | Backend tests, run with `python3 -m unittest discover -s decky/tests`. |
