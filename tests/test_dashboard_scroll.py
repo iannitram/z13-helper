@@ -60,10 +60,21 @@ def test_dashboard_scrolls_without_squeezing_performance_tiles(monkeypatch):
     controller, sensors, config = MagicMock(), MagicMock(), MagicMock()
     config.get.return_value = None
     window = dashboard_ui.DashboardUI(controller, sensors, config)
-    window.setMinimumSize(0, 0)
-    window.centralWidget().setMinimumSize(0, 0)
-    window.resize(927, 450)
     window.show()
+    app.processEvents()
+
+    root = window.scroll_area.widget()
+    viewport = window.scroll_area.viewport()
+    assert window.width() >= (
+        root.minimumSizeHint().width()
+        + window.scroll_area.verticalScrollBar().sizeHint().width()
+        + 2 * window.scroll_area.frameWidth()
+    )
+    assert window.height() >= SIZE["window_min_h"]
+    for tile in [*window._tiles.values(), window.fans_tile, *window._bright_tiles.values()]:
+        assert tile.mapTo(viewport, tile.rect().bottomRight()).x() <= viewport.width()
+
+    window.resize(927, 450)
     app.processEvents()
 
     assert all(tile.height() >= SIZE["tile_h"] for tile in window._tiles.values())

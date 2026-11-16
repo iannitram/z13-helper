@@ -559,6 +559,29 @@ class DashboardUI(QMainWindow):
         col.addLayout(foot)
         col.addStretch(1)
 
+        # A scroll area's size hint is deliberately compact. Preserve the
+        # column's natural first-show size, while allowing short screens to
+        # scroll vertically. Reserve room for the vertical scrollbar so it
+        # cannot consume any of the column's minimum width.
+        scrollbar_width = self.scroll_area.verticalScrollBar().sizeHint().width()
+        frame_width = 2 * self.scroll_area.frameWidth()
+        min_column_width = root.minimumSizeHint().width()
+        required_width = min_column_width + scrollbar_width + frame_width
+        self.setMinimumWidth(required_width)
+
+        natural = self.sizeHint()
+        area_hint = self.scroll_area.sizeHint()
+        natural_width = max(natural.width(), root.sizeHint().width() + scrollbar_width + frame_width)
+        natural_height = max(
+            natural.height(), natural.height() + root.sizeHint().height() - area_hint.height()
+        )
+        screen = QApplication.primaryScreen()
+        if screen:
+            available = screen.availableGeometry()
+            natural_width = min(natural_width, available.width())
+            natural_height = min(natural_height, available.height())
+        self.resize(natural_width, max(SIZE["window_min_h"], natural_height))
+
     @staticmethod
     def _sep():
         return divider()
