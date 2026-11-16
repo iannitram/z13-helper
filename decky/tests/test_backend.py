@@ -920,3 +920,115 @@ class UnsupportedMachineGate(unittest.TestCase):
                 with open(path, "w") as f:
                     f.write("Jupiter\n")
                 self.assertFalse(real())
+
+
+class LightbarRecoveryTest(unittest.TestCase):
+    def test_stale_mode_write_one_daemon_restart_one_retry(self):
+        calls = []
+        recover_stale_called = []
+
+        def fake_write():
+            calls.append(1)
+            if len(calls) == 1:
+                return (1, "write /dev/hidraw5: no such device", False)
+            return (0, "", False)
+
+        def fake_stale():
+            recover_stale_called.append(1)
+            return True, "daemon restarted"
+
+        ok, out, timed_out, recovered = m.write_lighting_with_recovery(
+            "lightbar",
+            fake_write,
+            recover_stale=fake_stale,
+        )
+        self.assertTrue(ok)
+        self.assertTrue(recovered)
+        self.assertFalse(timed_out)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(recover_stale_called), 1)
+
+    def test_wedged_mode_write_one_reset_one_retry(self):
+        calls = []
+        recover_wedged_called = []
+
+        def fake_write():
+            calls.append(1)
+            if len(calls) == 1:
+                return (1, "write /dev/hidraw5: connection timed out", False)
+            return (0, "", False)
+
+        def fake_wedged():
+            recover_wedged_called.append(1)
+            return True, "lightbar reset"
+
+        ok, out, timed_out, recovered = m.write_lighting_with_recovery(
+            "lightbar",
+            fake_write,
+            recover_wedged=fake_wedged,
+        )
+        self.assertTrue(ok)
+        self.assertTrue(recovered)
+        self.assertFalse(timed_out)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(recover_wedged_called), 1)
+
+    def test_keyboard_never_retried(self):
+        calls = []
+        recover_stale_called = []
+
+        def fake_write():
+            calls.append(1)
+            return (1, "write /dev/hidraw5: no such device", False)
+
+        def fake_stale():
+            recover_stale_called.append(1)
+            return True, "daemon restarted"
+
+        ok, out, timed_out, recovered = m.write_lighting_with_recovery(
+            "keyboard",
+            fake_write,
+            recover_stale=fake_stale,
+        )
+        self.assertFalse(ok)
+        self.assertFalse(recovered)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(recover_stale_called), 0)
+
+    def test_unclassified_failure_no_recovery(self):
+        calls = []
+        recover_called = []
+
+        def fake_write():
+            calls.append(1)
+            return (1, "permission denied", False)
+
+        ok, out, timed_out, recovered = m.write_lighting_with_recovery(
+            "lightbar",
+            fake_write,
+            recover_wedged=lambda: (recover_called.append(1), True)[1],
+            recover_stale=lambda: (recover_called.append(1), True)[1],
+        )
+        self.assertFalse(ok)
+        self.assertFalse(recovered)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(recover_called), 0)
+
+    def test_timeout_never_retried(self):
+        calls = []
+        recover_called = []
+
+        def fake_write():
+            calls.append(1)
+            return (124, "z13ctl write timed out after 20 s (kernel asus-wmi hang?)", True)
+
+        ok, out, timed_out, recovered = m.write_lighting_with_recovery(
+            "lightbar",
+            fake_write,
+            recover_wedged=lambda: (recover_called.append(1), True)[1],
+            recover_stale=lambda: (recover_called.append(1), True)[1],
+        )
+        self.assertFalse(ok)
+        self.assertTrue(timed_out)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(recover_called), 0)

@@ -883,6 +883,53 @@ def test_stale_daemon_restart_is_rate_limited(profiles_env, fake_host, monkeypat
     assert "skipped" in msg
 
 
+def test_stale_lightbar_mode_write_recovers_with_daemon_restart_only(profiles_env, fake_host):
+    stale_until_daemon_restart(fake_host)
+    p = bare_profile(lighting={"keyboard": {"mode": "breathe", "color": "cyan"},
+                               "lightbar": {"mode": "static", "color": "red"}})
+    results = profiles.apply(p, z13ctl=Z)
+    assert RESET not in fake_host.argvs
+    assert RESTART in fake_host.argvs
+    lightbar_writes = [a for a in fake_host.argvs if "lightbar" in a]
+    assert len(lightbar_writes) == 2
+    assert ("lighting (keyboard)", True, "breathe / cyan / high") in results
+    assert ("lighting (lightbar)", True, "static / red / high (lightbar recovered)") in results
+
+
+def test_wedged_lightbar_mode_write_recovers_once_and_retries_once(profiles_env, fake_host):
+    wedged_until_reset(fake_host)
+    p = bare_profile(lighting={"keyboard": {"mode": "breathe", "color": "cyan"},
+                               "lightbar": {"mode": "static", "color": "red"}})
+    results = profiles.apply(p, z13ctl=Z)
+    assert RESET in fake_host.argvs
+    assert RESTART in fake_host.argvs
+    lightbar_writes = [a for a in fake_host.argvs if "lightbar" in a]
+    assert len(lightbar_writes) == 2
+    assert ("lighting (keyboard)", True, "breathe / cyan / high") in results
+    assert ("lighting (lightbar)", True, "static / red / high (lightbar recovered)") in results
+
+
+def test_keyboard_mode_timeout_never_resets_anything(profiles_env, fake_host):
+    fake_host.fail(lambda a: "keyboard" in a, rc=1, out=WEDGED)
+    p = bare_profile(lighting={"keyboard": {"mode": "breathe", "color": "cyan"},
+                               "lightbar": {"mode": "static", "color": "red"}})
+    profiles.apply(p, z13ctl=Z)
+    assert RESET not in fake_host.argvs
+    assert RESTART not in fake_host.argvs
+    assert len([a for a in fake_host.argvs if "keyboard" in a]) == 1
+
+
+def test_unrecognised_lightbar_mode_failure_triggers_no_recovery(profiles_env, fake_host):
+    fake_host.fail(lambda a: "lightbar" in a, rc=1, out="invalid mode")
+    p = bare_profile(lighting={"keyboard": {"mode": "breathe", "color": "cyan"},
+                               "lightbar": {"mode": "static", "color": "red"}})
+    results = profiles.apply(p, z13ctl=Z)
+    assert RESET not in fake_host.argvs
+    assert RESTART not in fake_host.argvs
+    assert len([a for a in fake_host.argvs if "lightbar" in a]) == 1
+    assert ("lighting (lightbar)", False, "invalid mode") in results
+
+
 def test_recover_lightbar_rate_limit_window(profiles_env, fake_host):
     slept = []
     assert profiles.recover_lightbar(sleep=slept.append, now=lambda: 5000.0)[0]
