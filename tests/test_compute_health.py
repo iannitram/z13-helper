@@ -167,7 +167,7 @@ def test_report_text_keeps_pools_apart_and_marks_unknowns():
     assert "GTT (shared, inside Linux RAM): up to 48.0 GiB, in use 2.0 GiB" in text
     assert "Firmware-reserved VRAM: 16.0 GiB, in use unavailable" in text
     assert "Memory pressure (10 s): unavailable" in text
-    assert "gfx1151 (Strix Halo): yes" in text
+    assert "Strix Halo: yes" in text
     assert "ROCm/HIP: not found" in text
     assert "render node access: unavailable" in text
 

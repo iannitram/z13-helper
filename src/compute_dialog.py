@@ -37,7 +37,7 @@ def format_report(r):
     lines += ["", "Compute",
               "  GPU: " + (", ".join(f"{a['gfx']}" + (f" ({a['name']})" if a["name"] else "")
                                      for a in r["gpu_agents"]) or "no GPU agent from the kernel (KFD)"),
-              "  gfx1151 (Strix Halo): " + _yn(r["gfx1151"]) + f", kernel {r['kernel']}"]
+              "  Strix Halo: " + _yn(r["gfx1151"]) + f", kernel {r['kernel']}"]
     if not rt["ok"]:
         lines.append("  Runtime discovery failed (host command did not answer).")
     else:
