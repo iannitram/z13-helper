@@ -9,7 +9,7 @@ GOOD = {
     "/proc/sys/kernel/osrelease": "7.2.7-valve2-2-neptune\n",
     "/sys/class/dmi/id/bios_version": "GZ302EA.313\n",
     "/sys/class/dmi/id/ec_firmware_release": "0.1\n",
-    "/proc/cmdline": "quiet gpu_recovery=1\n",
+    "/proc/cmdline": "quiet amdgpu.gpu_recovery=1\n",
     ("pacman", "-Q", "linux-firmware"): "linux-firmware 20261020-1\n",
     ("pacman", "-Q", "mesa"): "mesa 26.0.1-1\n",
     ("pacman", "-Q", "vulkan-radeon"): "vulkan-radeon 26.0.1-1\n",
@@ -44,7 +44,7 @@ def test_every_key_is_collected_from_the_seam():
     assert inv["firmware"] == "20261020-1"
     assert inv["mesa"] == "26.0.1-1" and inv["vulkan_radeon"] == "26.0.1-1"
     assert inv["backend_version"] == "1.4.2"
-    assert inv["kernel_args"] == "quiet gpu_recovery=1"
+    assert inv["kernel_args"] == "quiet amdgpu.gpu_recovery=1"
     assert inv["units"]["user:z13-helper.service"] == "enabled"
     assert inv["units"]["user:z13ctl.socket"] is None
     assert set(inv["units"]) == {"user:" + u for u in USER_UNITS} | {"system:" + u for u in SYSTEM_UNITS}

@@ -7,11 +7,10 @@ Safety: a check returns "na" anywhere but SteamOS on a GZ302 (the runner skips "
 every apply refuses on anything else. Checks never write or run a command that changes state.
 """
 
-import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
-from .cmdline import add_grub_args, missing_args
+from .cmdline import add_grub_args_text, grub_value, missing_args
 from .health import carry_forward_missing, keyring_status
 from .recipe import KEYRING_ID, Recipe
 
@@ -22,11 +21,10 @@ GRUB_FILE = "/etc/default/grub-steamos"
 KEYRING_DIR = "/etc/pacman.d/gnupg"   # --init/--populate rewrite it: backed up first
 KEEP_DIR = "/etc/atomic-update.conf.d"
 
-AMDGPU_ARGS = ("dcdebugmask=0x20e10", "gpu_recovery=1", "cwsr_enable=0", "sg_display=0", "abmlevel=0")
+# Module parameters of the built-in amdgpu driver: the kernel only honours them with the prefix.
+AMDGPU_ARGS = ("amdgpu.dcdebugmask=0x20e10", "amdgpu.gpu_recovery=1", "amdgpu.cwsr_enable=0",
+               "amdgpu.sg_display=0", "amdgpu.abmlevel=0")
 
-_GRUB_ASSIGN = re.compile(r'\s*GRUB_CMDLINE_LINUX_DEFAULT="')
-# Anchored to a line start (leading blanks only) so a commented "# GRUB_CMDLINE_..." line never matches.
-_GRUB_VALUE = re.compile(r'^[ \t]*GRUB_CMDLINE_LINUX_DEFAULT="((?:[^"\\]|\\.)*)"', re.MULTILINE)
 
 
 @dataclass(frozen=True)
@@ -60,13 +58,6 @@ def _refuse_unless_supported(io: HostIO) -> None:
         raise RuntimeError("not SteamOS on a GZ302: refusing to apply")
 
 
-def _grub_index(lines: Sequence[str]):
-    for i, line in enumerate(lines):
-        if _GRUB_ASSIGN.match(line):
-            return i
-    return None
-
-
 # 1. amdgpu display + MES stability: the kernel args in Valve's grub-steamos, then update-grub.
 
 def _amdgpu_check(io: HostIO) -> str:
@@ -74,10 +65,10 @@ def _amdgpu_check(io: HostIO) -> str:
         return "na"
     cmdline = io.read(CMDLINE) or ""
     grub = io.read(GRUB_FILE) or ""
-    match = _GRUB_VALUE.search(grub)
-    if match is None:
+    value = grub_value(grub)
+    if value is None:
         return "needs"
-    if missing_args(cmdline, AMDGPU_ARGS) or missing_args(match.group(1), AMDGPU_ARGS):
+    if missing_args(cmdline, AMDGPU_ARGS) or missing_args(value, AMDGPU_ARGS):
         return "needs"
     return "ok"
 
@@ -87,12 +78,10 @@ def _amdgpu_apply(io: HostIO) -> None:
     text = io.read(GRUB_FILE)
     if text is None:
         raise RuntimeError(f"cannot read {GRUB_FILE}")
-    lines = text.split("\n")
-    index = _grub_index(lines)
-    if index is None:
-        raise RuntimeError(f"no GRUB_CMDLINE_LINUX_DEFAULT line in {GRUB_FILE}")
-    lines[index] = add_grub_args(lines[index], AMDGPU_ARGS)
-    new_text = "\n".join(lines)
+    try:
+        new_text = add_grub_args_text(text, AMDGPU_ARGS)
+    except ValueError as exc:
+        raise RuntimeError(f"{exc} in {GRUB_FILE}") from exc
     if new_text != text:
         io.write(GRUB_FILE, new_text)
     rc, out = io.run(["update-grub"])
