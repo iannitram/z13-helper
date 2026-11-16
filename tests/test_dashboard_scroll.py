@@ -7,7 +7,10 @@ import pytest
 
 def test_dashboard_scrolls_without_squeezing_performance_tiles(monkeypatch):
     pytest.importorskip("PyQt6")
-    from PyQt6.QtWidgets import QApplication
+    from PyQt6.QtCore import QPoint
+    from PyQt6.QtWidgets import (
+        QApplication, QComboBox, QLabel, QPushButton, QSlider,
+    )
     import dashboard_ui
     from theme import SIZE
 
@@ -61,25 +64,46 @@ def test_dashboard_scrolls_without_squeezing_performance_tiles(monkeypatch):
     config.get.return_value = None
     window = dashboard_ui.DashboardUI(controller, sensors, config)
     window.show()
-    app.processEvents()
 
-    root = window.scroll_area.widget()
-    viewport = window.scroll_area.viewport()
-    assert window.width() >= (
-        root.minimumSizeHint().width()
-        + window.scroll_area.verticalScrollBar().sizeHint().width()
-        + 2 * window.scroll_area.frameWidth()
-    )
-    assert window.height() >= SIZE["window_min_h"]
-    for tile in [*window._tiles.values(), window.fans_tile, *window._bright_tiles.values()]:
-        assert tile.mapTo(viewport, tile.rect().bottomRight()).x() <= viewport.width()
+    def settle():
+        # A label's new hint reaches the window over a few posted layout requests.
+        for _ in range(5):
+            app.processEvents()
 
-    window.resize(927, 450)
-    app.processEvents()
+    settle()
+    try:
+        root = window.scroll_area.widget()
+        viewport = window.scroll_area.viewport()
 
-    assert all(tile.height() >= SIZE["tile_h"] for tile in window._tiles.values())
-    assert window.fans_tile.height() >= SIZE["tile_h"]
-    assert window.perf.height() >= window.perf.sizeHint().height()
-    assert window.scroll_area.verticalScrollBar().maximum() > 0
-    window.timer.stop()
-    window.hide()
+        def assert_nothing_clipped_sideways():
+            settle()
+            assert window.width() >= window.minimumSizeHint().width()
+            assert viewport.width() >= root.minimumSizeHint().width()
+            for w in root.findChildren((QPushButton, QSlider, QComboBox)):
+                if w.isVisibleTo(root):
+                    right = w.mapTo(viewport, QPoint(w.width(), 0)).x()
+                    assert right <= viewport.width(), f"{type(w).__name__} {w.objectName()!r} clipped"
+
+        # First show: the column's natural size (a plain QScrollArea opens small).
+        assert window.width() >= root.sizeHint().width()
+        assert window.height() >= SIZE["window_min_h"]
+        assert_nothing_clipped_sideways()
+
+        # Text that grows after start (live readings) must widen the minimum too.
+        window.stat_cpu.findChildren(QLabel)[-1].setText("W" * 120)
+        settle()
+        window.resize(1, 1)
+        assert_nothing_clipped_sideways()
+        assert window.height() == max(SIZE["window_min_h"], window.minimumSizeHint().height())
+
+        # A short window scrolls instead of squeezing the panels.
+        window.resize(window.width(), 450)
+        settle()
+        assert all(tile.height() >= SIZE["tile_h"] for tile in window._tiles.values())
+        assert window.fans_tile.height() >= SIZE["tile_h"]
+        assert window.perf.height() >= window.perf.sizeHint().height()
+        assert window.scroll_area.verticalScrollBar().maximum() > 0
+        assert_nothing_clipped_sideways()
+    finally:
+        window.timer.stop()
+        window.hide()
