@@ -169,31 +169,17 @@ class HardwareController:
         errors = []
         for device in devices:
             argv = ["--device", device, "brightness", level]
-            try:
-                self._run_command(argv, timeout=Z13CTL_WRITE_TIMEOUT_S)
-            except RuntimeError as e:
-                if str(e).startswith("z13ctl write timed out after "):
-                    # A timed-out write may have reached the device. Do not
-                    # retry, recover the lightbar, or continue to another device.
-                    raise
-                if device == "lightbar":
-                    kind = profiles.lightbar_failure_kind(str(e))
-                    recover = {"wedged": profiles.recover_lightbar,
-                               "stale": profiles.recover_lightbar_stale}.get(kind)
-                    if recover:
-                        ok, msg = recover()
-                        if ok:
-                            try:
-                                self._run_command(argv, timeout=Z13CTL_WRITE_TIMEOUT_S)
-                                continue
-                            except RuntimeError as e2:
-                                if str(e2).startswith("z13ctl write timed out after "):
-                                    raise
-                                e = RuntimeError(f"{e2} (still failing after a {msg})")
-                        else:
-                            e = RuntimeError(f"{e}; {msg}")
+            ok, out, timed_out, recovered = profiles.write_lighting_with_recovery(
+                device,
+                lambda: self._run_command(argv, timeout=Z13CTL_WRITE_TIMEOUT_S),
+            )
+            if timed_out:
+                # A timed-out write may have reached the device. Do not
+                # retry, recover the lightbar, or continue to another device.
+                raise RuntimeError(out)
+            if not ok:
                 failed.append(device)
-                errors.append(f"{device}: {e}")
+                errors.append(f"{device}: {out}")
         if len(failed) == len(devices):
             raise RuntimeError("; ".join(errors))
         return failed
@@ -201,7 +187,13 @@ class HardwareController:
     def set_lighting(self, device: str, setting: dict, brightness: str = "high"):
         """Applies one profile's lighting mode and colour to one device."""
         argv = profiles.lighting_argv(device, setting, brightness, self.z13ctl_path)
-        return self._run_command(argv[1:], timeout=Z13CTL_WRITE_TIMEOUT_S)
+        ok, out, timed_out, recovered = profiles.write_lighting_with_recovery(
+            device,
+            lambda: self._run_command(argv[1:], timeout=Z13CTL_WRITE_TIMEOUT_S),
+        )
+        if timed_out or not ok:
+            raise RuntimeError(out)
+        return out
 
     # --- CPU Boost (amd-pstate EPP); host helper, not z13ctl ---
 

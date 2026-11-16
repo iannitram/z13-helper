@@ -1160,6 +1160,88 @@ def recover_lightbar_stale(*, sleep=time.sleep, now=time.time):
     return restart_lightbar_daemon(sleep=sleep)
 
 
+def write_lighting_with_recovery(
+    device: str,
+    write_fn,
+    *,
+    recover_wedged=None,
+    recover_stale=None,
+    timeout_s=None,
+):
+    """One shared write -> classify -> recover once -> retry once helper for lighting writes.
+
+    Executes write_fn for device (keyboard or lightbar).
+    - The keyboard is written without recovery or retry.
+    - For the lightbar:
+      * Success returns (True, out, False, False).
+      * A host/asus-wmi timeout ("z13ctl write timed out after ...") is never retried;
+        returns (False, out, True, False).
+      * An ENODEV failure ('stale') triggers recover_stale() (daemon restart) and one retry.
+      * A USB endpoint timeout ('wedged') triggers recover_wedged() (USB reset + daemon restart)
+        and one retry.
+      * An unclassified failure returns (False, out, False, False) without recovery or retry.
+      * If recovery fails or is rate-limited, returns (False, error_with_reason, False, False).
+      * If retry succeeds, returns (True, out, False, True).
+      * If retry fails, returns (False, retry_error_annotated, False, False).
+
+    write_fn can either:
+    - return Result(rc, out, timed_out) / (rc, out, timed_out)
+    - return str (success) or raise RuntimeError / Exception (failure/timeout)
+
+    Returns (ok, out, timed_out, recovered).
+    decky/main.py carries a copy of this.
+    """
+    if recover_wedged is None:
+        recover_wedged = recover_lightbar
+    if recover_stale is None:
+        recover_stale = recover_lightbar_stale
+    if timeout_s is None:
+        timeout_s = Z13CTL_WRITE_TIMEOUT_S
+
+    def _exec():
+        try:
+            res = write_fn()
+            if isinstance(res, tuple) or hasattr(res, "rc"):
+                rc = getattr(res, "rc", res[0])
+                out = getattr(res, "out", res[1])
+                hit_timeout = getattr(res, "timed_out", res[2] if len(res) > 2 else False)
+                if hit_timeout:
+                    msg = out or f"z13ctl write timed out after {timeout_s} s (kernel asus-wmi hang?)"
+                    if not msg.startswith("z13ctl write timed out after "):
+                        msg = f"z13ctl write timed out after {timeout_s} s (kernel asus-wmi hang?)"
+                    return False, msg, True
+                if rc != 0:
+                    return False, out or f"rc={rc}", False
+                return True, out or "", False
+            return True, str(res or ""), False
+        except Exception as exc:
+            msg = str(exc)
+            if msg.startswith("z13ctl write timed out after "):
+                return False, msg, True
+            return False, msg, False
+
+    ok, out, timed_out = _exec()
+    if timed_out or ok or device != "lightbar":
+        return ok, out, timed_out, False
+
+    kind = lightbar_failure_kind(out)
+    recover = {"wedged": recover_wedged, "stale": recover_stale}.get(kind)
+    if not recover:
+        return False, out, False, False
+
+    rec_ok, rec_msg = recover()
+    if not rec_ok:
+        return False, f"{out}; {rec_msg}", False, False
+
+    retry_ok, retry_out, retry_timed_out = _exec()
+    if retry_timed_out:
+        return False, retry_out, True, False
+    if retry_ok:
+        return True, retry_out, False, True
+
+    return False, f"{retry_out} (still failing after a {rec_msg})", False, False
+
+
 def _max_fans_state():
     return _read_json(MAX_FANS_PATH) or {}
 
@@ -1597,45 +1679,36 @@ def _apply_steps(profile, *, previous=None, z13ctl=Z13CTL,
         if setting:
             level = br or "high"
             argv = lighting_argv(dev, setting, level, z13ctl)
-            rc, out, timed_out = authority.run(argv, timeout=Z13CTL_WRITE_TIMEOUT_S)
+            ok, out, timed_out, recovered = write_lighting_with_recovery(
+                dev,
+                lambda: authority.run(argv, timeout=Z13CTL_WRITE_TIMEOUT_S),
+            )
             if timed_out:
-                out = f"z13ctl write timed out after {Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)"
-            results.append((f"lighting ({dev})", rc == 0,
-                            f"{setting['mode']} / {setting['color']} / {level}" if rc == 0
-                            else (out or f"rc={rc}")))
-            if timed_out:
+                results.append((f"lighting ({dev})", False, out))
                 return finish(results)
+            if ok:
+                msg = f"{setting['mode']} / {setting['color']} / {level}"
+                if recovered:
+                    msg += " (lightbar recovered)"
+                results.append((f"lighting ({dev})", True, msg))
+            else:
+                results.append((f"lighting ({dev})", False, out))
         elif br:
             argv = [z13ctl, "--device", dev, "brightness", br]
-            rc, out, hit_timeout = authority.run(argv, timeout=Z13CTL_WRITE_TIMEOUT_S)
-            timed_out = hit_timeout
-            if hit_timeout:
-                out = f"z13ctl write timed out after {Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)"
-            if not hit_timeout and rc != 0 and dev == "lightbar":
-                kind = lightbar_failure_kind(out)
-                if kind == "wedged":
-                    rec_ok, rec_msg = recover_lightbar()
-                elif kind == "stale":
-                    rec_ok, rec_msg = recover_lightbar_stale()
-                else:
-                    rec_ok = None
-                if rec_ok is not None:
-                    if rec_ok:
-                        rc, out, hit_timeout = authority.run(argv, timeout=Z13CTL_WRITE_TIMEOUT_S)
-                        timed_out = hit_timeout
-                        if hit_timeout:
-                            out = f"z13ctl write timed out after {Z13CTL_WRITE_TIMEOUT_S} s (kernel asus-wmi hang?)"
-                        if rc == 0:
-                            results.append((f"brightness ({dev})", True,
-                                            f"{br} (lightbar recovered)"))
-                            continue
-                        if not hit_timeout:
-                            out = f"{out or f'rc={rc}'} (still failing after a {rec_msg})"
-                    else:
-                        out = f"{out}; {rec_msg}"
-            results.append((f"brightness ({dev})", rc == 0, br if rc == 0 else (out or f"rc={rc}")))
+            ok, out, timed_out, recovered = write_lighting_with_recovery(
+                dev,
+                lambda: authority.run(argv, timeout=Z13CTL_WRITE_TIMEOUT_S),
+            )
             if timed_out:
+                results.append((f"brightness ({dev})", False, out))
                 return finish(results)
+            if ok:
+                msg = br
+                if recovered:
+                    msg += " (lightbar recovered)"
+                results.append((f"brightness ({dev})", True, msg))
+            else:
+                results.append((f"brightness ({dev})", False, out))
 
     # 7. Battery charge limit.
     # A login restore passes login_battery_default=80: a profile that sets no limit
