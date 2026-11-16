@@ -117,6 +117,18 @@ def test_rate_limit_counts_user_lightbar_writes(clock):
     assert ui.writes == [("static", "green", "high")]
 
 
+def test_rate_limit_counts_brightness_writes(clock):
+    ui = Ui()
+    ui._on_hardware_signal_source_done("Brightness", [])    # brightness can write the lightbar
+    ui._signals_active[hs.PROFILE_CHANGED] = clock[0]
+    clock[0] += hs.MIN_WRITE_INTERVAL_S - 0.5
+    ui._tick_hardware_signals()
+    assert ui.writes == []
+    clock[0] += 1.0
+    ui._tick_hardware_signals()
+    assert ui.writes == [("static", "green", "high")]
+
+
 def test_signal_writes_are_spaced_by_the_rate_limit(clock):
     ui = Ui()
     flash(ui, clock)
