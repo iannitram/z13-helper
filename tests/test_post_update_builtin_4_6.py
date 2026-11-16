@@ -250,3 +250,47 @@ def test_rocm_runs_through_runner_with_backups_and_readonly_toggle():
 
 def test_builtin_recipes_4_6_in_order():
     assert [r.id for r in builtin_recipes_4_6(FakeHost().sys())] == ["etc-snapshot", "rocm"]
+
+
+# ---- review fix: per-file created/backup decisions for the compat library ----
+
+_REAL = ROCM_LIB_DIR + "/libfmt.so.11.2.0"
+
+
+def _run_with_restore(h):
+    restored = []
+    env = Env(backup=lambda p: None, readonly_disable=lambda: None, readonly_enable=lambda: None,
+              restore=lambda p, b: restored.append((p, b)))
+    return run_plan((rocm_recipe(h.sys()),), env), restored
+
+
+def test_rocm_partial_install_only_links_and_rollback_removes_only_the_symlink():
+    h = FakeHost(dirs={"/opt/rocm": []}, files={_REAL: "x"}, ldd_out="\tlibfmt.so.11 => not found\n")
+    assert rocm_recipe(h.sys()).creates() == [_LIBFMT11]
+    results, restored = _run_with_restore(h)
+    assert results == [("rocm", "failed")]            # the post-check still fails here
+    argvs = [x[1][0] for x in h.log if x[0] == "run"]
+    assert "curl" not in argvs and "bsdtar" not in argvs
+    assert ("run", ("ln", "-sf", "libfmt.so.11.2.0", _LIBFMT11)) in h.log
+    assert (_LIBFMT11, None) in restored and (_REAL, None) not in restored
+
+
+def test_rocm_partial_install_passes_when_post_check_passes():
+    h = FakeHost(dirs={"/opt/rocm": []}, files={_REAL: "x"})
+    assert _run_with_restore(h)[0] == [("rocm", "done")]
+
+
+def test_rocm_failed_link_step_leaves_preexisting_real_file_alone():
+    # real file present but the link step fails: the real file must never be restored-to-absent
+    h = FakeHost(dirs={"/opt/rocm": []}, files={_REAL: "x"}, rc={"ln": 1})
+    results, restored = _run_with_restore(h)
+    assert results == [("rocm", "failed")]
+    assert all(p != _REAL for p, _b in restored)
+
+
+def test_rocm_nothing_present_creates_both_and_rollback_removes_both():
+    h = FakeHost(dirs={"/opt/rocm": []}, rc={"curl": 22})
+    assert rocm_recipe(h.sys()).creates() == [_LIBFMT11, _REAL]
+    results, restored = _run_with_restore(h)
+    assert results == [("rocm", "failed")]
+    assert (_LIBFMT11, None) in restored and (_REAL, None) in restored

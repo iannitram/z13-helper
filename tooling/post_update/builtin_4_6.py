@@ -118,7 +118,9 @@ def rocm_recipe(sys_: Sys) -> Recipe:
     def creates() -> list:
         out = []
         for lib in _absent_compat():
-            out += [_lib_path(lib), _lib_path(lib, "real")]
+            out.append(_lib_path(lib))
+            if not sys_.exists(_lib_path(lib, "real")):   # an existing real file is never ours to remove
+                out.append(_lib_path(lib, "real"))
         return out
 
     def _install_compat(lib: dict) -> None:
@@ -135,7 +137,11 @@ def rocm_recipe(sys_: Sys) -> Recipe:
         if sys_.run(["pacman", "-S", "--needed", "--noconfirm", *ROCM_PACKAGES]) != 0:
             raise RuntimeError("pacman could not install " + " and ".join(ROCM_PACKAGES))
         for lib in _absent_compat():
-            _install_compat(lib)
+            if sys_.exists(_lib_path(lib, "real")):       # partial install: only the symlink is missing
+                if sys_.run(["ln", "-sf", lib["real"], _lib_path(lib)]) != 0:
+                    raise RuntimeError(f"could not link {lib['soname']} to {lib['real']}")
+            else:
+                _install_compat(lib)
         sys_.write(ROCM_LD_CONF, ROCM_LD_TEXT)
         if sys_.run(["ldconfig"]) != 0:
             raise RuntimeError("ldconfig failed")
