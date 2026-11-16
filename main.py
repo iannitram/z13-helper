@@ -15,6 +15,21 @@ import install_record
 import single_instance
 
 
+def make_command_handler(window, app):
+    def on_command(cmd, _conn):
+        if cmd == "show":
+            window.show()
+            window.raise_()
+            window.activateWindow()
+        elif cmd == "cycle":
+            window.cycle_profile()
+        elif cmd == "quit":
+            app.quit()
+            return True  # hold the connection: client sees EOF once we've exited
+        return False
+    return on_command
+
+
 def main():
     # Single-instance guard runs before PyQt6 is imported so a second launch
     # (or `--quit` from the unit's ExecStop) is cheap. See single_instance.py.
@@ -93,17 +108,7 @@ def main():
     app.aboutToQuit.connect(window._reset_intercept_mode)
     app.aboutToQuit.connect(window._stop_side_button_listener)
 
-    def on_command(cmd, _conn):
-        if cmd == "show":
-            window.show()
-            window.raise_()
-            window.activateWindow()
-        elif cmd == "cycle":
-            window.cycle_profile()
-        elif cmd == "quit":
-            app.quit()
-            return True  # hold the connection: client sees EOF once we've exited
-        return False
+    on_command = make_command_handler(window, app)
 
     server = single_instance.InstanceServer(on_command)
     app.aboutToQuit.connect(server.close)

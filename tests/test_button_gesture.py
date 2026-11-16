@@ -116,8 +116,61 @@ def test_no_input_emulation_or_inputplumber_unmask():
     assert "uinput" not in src and "unmask" not in src
 
 
+def _load_main():
+    spec = importlib.util.spec_from_file_location("z13_main_under_test", REPO / "main.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class _Recorder:
+    def __init__(self):
+        self.calls = []
+
+    def show(self):
+        self.calls.append("show")
+
+    def raise_(self):
+        self.calls.append("raise_")
+
+    def activateWindow(self):
+        self.calls.append("activateWindow")
+
+    def cycle_profile(self):
+        self.calls.append("cycle_profile")
+
+    def quit(self):
+        self.calls.append("quit")
+
+
 def test_main_handles_the_cycle_command():
-    assert 'cmd == "cycle"' in (REPO / "main.py").read_text()
+    window, app = _Recorder(), _Recorder()
+    on_command = _load_main().make_command_handler(window, app)
+    assert on_command("cycle", None) is False
+    assert window.calls == ["cycle_profile"]
+    assert app.calls == []
+
+
+def test_main_show_command_shows_raises_and_activates():
+    window, app = _Recorder(), _Recorder()
+    on_command = _load_main().make_command_handler(window, app)
+    assert on_command("show", None) is False
+    assert window.calls == ["show", "raise_", "activateWindow"]
+    assert app.calls == []
+
+
+def test_main_quit_command_quits_and_holds_the_connection():
+    window, app = _Recorder(), _Recorder()
+    on_command = _load_main().make_command_handler(window, app)
+    assert on_command("quit", None) is True
+    assert app.calls == ["quit"]
+    assert window.calls == []
+
+    window, app = _Recorder(), _Recorder()
+    on_command = _load_main().make_command_handler(window, app)
+    assert on_command("bogus", None) is False
+    assert window.calls == []
+    assert app.calls == []
 
 
 def test_game_mode_cycle_starts_the_app_when_absent(watcher, monkeypatch):
