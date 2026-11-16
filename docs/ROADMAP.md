@@ -30,7 +30,8 @@ dated tick only where an issue comment already shows the evidence.
 
 **2026-11-16 update (device acceptance pass for 1.0, Z13, SteamOS 3.9.5, main 06c4826 unless noted):**
 - **PASS:** #203 Boondock TDP (the app clamps to the firmware floors 28/32/45 W and reports what applied; `z13ctl tdp --get` matched); #199 single state owner, M6 (0 fan-curve writes from z13ctl over 10 min idle, 9:43:35am to 9:53:35am); #201 M3 lightbar and themes, M4 Repair (the Updates panel shows the z13ctl update row; Repair from the panel finished All green, 99 ok, 0 failures) and M8 lightbar reset recovery; #200 support bundle preview (no identifiers); #80 and #61 five of five suspend/resume cycles on Turbo with Max Fans (the custom curve is back 3-6 s after wake); #235 dashboard scroll fix (PR #242; window minimum 579x480, nothing clipped); #122 changed-plugin repair reported "Decky frontend: pass" and All green; #30 one-hour RSS soak flat (all six processes; Decky backend 47.1 MiB), closed as not reproduced (the soak length is the owner's call: 1 h, not 24 h).
-- **Still pending for 1.0:** M9 (Quick Access menu focus with a game running, #201) and M7 (`install.sh --post-update --only amdgpu,rocm` plus a reboot, #200). Then the v1.0.0 tag (#204).
+- **FAILED:** M7 (`install.sh --post-update --only amdgpu,rocm`, #200), ran 2026-11-16 at 1:14pm, blocked by #244 and #245. #244: the amdgpu task failed ("no GRUB_CMDLINE_LINUX_DEFAULT line in /etc/default/grub-steamos"; 3.9.5 sets the parameters in a continued `GRUB_CMDLINE_LINUX` block) although the parameters are already applied and on `/proc/cmdline`; the backup was restored. #245: the rocm task reported done, but `rocminfo` still fails because `libfmt.so.11` is missing (the repo has fmt 12.2.0, which provides only `libfmt.so.12`). No reboot was needed or done.
+- **Still pending for 1.0:** M9 (Quick Access menu focus with a game running, #201), and the fixes for #244 and #245 followed by a passing M7 re-run. Then the v1.0.0 tag (#204).
 - **New, non-blocking, after 1.0:** #243, a desktop-launched instance hit a Qt SIGABRT about 10 s after start.
 
 ### Shipped and working
@@ -429,7 +430,7 @@ side button, fans, profiles and the QAM plugin back without any other step.
 
 ---
 
-## 9b. Phase 12c — Post-update tasks in the Updates panel ✅ built (#27 and its sub-issues #67-#72 closed 2026-11-04/05); acceptance on a real SteamOS update pending (#200: support bundle preview passed 2026-11-16, M7 `--post-update --only amdgpu,rocm` plus reboot still pending)
+## 9b. Phase 12c — Post-update tasks in the Updates panel ✅ built (#27 and its sub-issues #67-#72 closed 2026-11-04/05); acceptance on a real SteamOS update pending (#200: support bundle preview passed 2026-11-16, M7 `--post-update --only amdgpu,rocm` ran 2026-11-16 and failed, blocked by #244 and #245)
 
 **Why.** A SteamOS atomic update ("nuclear update") wipes `/usr`, Valve's grub file and the pacman
 keyring, and rolls `/etc` changes back unless they're registered. Today the maintainer re-applies
