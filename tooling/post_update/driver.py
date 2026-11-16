@@ -7,6 +7,7 @@ ones; `repair`, `checks`, `bundle` and `suspend` are the system-repair subcomman
 write. Every applied task leaves an entry in `rollback-record.json` next to its backups.
 """
 
+import dataclasses
 import json
 import logging
 import os
@@ -283,6 +284,25 @@ def _pick(candidates: Sequence, input_fn=input) -> list:
     return chosen
 
 
+def _is_ok(recipe) -> bool:
+    try:
+        return recipe.check() == "ok"
+    except Exception:  # noqa: BLE001 - a check that cannot run (needs root) is not "ok"
+        return False
+
+
+def _capture_errors(env: Env, reasons: dict) -> Env:
+    """env whose record also keeps each failed task's error text, so main can print it."""
+    inner = env.record
+
+    def record(entry: dict) -> None:
+        if entry.get("status") == "failed" and entry.get("error"):
+            reasons[entry["id"]] = entry["error"]
+        if inner is not None:
+            inner(entry)
+    return dataclasses.replace(env, record=record)
+
+
 def main(argv: Sequence[str], recipes: Sequence | None = None, env: Env | None = None,
          input_fn=input, dry_run: bool = False) -> int:
     """0 = all picked tasks done (or nothing to do), 1 = a task failed, 2 = bad arguments.
@@ -331,11 +351,19 @@ def main(argv: Sequence[str], recipes: Sequence | None = None, env: Env | None =
     else:
         return 0
     ordered = order_tasks(with_keyring(selected, recipes))
+    # A task whose check already says "ok" has nothing to do: no apply, no backup, no reboot.
+    already = [r for r in ordered if _is_ok(r)]
+    ordered = [r for r in ordered if r not in already]
     print(plan_text(ordered))
+    for r in already:
+        print(f"{r.id}: already applied (no change, no reboot needed)")
     if not ordered or dry_run or "--dry-run" in argv:
         return 0
-    results = run_plan(ordered, env or make_env(home))
+    reasons: dict = {}
+    results = run_plan(ordered, _capture_errors(env or make_env(home), reasons))
     for rid, status in results:
         print(f"{rid}: {status}")
+        if status == "failed" and reasons.get(rid):
+            print(f"  reason: {reasons[rid]}")
     mark_reboot(home, [r.id for r in ordered if r.reboot and dict(results).get(r.id) == "done"])
     return 1 if any(s == "failed" for _, s in results) else 0

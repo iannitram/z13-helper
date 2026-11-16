@@ -104,3 +104,36 @@ def test_list_pending_says_which_tasks_could_not_be_checked(capsys):
     assert driver.main(["--list-pending"], recipes=rs) == 0
     out = capsys.readouterr().out
     assert "pending: none" in out and "Could not check without root" in out and "keyring" in out
+
+
+# --- #244: already applied is success; the failure reason reaches the console -----------------
+
+def _stub_recipe(id, check, apply):
+    from post_update.recipe import Recipe
+    return Recipe(id=id, title="t", fixes="f", check=check, apply=apply)
+
+
+def _no_env():
+    from post_update.runner import Env
+    return Env(backup=lambda p: None, readonly_disable=lambda: None, readonly_enable=lambda: None)
+
+
+def test_main_reports_a_task_that_is_already_applied_and_does_not_apply_it(capsys):
+    from post_update import driver
+    applied = []
+    r = _stub_recipe("amdgpu", lambda: "ok", lambda: applied.append(1))
+    assert driver.main(["--post-update", "--only", "amdgpu"], recipes=[r], env=_no_env()) == 0
+    out = capsys.readouterr().out
+    assert "amdgpu: already applied" in out and "reboot is needed" not in out
+    assert applied == []
+
+
+def test_main_prints_the_failure_reason_next_to_failed(capsys):
+    from post_update import driver
+
+    def boom():
+        raise RuntimeError("no GRUB_CMDLINE_LINUX_DEFAULT or GRUB_CMDLINE_LINUX line in /etc/default/grub-steamos")
+    r = _stub_recipe("amdgpu", lambda: "needs", boom)
+    assert driver.main(["--post-update", "--only", "amdgpu"], recipes=[r], env=_no_env()) == 1
+    out = capsys.readouterr().out
+    assert "amdgpu: failed\n  reason: no GRUB_CMDLINE_LINUX_DEFAULT or GRUB_CMDLINE_LINUX line" in out

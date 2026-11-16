@@ -275,3 +275,83 @@ def test_carry_forward_apply_changes_nothing():
     h = host(files=_listing(OUR_CONF)["files"], listing=_listing(OUR_CONF)["listing"])
     recipe(h, "carry-forward").apply()
     assert h.writes == [] and h.commands == []
+
+
+# --- 1b. amdgpu on SteamOS 3.9.5: GRUB_CMDLINE_LINUX block, no _DEFAULT line (#244) ----------
+
+GRUB_395 = '''# Required for Jupiter
+
+# We set amdgpu.lockup_timeout in order to control the TDR for each ring
+# 0 (GFX): 5s (was 10s)
+
+GRUB_CMDLINE_LINUX="${GRUB_CMDLINE_LINUX} \\
+log_buf_len=4M \\
+amd_iommu=off \\
+amdgpu.lockup_timeout=5000,10000,10000,5000 \\
+ttm.pages_min=2097152 ttm.pages_limit=13631488 ttm.page_pool_size=13631488 \\
+amdgpu.sched_hw_submission=4 \\
+amdgpu.dcdebugmask=0x20e10 amdgpu.gpu_recovery=1 amdgpu.cwsr_enable=0 amdgpu.sg_display=0 amdgpu.abmlevel=0 \\
+audit=0 \\
+fbcon=vc:4-6 \\
+fsck.mode=auto \\
+fsck.repair=preen \\
+"
+'''
+CMDLINE_395 = ("BOOT_IMAGE=/boot/vmlinuz root=UUID=1 amdgpu.lockup_timeout=5000,10000,10000,5000 "
+               + " ".join(AMDGPU_ARGS) + " audit=0 quiet\n")
+
+
+def test_amdgpu_395_layout_all_present_is_already_applied():
+    h = host(grub=GRUB_395, cmdline=CMDLINE_395)
+    assert recipe(h, "amdgpu").check() == "ok"
+    assert h.writes == [] and h.commands == []
+
+
+def test_amdgpu_395_layout_one_missing_is_added_inside_the_block():
+    grub = GRUB_395.replace(" amdgpu.sg_display=0", "")
+    h = host(grub=grub, cmdline=CMDLINE_395)
+    r = recipe(h, "amdgpu")
+    assert r.check() == "needs"
+    r.apply()
+    text = h.files[GRUB_FILE]
+    assert text.count("amdgpu.sg_display=0") == 1
+    assert 'amdgpu.sg_display=0 \\\nfsck' not in text  # new line stands before the closing quote
+    assert text.endswith('fsck.repair=preen \\\namdgpu.sg_display=0 \\\n"\n')
+    assert text.startswith(grub.split('GRUB_CMDLINE_LINUX=')[0])
+    assert "GRUB_CMDLINE_LINUX_DEFAULT" not in text
+    assert h.commands == [["update-grub"]]
+
+
+def test_amdgpu_395_layout_changed_value_is_replaced_not_duplicated():
+    grub = GRUB_395.replace("amdgpu.gpu_recovery=1", "amdgpu.gpu_recovery=0")
+    h = host(grub=grub, cmdline=CMDLINE_395)
+    recipe(h, "amdgpu").apply()
+    text = h.files[GRUB_FILE]
+    assert text.count("amdgpu.gpu_recovery=") == 1 and "amdgpu.gpu_recovery=1 " in text
+    assert text == GRUB_395
+
+
+def test_amdgpu_395_layout_apply_when_all_present_changes_nothing():
+    h = host(grub=GRUB_395, cmdline=CMDLINE_395)
+    recipe(h, "amdgpu").apply()
+    assert h.writes == []
+
+
+def test_amdgpu_default_layout_still_wins_when_both_are_present():
+    grub = 'GRUB_CMDLINE_LINUX="a"\nGRUB_CMDLINE_LINUX_DEFAULT="quiet"\n'
+    h = host(grub=grub)
+    recipe(h, "amdgpu").apply()
+    text = h.files[GRUB_FILE]
+    assert text.startswith('GRUB_CMDLINE_LINUX="a"\nGRUB_CMDLINE_LINUX_DEFAULT="quiet amdgpu.')
+
+
+def test_amdgpu_single_line_grub_cmdline_linux_works():
+    h = host(grub='GRUB_CMDLINE_LINUX="quiet"\n')
+    recipe(h, "amdgpu").apply()
+    assert h.files[GRUB_FILE].startswith('GRUB_CMDLINE_LINUX="quiet amdgpu.dcdebugmask=0x20e10 ')
+
+
+def test_amdgpu_apply_error_names_both_variables():
+    h = host(grub="GRUB_TIMEOUT=0\n")
+    with pytest.raises(RuntimeError, match="GRUB_CMDLINE_LINUX_DEFAULT or GRUB_CMDLINE_LINUX"):
+        recipe(h, "amdgpu").apply()

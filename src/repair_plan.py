@@ -28,12 +28,11 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
 from post_update.builtin import AMDGPU_ARGS, GRUB_FILE
-from post_update.cmdline import add_grub_args, missing_args
+from post_update.cmdline import add_grub_args_text, grub_value, missing_args
 from post_update_checks import expected_for, permission_problem
 from post_update_state import read_build_id
 from system_inventory import BIOS_VERSION, EC_VERSION, KERNEL_RELEASE, OS_RELEASE, PERMISSION_PATHS
 
-_GRUB_VALUE = re.compile(r'^[ \t]*GRUB_CMDLINE_LINUX_DEFAULT="((?:[^"\\]|\\.)*)"', re.MULTILINE)
 _UNIT = re.compile(r"unit:(user|system):([A-Za-z0-9@:._-]+)\Z")
 _PERMISSION = "permission:"
 # Package names behind the inventory checks that read a package version.
@@ -164,15 +163,14 @@ def _kernel_args_step(io: RepairIO, entry: dict) -> RepairStep:
         text = io.read(GRUB_FILE)
         if text is None:
             raise RuntimeError(f"cannot read {GRUB_FILE}")
-        lines = text.split("\n")
-        idx = next((i for i, l in enumerate(lines) if _GRUB_VALUE.match(l)), None)
-        if idx is None:
-            raise RuntimeError(f"no GRUB_CMDLINE_LINUX_DEFAULT line in {GRUB_FILE}")
+        try:
+            new_text = add_grub_args_text(text, AMDGPU_ARGS)
+        except ValueError as exc:
+            raise RuntimeError(f"{exc} in {GRUB_FILE}") from exc
         io.write(backup, text)               # backup before replace
-        lines[idx] = add_grub_args(lines[idx], AMDGPU_ARGS)
 
         def change():
-            _write_root(io, GRUB_FILE, "\n".join(lines))
+            _write_root(io, GRUB_FILE, new_text)
             entry["status"] = "changed"   # only now is there something to roll back
             rc, out = _root(io, ["update-grub"])
             if rc != 0:
@@ -181,8 +179,8 @@ def _kernel_args_step(io: RepairIO, entry: dict) -> RepairStep:
 
     def verify():
         text = io.read(GRUB_FILE) or ""
-        m = _GRUB_VALUE.search(text)
-        return bool(m) and not missing_args(m.group(1), AMDGPU_ARGS)
+        value = grub_value(text)
+        return value is not None and not missing_args(value, AMDGPU_ARGS)
 
     def rollback():
         old = io.read(backup)

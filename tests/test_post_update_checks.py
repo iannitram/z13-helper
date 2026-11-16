@@ -31,8 +31,8 @@ def test_real_inventory_rows():
 def test_missing_kernel_args_are_named():
     rows = by_id(run_checks(collect_inventory(fake(GOOD))))
     assert not rows["kernel_args"].passed
-    assert "dcdebugmask=0x20e10" in rows["kernel_args"].detail
-    assert "gpu_recovery=1" not in rows["kernel_args"].detail
+    assert "amdgpu.dcdebugmask=0x20e10" in rows["kernel_args"].detail
+    assert "amdgpu.gpu_recovery=1" not in rows["kernel_args"].detail
 
 
 def test_ppt_value_with_group_write_for_users_is_healthy():
