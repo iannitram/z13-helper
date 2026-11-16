@@ -190,6 +190,8 @@ class DashboardUI(QMainWindow):
         self._signals_shown_at = {}
         self._signals_last_write = None
         self._signals_pending = None
+        self._signals_failures = 0
+        self._signals_retry_at = None
         self._signals_timer = QTimer(self)
         self._signals_timer.setInterval(250)
         self._signals_timer.timeout.connect(self._tick_hardware_signals)
@@ -765,10 +767,17 @@ class DashboardUI(QMainWindow):
             if pending is None:
                 return
             action, pattern, event, started = pending
+            now = time.monotonic()
+            # A failed write may still have reached the device: stamp it like a success
+            # and back off, so a wedged lightbar is not retried every tick.
+            self._signals_last_write = now
             if isinstance(result, Exception):
+                self._signals_failures = getattr(self, "_signals_failures", 0) + 1
+                self._signals_retry_at = now + hw_signals.failure_backoff(self._signals_failures)
                 logging.getLogger("z13.signals").warning("Lightbar signal write failed: %s", result)
                 return
-            self._signals_last_write = time.monotonic()
+            self._signals_failures = 0
+            self._signals_retry_at = None
             if action == "play":
                 self._signals_shown = pattern
                 if event and hw_signals.signal_for(event).duration_s is not None:
@@ -793,6 +802,12 @@ class DashboardUI(QMainWindow):
         """Play the highest-priority app signal and restore the active profile's lightbar."""
         if self._signals_pending is not None:
             return
+        if not self.control.writes_allowed():
+            return  # #22: no lightbar writes on an unsupported machine
+        now = time.monotonic()
+        retry_at = getattr(self, "_signals_retry_at", None)
+        if retry_at is not None and now < retry_at:
+            return
         profile = self.control.active()
         saved = (profile.get("lighting") or {}).get(hw_signals.DEVICE)
         restore = None
@@ -800,7 +815,6 @@ class DashboardUI(QMainWindow):
             brightness = profile.get("brightness") or self.config.get("brightness", "high")
             restore = hw_signals.Pattern(saved["mode"], saved["color"], brightness)
         enabled = self.config.get("hardware_signals_enabled", True) is not False
-        now = time.monotonic()
         action, pattern = hw_signals.next_action(
             self._signals_active, self._signals_shown, now=now,
             last_write=self._signals_last_write, enabled=enabled, restore=restore,
@@ -1238,6 +1252,8 @@ class DashboardUI(QMainWindow):
             return False, "This rollback record format is not supported."
         if not self.control.writes_allowed():
             return False, "Unsupported machine: hardware controls are disabled."
+        if spec["kind"] in timeline.SETTING_KINDS and not spec.get("profile"):
+            return False, timeline.SETTING_NO_PROFILE_REASON
 
         def go():
             kind = spec["kind"]
@@ -1255,11 +1271,12 @@ class DashboardUI(QMainWindow):
                 timeline.record_goal_change(goal=after["goal"], previous_goal=before["goal"],
                                             before=before, after=after, profile=active_name, defer=True)
                 return message
-            active = profiles.get_profile(profiles.active_name())
-            if active is None:
-                raise RuntimeError("There is no active profile to restore this setting into.")
-            active[kind] = spec["value"]
-            return authority.edit(active, kind)
+            # Write into the profile the entry came from, never whichever is active now.
+            target = profiles.get_profile(spec["profile"])
+            if target is None:
+                raise RuntimeError(f"Profile {spec['profile']!r} no longer exists.")
+            target[kind] = spec["value"]
+            return authority.edit(target, kind)
 
         self.control._submit("Timeline rollback", go)
         return True, "Rollback queued. The result shows in the status bar and adds a new timeline entry."

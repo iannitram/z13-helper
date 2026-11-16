@@ -1190,12 +1190,12 @@ def _edit_field(field, value, expected):
         return {"ok": False, "saved": False, "message": str(exc), "failed": []}
 
 
-def _timeline_setting(kind, summary, before, after, ok):
+def _timeline_setting(kind, summary, before, after, ok, profile=None):
     """Best-effort timeline entry for a manual setting write; never blocks or fails it."""
     try:
         timeline.record_setting_change(
             kind=kind, summary=summary, before=before, after=after,
-            ok=ok, path=TIMELINE_PATH, defer=True,
+            ok=ok, path=TIMELINE_PATH, defer=True, profile=profile,
         )
     except Exception as exc:  # noqa: BLE001 - timeline recording is best-effort
         _log_timeline_failure(f"{kind} record", exc)
@@ -1264,6 +1264,7 @@ def _edit_field_recorded(field, value, expected):
         def _read():
             return _load_state().get("brightness")
     before_v = _before_snapshot(_read)
+    profile_name = expected or _before_snapshot(lambda: (active_profile(_read_store()) or {}).get("name"))
 
     result = _edit_field(field, value, expected)
 
@@ -1275,8 +1276,26 @@ def _edit_field_recorded(field, value, expected):
             summary = f"Charge limit {value}%"
         else:
             summary = f"Brightness {value}"
-        _timeline_setting(field, summary, {field: before_v}, {field: value}, ok)
+        _timeline_setting(field, summary, {field: before_v}, {field: value}, ok, profile_name)
     return result
+
+
+def _rollback_setting(field, value, profile_name):
+    """Restore one setting into the profile its timeline entry came from (review B1).
+
+    The active profile goes through the guarded, recorded edit (refused if the
+    selection changes underneath); an inactive one is a save-only edit, so live
+    hardware is untouched until that profile is applied.
+    """
+    import profiles
+    if profile_name == (active_profile(_read_store()) or {}).get("name"):
+        return _edit_field_recorded(field, value, profile_name)
+    target = profiles.get_profile(profile_name)
+    if target is None:
+        return {"ok": False, "message": f"Profile {profile_name!r} no longer exists."}
+    target[field] = value
+    authority.edit(target, field)
+    return {"ok": True, "message": f"Saved setting restored into {profile_name} (not active, saved only)."}
 
 
 class Plugin:
@@ -1304,11 +1323,17 @@ class Plugin:
         while True:
             self._signals_wakeup.clear()
             now = time.monotonic()
-            action, pattern = hw_signals.next_action(
-                self._signals_active, self._signals_shown, now=now,
-                last_write=self._signals_last_write, enabled=self._signals_enabled(),
-                restore=await asyncio.to_thread(self._signal_restore_pattern),
-                shown_at=self._signals_shown_at)
+            retry_at = getattr(self, "_signals_retry_at", None)
+            if retry_at is not None and now < retry_at:
+                action, pattern = "none", None   # backing off after a failed write
+            elif not _writes_allowed():
+                action, pattern = "none", None   # #22: no lightbar writes on an unsupported machine
+            else:
+                action, pattern = hw_signals.next_action(
+                    self._signals_active, self._signals_shown, now=now,
+                    last_write=self._signals_last_write, enabled=self._signals_enabled(),
+                    restore=await asyncio.to_thread(self._signal_restore_pattern),
+                    shown_at=self._signals_shown_at)
             if action != "none":
                 chosen = pattern or await asyncio.to_thread(self._signal_restore_pattern)
                 if chosen is None:
@@ -1318,14 +1343,22 @@ class Plugin:
                         self._signals_shown_at.clear()
                 else:
                     try:
+                        # One attempt per lock hold: a failure releases the lock and backs off.
                         async with _lock():
                             await asyncio.to_thread(self._signal_controller.set_lighting,
                                                     hw_signals.DEVICE, chosen.setting(),
                                                     chosen.brightness)
                     except Exception as exc:  # noqa: BLE001
+                        # The failed write may have reached the device: stamp it and back off.
+                        self._signals_last_write = time.monotonic()
+                        self._signals_failures = getattr(self, "_signals_failures", 0) + 1
+                        self._signals_retry_at = (self._signals_last_write
+                                                  + hw_signals.failure_backoff(self._signals_failures))
                         decky.logger.warning("Lightbar signal write failed: %s", exc)
                     else:
                         self._signals_last_write = time.monotonic()
+                        self._signals_failures = 0
+                        self._signals_retry_at = None
                         if action == "play":
                             self._signals_shown = pattern
                             signal = hw_signals.active_signal(
@@ -1486,6 +1519,10 @@ class Plugin:
                 )
             )
         ok = rc == 0 and "ERR  profile" not in out
+        # The apply writes the lightbar: the signal rate limit must see it (as set_app_profile).
+        self._signals_last_write = time.monotonic()
+        if ok:
+            self._signal_profile_changed()
         timeout_message = _extract_z13ctl_timeout(out)
         message = (
             f"{profile} applied"
@@ -1597,9 +1634,9 @@ class Plugin:
                 if kind == "goal":
                     await asyncio.to_thread(_set_max_fans_recorded, spec["goal"] == "max")
                     return {"ok": True, "message": "Saved fan goal restored."}
-                field = kind
-                value = spec["value"]
-                result = await asyncio.to_thread(_edit_field_recorded, field, value, "")
+                if not spec.get("profile"):
+                    return {"ok": False, "message": timeline.SETTING_NO_PROFILE_REASON}
+                result = await asyncio.to_thread(_rollback_setting, kind, spec["value"], spec["profile"])
                 return {"ok": bool(result.get("ok")),
                         "message": result.get("message") or ("Saved setting restored." if result.get("ok") else "Setting restore failed.")}
             except (OSError, RuntimeError, ValueError, KeyError) as exc:
@@ -1613,6 +1650,8 @@ class Plugin:
         self._signals_shown = None
         self._signals_shown_at = {}
         self._signals_last_write = None
+        self._signals_failures = 0
+        self._signals_retry_at = None
         self._signals_wakeup = asyncio.Event()
         self._signal_controller = HardwareController(Z13CTL)
         self._memory_guard = BackendMemoryGuard()

@@ -24,6 +24,12 @@ GOAL_NOT_MET = "goal_not_met"
 # measured separately from its first successful signal write.
 MIN_WRITE_INTERVAL_S = 3.0
 ONE_SHOT_S = 3.0
+# After a failed signal write the runner waits before trying again: FAILURE_BACKOFF_S
+# after the first failure, doubling per consecutive failure up to FAILURE_BACKOFF_MAX_S.
+# A wedged lightbar or a timed-out z13ctl write (which may have reached the device) is
+# never retried at the runner's tick rate.
+FAILURE_BACKOFF_S = 5.0
+FAILURE_BACKOFF_MAX_S = 60.0
 
 
 @dataclass(frozen=True)
@@ -117,6 +123,13 @@ def next_action(active: Mapping[str, Optional[float]], shown: Optional[Pattern],
     if want.pattern == shown or not _may_write(now, last_write):
         return "none", None
     return "play", want.pattern
+
+
+def failure_backoff(failures: int) -> float:
+    """Seconds to wait after `failures` consecutive failed signal writes (0 for none)."""
+    if failures <= 0:
+        return 0.0
+    return min(FAILURE_BACKOFF_S * 2 ** (failures - 1), FAILURE_BACKOFF_MAX_S)
 
 
 def _may_write(now: float, last_write: Optional[float]) -> bool:

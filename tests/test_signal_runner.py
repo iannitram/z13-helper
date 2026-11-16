@@ -32,8 +32,10 @@ class Ui:
         self.config = Config(hardware_signals_enabled=enabled)
         self.writes = []
         self.submitted = []
+        self.allowed = True
         self.control = types.SimpleNamespace(
-            active=lambda: {"lighting": {hs.DEVICE: lighting} if lighting else {}})
+            active=lambda: {"lighting": {hs.DEVICE: lighting} if lighting else {}},
+            writes_allowed=lambda: self.allowed)
         self.worker = types.SimpleNamespace(submit=self._submit)
         self.controller = types.SimpleNamespace(
             set_lighting=lambda dev, setting, brightness: self.writes.append(
@@ -43,6 +45,8 @@ class Ui:
         self._signals_shown_at = {}
         self._signals_last_write = None
         self._signals_pending = None
+        self._signals_failures = 0
+        self._signals_retry_at = None
 
     def _submit(self, label, fn):
         self.submitted.append(label)
@@ -147,3 +151,55 @@ def test_no_saved_lighting_turns_the_bar_off_after_the_flash(clock):
     clock[0] += hs.ONE_SHOT_S + 0.1
     ui._tick_hardware_signals()
     assert ui.writes[-1] == ("static", "green", "off")
+
+
+# ---------------------------------------------------------------------------
+# Review A (#211): failed writes back off; the tick honours the #22 gate
+# ---------------------------------------------------------------------------
+
+def _pending_profile_flash(ui, clock):
+    ui._on_hardware_signal_source_done("Profile → Turbo", PROFILE_OK)
+    clock[0] += hs.MIN_WRITE_INTERVAL_S + 0.1
+
+
+def test_a_failed_lightbar_write_is_not_retried_before_the_backoff_runs_out(clock):
+    ui = Ui()
+    _pending_profile_flash(ui, clock)
+    ui._tick_hardware_signals()
+    assert len(ui.writes) == 1
+    ui._on_hardware_signal_source_done("Hardware signal lightbar", RuntimeError("z13ctl timed out"))
+    assert ui._signals_last_write == clock[0], "a failed write is stamped like a success"
+    # Many 250 ms ticks, past the plain rate limit but inside the backoff: no retry.
+    for _ in range(int(hs.failure_backoff(1) / 0.25) - 1):
+        clock[0] += 0.25
+        ui._tick_hardware_signals()
+    assert len(ui.writes) == 1
+    clock[0] += 0.5
+    ui._tick_hardware_signals()
+    assert len(ui.writes) == 2, "retried once the backoff ran out"
+
+
+def test_consecutive_failures_back_off_longer_and_a_success_resets(clock):
+    assert hs.failure_backoff(0) == 0
+    assert hs.failure_backoff(1) < hs.failure_backoff(2) < hs.failure_backoff(3)
+    assert hs.failure_backoff(50) == hs.FAILURE_BACKOFF_MAX_S
+    ui = Ui()
+    _pending_profile_flash(ui, clock)
+    ui._tick_hardware_signals()
+    ui._on_hardware_signal_source_done("Hardware signal lightbar", RuntimeError("wedged"))
+    clock[0] += hs.failure_backoff(1) + 0.1
+    ui._tick_hardware_signals()
+    ui._on_hardware_signal_source_done("Hardware signal lightbar", RuntimeError("wedged"))
+    assert ui._signals_retry_at == clock[0] + hs.failure_backoff(2)
+    clock[0] += hs.failure_backoff(2) + 0.1
+    ui._tick_hardware_signals()
+    ui.finish()
+    assert ui._signals_failures == 0 and ui._signals_retry_at is None
+
+
+def test_signal_tick_writes_nothing_on_an_unsupported_machine(clock):
+    ui = Ui()
+    ui.allowed = False
+    _pending_profile_flash(ui, clock)
+    ui._tick_hardware_signals()
+    assert ui.writes == [] and ui.submitted == []

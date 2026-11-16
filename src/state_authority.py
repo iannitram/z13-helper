@@ -223,6 +223,7 @@ def _push_field(profile, field, *, devices=None, before=None):
                 ok=ok,
                 path=None,
                 defer=True,   # never write the timeline inside a hardware transaction
+                profile=profile.get("name"),
             )
         except Exception as e:
             logger.warning("timeline recording failed for %s: %s", field, e)

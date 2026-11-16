@@ -154,8 +154,11 @@ def _entries():
     return timeline.read_entries()
 
 
-def _setting_entry(kind, value):
-    return {"id": "old", "rollback": {"kind": kind, "state": {kind: value}}}
+def _setting_entry(kind, value, profile="Balanced"):
+    rb = {"kind": kind, "state": {kind: value}}
+    if profile is not None:
+        rb["profile"] = profile
+    return {"id": "old", "rollback": rb}
 
 
 def test_unsupported_record_is_refused_and_nothing_is_queued(dashboard, profiles_env, fake_host):
@@ -255,14 +258,51 @@ def test_profile_rollback_of_a_deleted_profile_fails_without_writing(dashboard, 
     assert fake_host.calls == [] and _entries() == []
 
 
-def test_setting_rollback_without_an_active_profile_fails_without_writing(dashboard, profiles_env, fake_host, monkeypatch):
+def test_setting_rollback_into_a_deleted_profile_fails_without_writing(dashboard, profiles_env, fake_host, monkeypatch):
     _store(profiles_env)
     monkeypatch.setattr(profiles, "get_profile", lambda *a, **k: None)
     ui = _fake_ui()
     ok, _ = _rollback(dashboard, ui, _setting_entry("battery_limit", 85))
     assert ok and isinstance(ui.control.results[0], RuntimeError)
-    assert "no active profile" in str(ui.control.results[0])
+    assert "no longer exists" in str(ui.control.results[0])
     assert fake_host.calls == []
+
+
+# Review B1 (#211): a setting rollback goes to the profile its entry came from.
+
+def test_setting_rollback_writes_the_recorded_profile_not_the_active_one(dashboard, profiles_env, fake_host):
+    _store(profiles_env, active="Balanced")
+    ui = _fake_ui()
+    ok, _ = _rollback(dashboard, ui, _setting_entry("battery_limit", 55, profile="Silent"))
+    assert ok and not isinstance(ui.control.results[0], Exception), ui.control.results
+    assert profiles.get_profile("Silent")["battery_limit"] == 55
+    assert profiles.get_profile("Balanced")["battery_limit"] == 80, "the active profile is untouched"
+    assert not any("battery" in " ".join(c.argv) for c in fake_host.calls), "inactive: saved only"
+
+
+def test_setting_rollback_without_a_recorded_profile_is_refused(dashboard, profiles_env, fake_host):
+    _store(profiles_env)
+    ui = _fake_ui()
+    ok, message = _rollback(dashboard, ui, _setting_entry("battery_limit", 85, profile=None))
+    assert not ok and message == timeline.SETTING_NO_PROFILE_REASON
+    assert ui.control.submitted == [] and fake_host.calls == []
+    assert profiles.get_profile("Balanced")["battery_limit"] == 80
+
+
+def test_a_recorded_setting_change_names_its_profile(tmp_path):
+    rec = timeline.record_setting_change(
+        kind="battery_limit", summary="Charge limit 60%", before={"battery_limit": 80},
+        after={"battery_limit": 60}, path=tmp_path / "t.jsonl", profile="Gaming")
+    assert rec["profile"] == "Gaming" and rec["rollback"]["profile"] == "Gaming"
+    assert timeline.rollback_spec(rec)["profile"] == "Gaming"
+
+
+def test_the_edit_owner_records_the_profile_it_wrote(dashboard, profiles_env, fake_host):
+    _store(profiles_env, active="Balanced")
+    import state_authority
+    state_authority.set_field("battery_limit", 70)
+    (entry,) = _entries()
+    assert entry["rollback"]["profile"] == "Balanced"
 
 
 def test_a_failed_hardware_write_surfaces_and_records_a_failed_entry(dashboard, profiles_env, fake_host):
