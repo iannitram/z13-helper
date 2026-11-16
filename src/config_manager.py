@@ -85,11 +85,11 @@ if __name__ == "__main__":
     # Test config manager in current directory
     test_config = "test_config.json"
     cm = ConfigManager(test_config)
-    
+
     print("Testing ConfigManager...")
     cm.set("battery_limit", 80)
     cm.set("profile", "balanced")
-    
+
     print(f"Battery Limit: {cm.get('battery_limit')}")
     print(f"Profile: {cm.get('profile')}")
     print(f"Non-existent key: {cm.get('non_existent', 'DefaultValue')}")

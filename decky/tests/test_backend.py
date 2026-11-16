@@ -885,6 +885,27 @@ class PostUpdateRepairTest(unittest.TestCase):
         self.assertIsNone(out["plan"])
 
 
+class ComputeSmokeRuntimeTest(unittest.TestCase):
+    """#26: the QAM picks HIP or Vulkan; the plugin passes the choice through, refuses the rest."""
+
+    def test_runtime_choice_reaches_the_smoke_test(self):
+        with mock.patch.object(m.compute_health, "smoke_test", return_value={"ok": True}) as st:
+            asyncio.run(m.Plugin().run_compute_smoke("vulkan", 64))
+        st.assert_called_once_with(64, runtime="vulkan")
+
+    def test_default_is_hip(self):
+        with mock.patch.object(m.compute_health, "smoke_test", return_value={"ok": True}) as st:
+            asyncio.run(m.Plugin().run_compute_smoke())
+        st.assert_called_once_with(m.compute_health.SMOKE_DEFAULT_MIB, runtime="hip")
+
+    def test_unknown_runtime_runs_nothing(self):
+        calls = fake_host(self)
+        r = asyncio.run(m.Plugin().run_compute_smoke("cuda"))
+        self.assertFalse(r["ok"])
+        self.assertIn("Unknown runtime", r["detail"])
+        self.assertEqual(calls.calls, [])
+
+
 if __name__ == "__main__":
     unittest.main()
 

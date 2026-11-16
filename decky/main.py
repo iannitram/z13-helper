@@ -1390,9 +1390,12 @@ class Plugin:
         # Read-only; the host probe can take a few seconds, so off the event loop.
         return await asyncio.get_event_loop().run_in_executor(None, compute_health.health_report)
 
-    async def run_compute_smoke(self, budget_mib: int = compute_health.SMOKE_DEFAULT_MIB) -> dict:
-        """Only on an explicit button press: allocates `budget_mib` (clamped) of GPU memory."""
-        return await asyncio.get_event_loop().run_in_executor(None, compute_health.smoke_test, budget_mib)
+    async def run_compute_smoke(self, runtime: str = "hip",
+                                budget_mib: int = compute_health.SMOKE_DEFAULT_MIB) -> dict:
+        """Only on an explicit button press: allocates `budget_mib` (clamped) of GPU memory
+        through `runtime` ("hip" or "vulkan"; anything else is refused without running)."""
+        return await asyncio.get_event_loop().run_in_executor(
+            None, lambda: compute_health.smoke_test(budget_mib, runtime=runtime))
 
     async def get_telemetry(self) -> dict:
         return telemetry()   # a handful of sysfs reads; cheap enough inline
