@@ -6,12 +6,14 @@
 
 A Must or a Won't changed after approval sends the line above back to "not yet".
 
-**Implementation status, 2026-11-11:** 0.5.1 (2026-10-30) repaired fan/power regressions; it is not 1.0 sign-off.
+**1.0 sign-off:** release 1.0.0 (2026-11-16, #204) is prepared with its evidence in [`docs/releases/1.0.0.md`](docs/releases/1.0.0.md); the sign-off is the owner's word in chat on the release PR, and the tag follows it. M9 moved after 1.0 (#250) on the owner's word, 2026-11-16: "Lets push that through without the controller step. Make the controller test post 1.0". The owner moved M9, so the approval line above stands for the other Musts; no other Must or Won't is changed.
+
+**Implementation status, 2026-11-11 (history; the earlier repair release was not 1.0 sign-off):**
 The approved Musts and Won'ts below are unchanged. #60 is fixed (PR #83), #58 closed 2026-11-02 (PR #149),
 and #23 and #27 closed 2026-11-04 with their code merged; their on-device acceptance is tracked in #199 (M6)
 and #200 (M7). #74 and #75 (the SteamOS 3.9.5 pass) closed 2026-11-11 with dated device evidence on the issues.
 Still open for 1.0: #30, #61, #66, #73, #80, #86, and #199-#204 (acceptance, own-release update source,
-Boondock TDP, the release). Code merged 2026-11-11: own-release update source (PR #209, #202) and Boondock TDP floors/clamp (PR #213, #203); their device checks are still owed. Per-release evidence is in [`docs/releases/0.5.1.md`](docs/releases/0.5.1.md);
+Boondock TDP, the release). Code merged 2026-11-11: own-release update source (PR #209, #202) and Boondock TDP floors/clamp (PR #213, #203); their device checks are still owed. Per-release evidence is in [`docs/releases/1.0.0.md`](docs/releases/1.0.0.md);
 later evidence is on the issues. Non-zero/cached RPM or curve-enabled state alone is insufficient evidence
 of fan response.
 
@@ -29,7 +31,7 @@ of fan response.
 | M6 | ONE COMPONENT SHALL own profile and hardware state: app profiles are mirrored into `z13ctl` named profiles, and every frontend refreshes on `z13ctl` events instead of polling (Phase 8 🚧, Phase 12 follow-ups, #23). | A change made in the app, Decky or the `z13ctl` CLI shows in all three within a second, with no polling loop. A stale slider cannot change another profile. A restart of the backend reconnects. | #23's acceptance list; on the Z13 (`needs-owner-device`) |
 | M7 | AFTER A SteamOS UPDATE THE APP SHALL say so, list the post-update tasks that need attention, and run the selected ones with a plan, backups and a rollback record. It never reboots by itself (Phase 12c, #27). | The tray and Decky say "SteamOS updated: N tasks". Ticking amdgpu + ROCm and pressing Run fixes both with one reboot. Every applied repair has a before/after check and a rollback record. A redacted support bundle can be previewed. | Phase 12c "Done when" + #27's acceptance (`needs-owner-device` for the real update) |
 | M8 | THE LIGHTBAR SHALL recover on its own from a wedge (Phase 7), and the Boondock script SHALL use the user `llama-swap` unit with no Docker or VM steps (Phase 7). | A lightbar timeout recovers within one retry. `boondock` runs with no Docker or VM steps. | `tests/` lightbar tests; on the Z13 (`needs-owner-device`) |
-| M9 | IN GAME MODE THE QAM SHALL keep focus with a game running, and gamescope SHALL get a 48-180 Hz VRR profile if the panel accepts it (Phase 13, minus Steam's own controls, which are #29, after 1.0). | The QAM focus test passes with a game running. The VRR profile either works or is recorded as a no-go with the reason. | On the Z13 (`needs-owner-device`) |
+| M9 | **MOVED AFTER 1.0 (#250), the owner's word 2026-11-16: "Lets push that through without the controller step. Make the controller test post 1.0".** Text unchanged: IN GAME MODE THE QAM SHALL keep focus with a game running, and gamescope SHALL get a 48-180 Hz VRR profile if the panel accepts it (Phase 13, minus Steam's own controls, which are #29, after 1.0). | The QAM focus test passes with a game running. The VRR profile either works or is recorded as a no-go with the reason. | On the Z13 (`needs-owner-device`) |
 | M10 | THE APP SHALL have no known open bugs: profiles without a fan curve apply (#60), the tests are stable across uid, root and temp names (#58), and the reported 43 GB resident memory spike is found and fixed (#30). | The issues are closed with their checks. In a 4-hour Game Mode session the backend's resident memory stays flat (the limit is set in #30 from a measured baseline). | CI for #58 and #60; a soak run for #30 (`needs-owner-device`) |
 
 ## Won'ts

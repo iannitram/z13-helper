@@ -25,39 +25,67 @@ the device but not yet verified on the Z13. Plan and status: `docs/ROADMAP.md`.
 
 ## Unreleased
 
-- **Resume restore defers to z13ctl 1.4.2+ when its saved state matches (Refs #80; on-device five-cycle check pending).** `z13-profile resume-owner` compares the active app profile, Max Fans intent and z13ctl's saved named profile using files only. The system resume hook defers only when the version is at least 1.4.2 and the ownership check succeeds; every uncertain case retains the full restore and protective-curve fallback.
-- **Crash reports sort into the drop's `z13-helper/` folder (Refs #82).** `upload_report` PUTs to `<base>/public.php/dav/files/<token>/z13-helper/<name>` (`DROP_FOLDER`); the drop creates the folder itself. Queued retries go through the same function, so they land there too.
+(nothing yet)
 
-- Fan watchdog: Max Fans' dropped-curve recovery waits 10 s for the z13ctl daemon's own re-apply, and no longer fires right after resume (Refs #66).
+## 1.0.0 — 2026-11-16
 
-- **CPU Boost (EPP) per profile (#64; the tmpfiles grant was checked on the device 2026-11-06, #64 comment: a direct write as the desktop user succeeded and the grant is on the keep-list).** The Performance panel and the Fans window share one CPU Boost combo with a live "Now:" readout. Profiles may carry an EPP value, written by the desktop user to every cpufreq policy node (read and write both use `policy*`). `packaging/host/tmpfiles/z13-helper-epp.conf` makes only those nodes group-writable for `users`; why and the scope are in `docs/adr/0003-epp-write-via-tmpfiles-grant.md`.
-  - Crash reports read the account record with `getattr`: the new EPP tests run with partial account records, and the scrubber must not raise on a missing field.
-  - The installer tests build their tarball with `TarInfo` instead of `tarfile.add`: `tarfile.add` does an ambient passwd lookup, and other tests mock that lookup with a lightweight owner record.
-- **Restore works on z13ctl 1.4.2 (#179).** Built-in profiles no longer send the capitalized
-  names z13ctl rejects (or a name equal to a firmware base); they use generated lowercase backend
-  names. Undervolt writes are skipped when the daemon reports `undervolt_available: false`, so
-  `z13-profile restore` no longer aborts before the saved fan curve is applied.
+The first 1.0 release. Evidence for each 1.0 Must: [`docs/releases/1.0.0.md`](docs/releases/1.0.0.md). Version 1.0.0 in the desktop app, the Decky package and the Flatpak AppStream metadata (#204). M9 (Game Mode Quick Access focus and the VRR profile) moved after 1.0 on the owner's word, tracked in #250.
 
-- **Automatic crash reporting (#82; real-crash upload checked on the device 2026-11-06, #82 comment: one zip in the drop's `z13-helper/` folder; the Decky entry point is covered by unit tests only).** Configured builds
-  queue scrubbed exception and fatal reports from the desktop app and Decky plugin
-  for background upload to the shared bug drop. Help → Error log has a default-on
-  toggle, independent of local logging. Both frontends share the ten-report queue
-  and five-attempt daily limit. Without private build configuration, reporting
-  does nothing. See `docs/crash-reporting.md` for packaging and verification.
-- Profile apply timeout messages in Decky and the desktop status bar now include the failed step when available.
-- **Decky Loader minimum is 3.3.0.** The repair path reinstalls older loaders even when the latest release cannot be read; install verification and the Updates panel flag the same minimum required by the 2026-10-13 Steam client (#77).
-- **Decky repair avoids live file-watcher reload storms (#100).** Stage and byte-verify the
-  complete plugin outside the watched directory, quiesce the loader, then swap the root-owned
-  tree and start it once. A failed swap restores the previous tree; staging failures leave the
-  live plugin untouched. An unchanged repair leaves the loader running. Failures are reported;
-  backend startup alone is not evidence that Steam's frontend imported successfully.
-- **Decky repair checks the Steam frontend separately (#122, closed 2026-11-02; the live check on the device is still pending and tracked in #201).**
-  After a changed-plugin install, check the loader entry URL for HTTP 200 JavaScript and
-  the registered plugin component over Steam's CEF debug socket. New buffered dynamic-import
-  errors since the repair started or missing registration fail the installer. An absent Steam
-  UI/debug socket reports **not checked**, with a reason, rather than frontend success.
-  Unchanged repairs skip the probe. Live route/auth, registry and CEF error replay verification,
-  and one passing Z13 repair, remain pending.
+- **Version 0.5.1 to 1.0.0** in `src/versions.py`, `decky/package.json`, the AppStream release list, README, AGENTS.md, PIPELINE.md, SPEC.md, docs/ROADMAP.md, MAP/README.md and MAP/decky.md; crash-report test fixtures follow.
+- **Device acceptance pass of 2026-11-16 recorded:** M3, M4 (Repair install), M6, M7 (before and after a reboot, after the #244 and #245 fixes) and M8, plus #122, #30, #235, #203, #80 and #61 (evidence on the issues).
+- **Known issues shipping in 1.0:** #243, #86, #80 and #73; #249 is fixed (PR #251); see the release record.
+
+### Changes since 0.5.1
+
+Built from `git log` between the 0.5.1 merge (34a1284) and main; no `v0.5.1` tag exists. "Checked on the device" means the Z13 on 2026-11-16 unless a date says otherwise.
+
+**State, repair and the Musts**
+- **One owner for profile and hardware state (M6; #23, PR #153).** App profiles are mirrored into `z13ctl` named profiles and every frontend refreshes on `z13ctl` events instead of polling. Checked on the device 2026-11-16 (#199): sync under 1 s, charger events seen, the app reconnected within 1 s after a daemon restart.
+- **Post-update repair (M7; #27, PR #154).** After a SteamOS update the app lists the tasks that need attention and runs the selected ones with a plan, backups and a rollback record; it never reboots by itself. The runner is #110 (PR #150); the recipe format, argument parser, BUILD_ID banner and local recipe loader are #109, #111, #114 and #115 (PRs #138, #140, #144, #145); built-in recipes are #69 and #71 (PRs #156, #157, #170, #174).
+- **Post-update amdgpu task handles `GRUB_CMDLINE_LINUX` blocks; already applied counts as success (#244, PR #247).** Found by the first M7 device run.
+- **Post-update rocm task provides `libfmt.so.11`, decides compat library files one by one and verifies `rocminfo` loads (#245, PR #248).** Found by the first M7 device run. After both fixes M7 passed on the device 2026-11-16, before and after the reboot (#200).
+- **Post-update armoury check tests the fan-curve hwmon node, not fan attributes (PR #218).**
+- **Updates panel: a newer installable upstream shows in danger red (#236, PR #240; M4).** Repair install from the panel finished "All green" on the device (#201).
+- **This project's own releases are an update source (#202, PR #209);** neutral until a v1.0.0 release exists or when GitHub is unreachable.
+- **Lightbar: every lighting write path recovers a stale daemon handle or wedged endpoint once (#237, PR #241; M8).** Checked on the device: one ENODEV recovered and returned ok in 2.6 s.
+- **Boondock TDP uses the firmware floors 28/32/45 W and reports only limits that applied (#203, PR #213);** the watchdog and Decky TDP restore clamp to the firmware ranges and no longer read live status (PR #217). Checked on the device: `z13ctl tdp --get` read 28/32/45 W, matching the app.
+- **Boondock stops, starts and restores `llama-swap` as a `systemctl --user` service; the Docker container and VM handling are removed (#65, PR #101).** Old `ctr` and `vm` snapshot keys are discarded on restore.
+- **`--system-check` no longer reports two false FAILs on SteamOS 3.9.5 (#249, PR #251).**
+
+**Desktop app**
+- **Design pass (#229, PR #232):** dark and light themes from one token file, following the system colour scheme with a manual choice under View → Theme; a status strip, cards for Performance Mode and Keyboard & Rear Light, and a two-plot Last Hour chart in Fans + Power. Decky colours come from the same tokens. `docs/screenshots/` still shows the old look.
+- **Dashboard scrolls on short windows without clipping its tiles (#235, PR #242).** Checked on the screen.
+- **Profile create, rename and delete through the state owner; names starting `z13h-` are refused (#227, PR #230).**
+- **Battery readout: charge or drain rate and ETA to the limit or to empty (#228, PR #231).**
+- **CPU Boost (EPP) per profile (#64, PRs #155, #188):** a combo in the Performance panel and the Fans window; written by the desktop user to the cpufreq policy nodes via a tmpfiles grant (`docs/adr/0003-epp-write-via-tmpfiles-grant.md`). A write that reaches no EPP node is a failure.
+- **Power controls without a stored override show Not set (PR #89);** Armoury power ranges are read on the host and inside Flatpak (PR #92).
+- **Telemetry history: temperatures and fan speeds recorded and graphed over time (PR #163);** labeled sensors report unavailable instead of 0 and pick the GPU by device (#25, PR #173).
+- **Desktop refresh-rate choice with rollback, Game Mode display notes (#28, PR #167).**
+- **Hibernation (SteamOS 3.9, preliminary): state is restored after resume from hibernate (PR #164).**
+- **Memory and compute health (Refs #26, 1812326):** File → Memory and compute… on the desktop and a Memory and compute panel in Decky show Linux RAM, reserved VRAM, GTT and the ROCm/HIP and Vulkan runtimes, with an on-request HIP allocation smoke test.
+- **Controls are gated by the detected platform capability (Refs #22, cf5a939):** the dashboard and the Fans window disable a control the machine does not expose and give the reason; the desktop and Decky backends make no ASUS writes on unsupported machines.
+
+**Fans, power and resume**
+- **Resume restore defers to z13ctl 1.4.2+ when its saved state matches (#80, PR #196).** Checked on the device 2026-11-16: 5/5 suspend/resume cycles on Turbo with Max Fans on.
+- **Fan watchdog: the dropped-curve recovery waits 10 s for the z13ctl daemon's own re-apply and no longer fires right after resume (#66, PRs #194, #207, #190).** The daemon-absent backstop stays.
+- **Restore works on z13ctl 1.4.2 (#179, PR #183):** built-in profiles use generated lowercase backend names, and undervolt writes are skipped when the daemon reports `undervolt_available: false`.
+- **Fallback fan curves are anchored at 20 °C (#86, PR #208).**
+- **A goal field in the profile schema (#124, PR #178);** charger-aware autoswitch logic (#24, PR #177) and the lighting signal mapping (#129, PR #171) are in as pure logic with no caller yet.
+- **Profile-apply timeout messages name the failed step (#79, PR #141);** the profile enter/exit hook timeout is back to 120 s (PR #121); z13ctl write timeouts are capped at 20 s (PR #88).
+- **Code audit 2026-11-04 fixes (PR #166):** a hook timeout no longer suspends Max Fans and a failed apply restores it; the Decky profile switch goes through the profile engine; wrapper TDP values are clamped and partial TDP calls rejected; the battery limit is saved through the profile; the resume script drops its fallback sysfs fan-enable write.
+
+**Game Mode and Decky**
+- **Decky repair avoids live file-watcher reload storms (#100, PR #104) and checks the Steam frontend separately (#122, PR #139).** The changed-plugin repair frontend check passed on the device 2026-11-16: loader entry HTTP 200 JavaScript, plugin registered, 99 ok, 0 failures.
+- **Decky Loader minimum is 3.3.0 (PR #108);** the Decky build keeps its pnpm settings in `pnpm-workspace.yaml` for pnpm 12 (#233, PR #234); the panel title class lookup is guarded (PR #87).
+- **Gamescope 48-180 Hz VRR profile matched to the panel (PR #103) and a read-only VRR verifier (#73, PR #187).** The Game Mode checks on the device move after 1.0 (#250).
+- **A local stdio MCP server (#160, PR #172) and a CLI covering every app feature (#159, PR #169).**
+- **Machine timeline store with pinned no-follow folders and scrubbed records (#134, PR #175).**
+
+**Crash reporting, tests and docs**
+- **Automatic crash reporting (#82, PRs #146-#148, #151):** scrubbed exception and fatal reports from the desktop app and Decky are queued for upload to the shared bug drop, under a daily limit; they sort into the drop's `z13-helper/` folder (PR #197) and survive a failed user lookup (#152, PRs #158, #176). Default on, with a toggle under Help → Error log.
+- **Memory spike investigation (#30):** a bounded Decky backend RSS sampler (PR #107) and a log-only RSS guard. A 1-hour soak on the device 2026-11-16 was flat in every process; closed as not reproduced.
+- **CI and test fixes:** ten tests no longer depend on the session user or machine model (#198, PR #206); ownership and temp-name tests are portable (#58, PRs #105, #149).
+- **Docs:** code audit 2026-11-04 (PR #161), the docs reconciled with the tracker and the device evidence (#205, PR #212), and the 1.0 device-pass status in the ROADMAP (PR #246).
 
 ## 0.5.1 — 2026-10-30
 

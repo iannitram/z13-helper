@@ -15,12 +15,11 @@ Everything you need to work here is in this repo. The full pipeline and rules (`
 
 Cold-start orientation for Claude Code working in this repo. Read this first.
 
-**Current repair release: 0.5.1 (2026-10-30).** See [`docs/releases/0.5.1.md`](docs/releases/0.5.1.md)
-for PR dependencies, automated checks, device evidence and remaining verification. Desktop,
-Decky package and Flatpak AppStream versions must agree. This release does not complete the 1.0 spec.
-That record is a snapshot at 0.5.1 (it still says app profiles are not mirrored; they are, since #23
-closed 2026-11-04). Later status is in the "2026-11-11 update" in `docs/ROADMAP.md` §1 and on the
-issues; 1.0 (#204) ships from `main`, and the post-1.0 branch merges after the tag.
+**Current release: 1.0.0 (2026-11-16, tag pending the owner).** See [`docs/releases/1.0.0.md`](docs/releases/1.0.0.md)
+for each 1.0 Must, its status and its evidence. Desktop, Decky package and Flatpak AppStream versions must agree.
+The repair-release record in `docs/releases/` is a snapshot of that release (it still says app
+profiles are not mirrored; they are, since #23 closed 2026-11-04). M9 moved after 1.0 (#250). 1.0 (#204) ships
+from `main`, and the post-1.0 branch merges after the tag.
 
 **Renamed 2026-10-15 (v0.5.0):** Z13 Controller → **Z13-Helper** (after G-Helper). Flatpak
 `io.github.z13.Controller` → `io.github.iannitram.Z13Helper`, `z13-controller.service` →
