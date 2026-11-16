@@ -26,8 +26,8 @@ from theme import FONT, RADIUS, qcolor
 TEMP_MIN, TEMP_MAX = 20, 110
 PCT_MIN, PCT_MAX = 0, 100
 POINTS = 8
-MARKER_R = 5          # G-Helper MarkerSize 10 → radius 5 px
-HIT_R = 12
+MARKER_R = 10         # Visible marker sized for direct touch interaction
+HIT_R = 22            # 44 px Manhattan hit radius for each curve point
 
 DEFAULT_CURVE = [[20, 20], [40, 20], [50, 35], [60, 55], [70, 75], [75, 90], [80, 100], [90, 100]]
 

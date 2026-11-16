@@ -25,3 +25,6 @@ export const TOKEN_CSS = `:root{${Object.entries(colours)
 
 /** Smallest touch target, in px (the shared touch layout, #133). */
 export const TOUCH_MIN_PX: number = design.size.touch_min_px;
+
+/** The spacing scale, in px (`space` in the token file). */
+export const spacing = design.space;

@@ -1,6 +1,6 @@
 import { ButtonItem, Field, PanelSection, PanelSectionRow } from "@decky/ui";
 import { useState } from "react";
-import { ComputeHealth as H, getComputeHealth, runComputeSmoke } from "../backend";
+import { ComputeHealth as H, ComputeRuntime, getComputeHealth, runComputeSmoke } from "../backend";
 
 const gib = (v: number | null) => (v == null ? "unavailable" : `${(v / 1024 ** 3).toFixed(1)} GiB`);
 
@@ -18,11 +18,11 @@ export function ComputeHealth() {
       .catch(() => setH(null))
       .finally(() => setBusy(false));
   };
-  const runSmoke = () => {
+  const runSmoke = (runtime: ComputeRuntime) => {
     setBusy(true);
-    setSmoke("Running…");
-    runComputeSmoke()
-      .then((r) => setSmoke(`${r.ok ? "Passed" : "Failed"}: ${r.detail}`))
+    setSmoke(`Running the ${runtime === "hip" ? "HIP" : "Vulkan"} test…`);
+    runComputeSmoke(runtime)
+      .then((r) => setSmoke(`${runtime === "hip" ? "HIP" : "Vulkan"} ${r.ok ? "passed" : "failed"}: ${r.detail}`))
       .catch(() => setSmoke("Failed: the backend did not answer"))
       .finally(() => setBusy(false));
   };
@@ -65,12 +65,31 @@ export function ComputeHealth() {
           </PanelSectionRow>
           <PanelSectionRow>
             <Field label="Vulkan" focusable={false} padding="compact" childrenLayout="inline">
-              {rt.ok ? (rt.vulkan_icds.length ? "AMD driver found" : "no AMD driver file") : "unavailable"}
+              {h.vulkan?.ok
+                ? `${h.vulkan.instance_version ?? "?"}: ${h.vulkan.devices.map((d) => d.name).join(", ")}`
+                : rt.ok ? (rt.vulkan_icds.length ? "AMD driver found" : "no AMD driver file") : "unavailable"}
             </Field>
           </PanelSectionRow>
+          {(h.compat ?? []).map((c) => (
+            <PanelSectionRow key={c.label}>
+              <Field label={c.label} focusable={false} padding="compact" childrenLayout="inline">
+                {c.status === "warn" ? "Check: " : ""}{c.detail}
+              </Field>
+            </PanelSectionRow>
+          ))}
+          {(h.compat_notes ?? []).map((n) => (
+            <PanelSectionRow key={n}>
+              <Field focusable={false} padding="compact">{n}</Field>
+            </PanelSectionRow>
+          ))}
           <PanelSectionRow>
-            <ButtonItem layout="below" disabled={busy} onClick={runSmoke} description={h.smoke_budget}>
-              Run allocation test
+            <ButtonItem layout="below" disabled={busy} onClick={() => runSmoke("hip")} description={h.smoke_budget}>
+              Run HIP allocation test
+            </ButtonItem>
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <ButtonItem layout="below" disabled={busy} onClick={() => runSmoke("vulkan")}>
+              Run Vulkan allocation test
             </ButtonItem>
           </PanelSectionRow>
           {smoke && (

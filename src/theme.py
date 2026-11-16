@@ -24,6 +24,9 @@ from PyQt6.QtWidgets import (QPushButton, QLabel, QTableWidget, QFrame, QVBoxLay
 import design_tokens as tokens
 
 SIZE, SPACE, RADIUS, FONT = tokens.SIZE, tokens.SPACE, tokens.RADIUS, tokens.FONT
+# Smallest touch target (ADR 0002, #133): tiles, pills, combos, check rows and sliders
+# are at least this tall, so the desktop app works by finger on the Z13 screen.
+TOUCH_TARGET_MIN = SIZE["touch_min_px"]
 
 # Accent token names. The old names stay: the tiles are still G-Helper's
 # Silent / Balanced / Turbo, and Fans + Power / custom modes are orange.
@@ -235,7 +238,7 @@ QPushButton#errorBadge {{
 }}
 QPushButton#errorBadge:hover {{ text-decoration: underline; }}
 
-QSlider {{ min-height: {s['slider_handle'] + 4}px; }}
+QSlider {{ min-height: {max(s['slider_handle'] + 4, TOUCH_TARGET_MIN)}px; }}
 QSlider::groove:horizontal {{ height: {s['slider_groove']}px; background: {c['border']}; border-radius: {s['slider_groove'] // 2}px; }}
 QSlider::sub-page:horizontal {{ background: {c['accent']}; border-radius: {s['slider_groove'] // 2}px; }}
 QSlider::handle:horizontal {{
@@ -317,6 +320,7 @@ class ModeTile(QPushButton):
         self.setObjectName("tile")
         self._h = height or SIZE["tile_h"]
         self.setFixedHeight(self._h)
+        self.setMinimumWidth(TOUCH_TARGET_MIN)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
@@ -416,7 +420,7 @@ class CheckBox(QCheckBox):
     def sizeHint(self):
         fm = self.fontMetrics()
         return QSize(SIZE["check"] + SPACE["sm"] + fm.horizontalAdvance(self.text()) + 4,
-                     max(SIZE["check"], fm.height()) + SPACE["sm"])
+                     max(SIZE["check"] + SPACE["sm"], fm.height() + SPACE["sm"], TOUCH_TARGET_MIN))
 
     def minimumSizeHint(self):
         return self.sizeHint()
@@ -481,7 +485,7 @@ def pill(text, orange=False, checkable=True):
     b = QPushButton(text)
     b.setObjectName("pillOrange" if orange else "pill")
     b.setCheckable(checkable)
-    b.setFixedHeight(SIZE["control_h"])
+    b.setFixedHeight(max(SIZE["control_h"], TOUCH_TARGET_MIN))
     b.setCursor(Qt.CursorShape.PointingHandCursor)
     b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
     return b

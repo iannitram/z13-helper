@@ -76,6 +76,19 @@ export const setBatteryLimit = callable<
 export const setBrightness = callable<[level: BrightnessLevel], BrightnessResult>("set_brightness");
 export const getTelemetry = callable<[], Telemetry>("get_telemetry");
 
+export interface TimelineEntry {
+  id?: string;
+  ts?: string;
+  kind?: string;
+  summary?: string;
+  changed?: string[];
+  no_rollback_reason?: string | null;
+  rollback?: Record<string, unknown> | null;
+  rollback_supported?: boolean;
+}
+export const getTimeline = callable<[limit?: number], TimelineEntry[]>("get_timeline");
+export const rollbackTimelineEntry = callable<[entryId: string], { ok: boolean; message: string }>("rollback_timeline_entry");
+
 /** Same rule as main.py clamp_tdp / the desktop Fans + Power window:
  *  sPPT >= SPL, fPPT >= sPPT, all within [min, max]. */
 export function clampTdp(
@@ -127,15 +140,25 @@ export interface ComputeHealth {
     kfd_access: boolean | null;
     render_access: boolean | null;
   };
+  vulkan: {
+    ok: boolean;
+    instance_version: string | null;
+    devices: { name: string | null; api_version: string | null; driver: string | null; type: string | null }[];
+  };
+  compat: { label: string; status: "ok" | "warn" | "info"; detail: string }[];
+  compat_notes: string[];
+  runtimes: string[];
   smoke_budget: string;
 }
+export type ComputeRuntime = "hip" | "vulkan";
 export interface SmokeResult {
   ok: boolean;
+  runtime?: string;
   detail: string;
   budget_mib: number | null;
 }
 export const getComputeHealth = callable<[], ComputeHealth>("get_compute_health");
-export const runComputeSmoke = callable<[], SmokeResult>("run_compute_smoke");
+export const runComputeSmoke = callable<[ComputeRuntime], SmokeResult>("run_compute_smoke");
 // ---- After SteamOS update (tooling/post_update --tab-json, checks only) ----
 export interface PostUpdateRow {
   id: string;

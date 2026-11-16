@@ -50,21 +50,22 @@ def test_restore_owner_lighting_when_signal_ends():
     shown_at = {hs.PROFILE_CHANGED: 0.0}
     assert hs.next_action({hs.PROFILE_CHANGED: 0.0}, shown, now=5.0, last_write=0.0,
                           restore=own, shown_at=shown_at) == ("restore", own)
-    # no known lighting to restore: the signal still ends (one-shot never persists)
+    # no known lighting to restore: the signal still ends and the bar goes off
+    off = hs.Pattern(shown.mode, shown.color, "off")
     assert hs.next_action({hs.PROFILE_CHANGED: 0.0}, shown, now=5.0, last_write=0.0,
-                          shown_at=shown_at) == ("clear", None)
-    assert hs.next_action({}, shown, now=5.0, last_write=0.0) == ("clear", None)
+                          shown_at=shown_at) == ("clear", off)
+    assert hs.next_action({}, shown, now=5.0, last_write=0.0) == ("clear", off)
     assert hs.next_action({}, None, now=5.0, last_write=0.0) == ("none", None)
     # nothing shown, nothing to do
     assert hs.next_action({}, None, now=5.0, last_write=None, restore=own) == ("none", None)
 
 
 def test_clear_is_rate_limited_like_restore():
-    # the caller applies the profile's lighting on "clear", so it is a write too
+    # the caller writes the bar off on "clear", so it is a write too
     shown = hs.SIGNALS[hs.PROFILE_CHANGED].pattern
     assert hs.next_action({}, shown, now=2.9, last_write=0.0) == ("none", None)
     assert hs.next_action({}, shown, now=0.0 + hs.MIN_WRITE_INTERVAL_S,
-                          last_write=0.0) == ("clear", None)
+                          last_write=0.0) == ("clear", hs.Pattern(shown.mode, shown.color, "off"))
 
 
 def test_off_switch_never_plays_and_restores_once():
@@ -139,7 +140,8 @@ def test_one_shot_expires_from_first_show_independently_of_other_writes():
     assert hs.next_action(active, pattern, now=first_show + hs.ONE_SHOT_S - 0.1,
                           last_write=first_show, shown_at=shown_at) == ("none", None)
     assert hs.next_action(active, pattern, now=first_show + hs.ONE_SHOT_S,
-                          last_write=first_show, shown_at=shown_at) == ("clear", None)
+                          last_write=first_show, shown_at=shown_at) == (
+        "clear", hs.Pattern(pattern.mode, pattern.color, "off"))
     # Another write cannot extend the window or make an expired event pending again.
     assert hs.next_action(active, None, now=first_show + hs.ONE_SHOT_S + 10.0,
                           last_write=first_show + 5.0, shown_at=shown_at) == ("none", None)

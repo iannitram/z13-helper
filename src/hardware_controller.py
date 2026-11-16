@@ -185,7 +185,7 @@ class HardwareController:
         return failed
 
     def set_lighting(self, device: str, setting: dict, brightness: str = "high"):
-        """Applies one profile's lighting mode and colour to one device."""
+        """Applies one device's lighting mode and colour, recovering a stale/wedged bar once."""
         argv = profiles.lighting_argv(device, setting, brightness, self.z13ctl_path)
         ok, out, timed_out, recovered = profiles.write_lighting_with_recovery(
             device,

@@ -24,6 +24,12 @@ GOAL_NOT_MET = "goal_not_met"
 # measured separately from its first successful signal write.
 MIN_WRITE_INTERVAL_S = 3.0
 ONE_SHOT_S = 3.0
+# After a failed signal write the runner waits before trying again: FAILURE_BACKOFF_S
+# after the first failure, doubling per consecutive failure up to FAILURE_BACKOFF_MAX_S.
+# A wedged lightbar or a timed-out z13ctl write (which may have reached the device) is
+# never retried at the runner's tick rate.
+FAILURE_BACKOFF_S = 5.0
+FAILURE_BACKOFF_MAX_S = 60.0
 
 
 @dataclass(frozen=True)
@@ -94,8 +100,9 @@ def next_action(active: Mapping[str, Optional[float]], shown: Optional[Pattern],
     - off switch (`enabled` False): never play; restore the owner's lighting once if a
       signal is still showing.
     - nothing active but a signal showing: restore the owner's lighting (`restore`);
-      with no known lighting to restore, return ("clear", None): the signal is over and
-      the caller drops `shown` and applies the profile's lighting (another write). Clear
+      with no known lighting to restore, return ("clear", <shown pattern at brightness
+      "off">): the signal is over, the caller writes the bar off and drops `shown`
+      (owner decision 2026-11-07: no saved lighting means off, not the flash). Clear
       and restore therefore share the same rate check: under MIN_WRITE_INTERVAL_S both
       return ("none", None) (deferred; the caller asks again later).
       A higher signal ending while a lower one is active plays the lower pattern instead.
@@ -111,11 +118,18 @@ def next_action(active: Mapping[str, Optional[float]], shown: Optional[Pattern],
         if not _may_write(now, last_write):
             return "none", None
         if restore is None:
-            return "clear", None
+            return "clear", Pattern(shown.mode, shown.color, "off")
         return "restore", restore
     if want.pattern == shown or not _may_write(now, last_write):
         return "none", None
     return "play", want.pattern
+
+
+def failure_backoff(failures: int) -> float:
+    """Seconds to wait after `failures` consecutive failed signal writes (0 for none)."""
+    if failures <= 0:
+        return 0.0
+    return min(FAILURE_BACKOFF_S * 2 ** (failures - 1), FAILURE_BACKOFF_MAX_S)
 
 
 def _may_write(now: float, last_write: Optional[float]) -> bool:

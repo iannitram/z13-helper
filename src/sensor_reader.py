@@ -247,6 +247,38 @@ class SensorReader:
         got = self.get_gpu_temp_labeled()
         return got[0] if got else None
 
+    def get_comfort_candidates(self) -> dict[str, float | None]:
+        """°C readings that might track how warm the back of the tablet feels.
+
+        Phase 15e probe: Tctl (k10temp), acpitz, the NVMe composite, the
+        battery and the GPU edge. On the Z13 the battery is always None (no
+        temperature source), so four candidates are real there. Read-only hwmon/power_supply files; no
+        Armoury power-limit file is touched (principle 5). A missing sensor reads None.
+        """
+        def hwmon_temp(name):
+            hwmon = self._find_hwmon(name)
+            raw = self._read_int(os.path.join(hwmon, "temp1_input")) if hwmon else None
+            return raw / 1000.0 if raw is not None else None
+
+        # power_supply/BAT0/temp (tenths of °C) where the driver has it; else a
+        # temp1_input on the BAT0 hwmon node. The Z13 has neither (its BAT0 hwmon
+        # node exposes only in0_input and power1_input), so battery reads None
+        # there; the fallback is for other firmware.
+        battery = self._read_int("/sys/class/power_supply/BAT0/temp")
+        if battery is not None:
+            battery = battery / 10.0
+        else:
+            node = self._find_hwmon("BAT0")
+            raw = self._read_int(os.path.join(node, "temp1_input")) if node else None
+            battery = raw / 1000.0 if raw is not None else None
+        return {
+            "tctl": hwmon_temp("k10temp"),
+            "acpitz": self.get_apu_temp(),
+            "nvme": hwmon_temp("nvme"),
+            "battery": battery,
+            "gpu_edge": self.get_gpu_temp(),
+        }
+
 
 if __name__ == "__main__":
     reader = SensorReader()

@@ -9,7 +9,9 @@ Stdlib only; pass ``root`` to probe a test tree.
 """
 
 import os
+import re
 import sys
+import time
 
 try:
     import pwd
@@ -29,6 +31,48 @@ REASONS = {
     "tdp": "no asus-armoury or asus-nb-wmi power-limit interface",
     "undervolt": "the ryzen_smu kernel module is not loaded (stock SteamOS)",
 }
+
+
+Z13CTL = "~/.local/bin/z13ctl"
+VERSION_TIMEOUT_S = 3        # the probe runs on UI-thread re-probes: keep it short
+_VERSION_OK_TTL_S = 3600     # a found version only changes on an update
+_VERSION_FAIL_TTL_S = 60     # do not respawn a missing or hung binary every 30 s
+_version_cache = {"at": 0.0, "ttl": 0.0, "value": None}
+
+
+def reset_version_cache():
+    _version_cache.update(at=0.0, ttl=0.0, value=None)
+
+
+def backend_version(runner=None):
+    """z13ctl's version from ``z13ctl --version`` (read-only, bounded), else UNKNOWN.
+
+    ``runner(argv, timeout)`` returns ``(rc, out)``; the default is host.run. A
+    failure (missing binary, hang, odd output) is UNKNOWN and is cached briefly
+    so a re-probe never waits on it twice in a row. Never raises.
+    """
+    now = time.monotonic()
+    if runner is None and _version_cache["value"] is not None \
+            and now - _version_cache["at"] < _version_cache["ttl"]:
+        return _version_cache["value"]
+    value = UNKNOWN
+    try:
+        argv = [os.path.expanduser(Z13CTL), "--version"]
+        if runner is None:
+            import host
+            res = host.run(argv, timeout=VERSION_TIMEOUT_S)
+            rc, out = res.rc, res.out
+        else:
+            rc, out = runner(argv, VERSION_TIMEOUT_S)
+        m = re.search(r"(\d+\.\d+\.\d+)", out or "") if rc == 0 else None
+        if m:
+            value = m.group(1)
+    except Exception:  # noqa: BLE001 - a probe must never break detect()
+        value = UNKNOWN
+    if runner is None:
+        _version_cache.update(at=now, value=value,
+                              ttl=_VERSION_OK_TTL_S if value != UNKNOWN else _VERSION_FAIL_TTL_S)
+    return value
 
 
 def _p(root, path):
@@ -146,12 +190,11 @@ def _inventory(root):
         "fan_count": fans if fans else UNKNOWN,
         "sensors": sensors,
         "rails": rails,
-        # Needs running z13ctl (a host command), which this read-only layer never does.
-        "backend_version": UNKNOWN,
+        "backend_version": UNKNOWN,   # filled by detect() from the z13ctl probe
     }
 
 
-def detect(root="/", system=None):
+def detect(root="/", system=None, version_runner=None):
     """Return ``{"supported", "system", "product", "reason", "capabilities"}``.
 
     ``capabilities`` maps each name in CAPABILITIES to
@@ -160,7 +203,7 @@ def detect(root="/", system=None):
     device reason. Also: ``session`` (user, uid, runtime_dir), ``battery_present``,
     ``power_source``, ``profile_choices``, ``fan_count``, ``sensors``, ``rails``
     (name -> min/max/default), ``operations`` (available names), ``unsupported``
-    (name -> reason) and ``backend_version``. A value that cannot be read without
+    (name -> reason) and ``backend_version`` (``z13ctl --version``, 3 s limit, cached). A value that cannot be read without
     hardware is the string "unknown".
     """
     system = system or sys.platform
@@ -195,6 +238,9 @@ def detect(root="/", system=None):
         "fan_count": UNKNOWN, "sensors": [], "rails": {}, "backend_version": UNKNOWN}
     if supported and not inv["battery_present"]:
         caps["battery_limit"] = {"available": False, "reason": "no battery present"}
+    if supported and (root == "/" or version_runner is not None):
+        # Only the live machine (or an injected runner) is asked; a fake sysfs tree is not.
+        inv["backend_version"] = backend_version(version_runner)
     inv["operations"] = [n for n in CAPABILITIES if caps[n]["available"]]
     inv["unsupported"] = {n: c["reason"] for n, c in caps.items() if not c["available"]}
     return {"supported": supported, "system": system, "product": product,

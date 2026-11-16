@@ -22,7 +22,7 @@ from PyQt6.QtWidgets import (
 import epp
 import power_range
 import profiles
-from theme import ModeTile, Panel, CheckBox, ComboBox, heading, tip, STANDARD, CUSTOM, ACCENT_FOR_BASE, SIZE, SPACE
+from theme import ModeTile, Panel, CheckBox, ComboBox, heading, tip, STANDARD, CUSTOM, ACCENT_FOR_BASE, SIZE, SPACE, TOUCH_TARGET_MIN
 from fan_curve_widget import FanCurveWidget, DEFAULT_CURVE
 from history_chart import HistoryChartWidget
 from profile_control import ProfileControl
@@ -90,7 +90,10 @@ class FansWindow(QWidget):
         # Per-rail kernel range from sysfs metadata (no live PPT reads, no z13ctl).
         self._ranges = power_range.detect_ranges()
         self._support = None          # platform_support.detect() result (#22), set by the dashboard
-        self.resize(SIZE["fans_window_w"], SIZE["fans_window_h"])
+        # Touch layout (#133); the same size as SIZE["fans_window_w"] / ["fans_window_h"],
+        # which the dashboard uses when it opens this window.
+        self.resize(1100, 760)
+        self.setMinimumSize(760, 600)
         self._build()
         self.control.changed.connect(self.refresh)
         self.refresh()
@@ -113,6 +116,8 @@ class FansWindow(QWidget):
         self.combo.currentTextChanged.connect(self._on_combo)
         bar.addWidget(self.combo)
         self.btn_add = QPushButton("New")
+        self.btn_add.setMinimumWidth(TOUCH_TARGET_MIN)
+        self.btn_add.setMinimumHeight(TOUCH_TARGET_MIN)
         self.btn_add.setToolTip("Add a custom profile (copies the selected one)")
         self.btn_add.clicked.connect(self._add)
         self.btn_rename = QPushButton("Rename")
@@ -130,7 +135,8 @@ class FansWindow(QWidget):
 
         # ---- left column: one card per setting group ----
         left = QWidget()
-        left.setFixedWidth(SIZE["fans_side_w"])
+        left.setMinimumWidth(SIZE["fans_side_w"])
+        left.setMaximumWidth(SIZE["fans_side_max_w"])
         lv = QVBoxLayout(left)
         lv.setContentsMargins(0, 0, 0, 0)
         lv.setSpacing(SPACE["md"])
@@ -141,8 +147,8 @@ class FansWindow(QWidget):
         nav = QHBoxLayout(self._nav_row)
         nav.setContentsMargins(0, 0, 0, 0)
         nav.setSpacing(SPACE["sm"])
-        self.btn_cpu = ModeTile("CPU", STANDARD, height=SIZE["tile_small_h"])
-        self.btn_adv = ModeTile("Advanced", STANDARD, height=SIZE["tile_small_h"])
+        self.btn_cpu = ModeTile("CPU", STANDARD, height=TOUCH_TARGET_MIN)
+        self.btn_adv = ModeTile("Advanced", STANDARD, height=TOUCH_TARGET_MIN)
         self.btn_cpu.clicked.connect(lambda: self._nav(0))
         self.btn_adv.clicked.connect(lambda: self._nav(1))
         nav.addWidget(self.btn_cpu)

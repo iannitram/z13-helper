@@ -98,6 +98,8 @@ def main():
             window.show()
             window.raise_()
             window.activateWindow()
+        elif cmd == "cycle":
+            window.cycle_profile()
         elif cmd == "quit":
             app.quit()
             return True  # hold the connection: client sees EOF once we've exited

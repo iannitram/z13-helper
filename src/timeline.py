@@ -563,6 +563,65 @@ def read_entries(path=None, *, limit=None, newest_first=False,
     return _read_entries_unlocked(target, limit, newest_first, include_rotated, backups)
 
 
+SETTING_NO_PROFILE_REASON = ("This entry does not record which profile the setting was "
+                             "changed in, so it cannot be rolled back safely.")
+
+
+def _valid_profile_name(name):
+    return isinstance(name, str) and bool(name) and not name.startswith("-")
+
+
+def rollback_spec(entry):
+    """Return a validated allowlisted rollback action, or None when unsupported.
+
+    Timeline data is persisted input. This deliberately accepts only structured
+    profile, Max Fans goal, and single-setting records; backup paths and command
+    strings are never interpreted here.
+    """
+    if not isinstance(entry, dict):
+        return None
+    rb = entry.get("rollback")
+    if not isinstance(rb, dict):
+        return None
+    kind = rb.get("kind")
+    if kind == "profile":
+        name = rb.get("profile")
+        if (_valid_profile_name(name)
+                and isinstance(rb.get("snapshot"), dict)
+                and rb["snapshot"].get("name") == name):
+            return {"kind": "profile", "profile": name}
+        return None
+    if kind == "goal" and rb.get("goal") in ("max", "custom"):
+        return {"kind": "goal", "goal": rb["goal"]}
+    if kind in SETTING_KINDS:
+        state = rb.get("state")
+        if not isinstance(state, dict) or set(state) != {kind}:
+            return None
+        value = state[kind]
+        if kind == "tdp":
+            if value is not None:
+                # A stored profile TDP carries an optional bool "force" beside the rails.
+                if (not isinstance(value, dict) or set(value) - {"force"} != {"pl1", "pl2", "pl3"}
+                        or ("force" in value and type(value["force"]) is not bool)
+                        or any(type(value[k]) is not int or not 5 <= value[k] <= 93
+                               for k in ("pl1", "pl2", "pl3"))
+                        or value["pl1"] > value["pl2"] or value["pl2"] > value["pl3"]):
+                    return None
+                value = {k: value[k] for k in ("pl1", "pl2", "pl3")} | {"force": value.get("force", False)}
+        elif kind == "battery_limit":
+            if type(value) is not int or not 40 <= value <= 100:
+                return None
+        elif kind == "brightness" and value not in ("off", "low", "medium", "high"):
+            return None
+        # The target profile is part of the record; None (an older entry) is refused at
+        # rollback time with SETTING_NO_PROFILE_REASON, never retargeted to the active one.
+        profile = rb.get("profile")
+        if profile is not None and not _valid_profile_name(profile):
+            return None
+        return {"kind": kind, "value": value, "profile": profile}
+    return None
+
+
 def _read_entries_unlocked(target, limit, newest_first, include_rotated, backups):
     if limit is not None and int(limit) <= 0:
         return []
@@ -723,8 +782,13 @@ def record_goal_change(*, goal, previous_goal=None, before=None, after=None,
     )
 
 
-def record_setting_change(*, kind, summary, before, after, ok=True, path=None, defer=False):
+def record_setting_change(*, kind, summary, before, after, ok=True, path=None, defer=False,
+                          profile=None):
     """Record a manual hardware setting write (TDP, battery limit, brightness).
+
+    `profile` names the profile the setting was written into. Its rollback is
+    written back into that profile, never whichever one is active then; an
+    entry with no profile cannot be rolled back (SETTING_NO_PROFILE_REASON).
 
     A failed write (`ok=False`) records the unchanged state as `after`
     (`before == after`) and a `(failed)` summary. A changed key that `before`
@@ -750,6 +814,8 @@ def record_setting_change(*, kind, summary, before, after, ok=True, path=None, d
                  if before_d.get(k) is not None or (kind == "tdp" and k in before_d)]
         if known:
             rb = {"kind": kind, "state": {k: before_d[k] for k in known}}
+            if _valid_profile_name(profile):
+                rb["profile"] = profile
             reason = None
         else:
             rb = None
@@ -761,6 +827,7 @@ def record_setting_change(*, kind, summary, before, after, ok=True, path=None, d
             "kind": kind,
             "summary": summary,
             "ok": bool(ok),
+            "profile": profile if _valid_profile_name(profile) else None,
             "before": before_d,
             "after": after_d,
             "changed": changed,

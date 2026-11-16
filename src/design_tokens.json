@@ -85,18 +85,19 @@
     "lg": 10
   },
   "size": {
-    "touch_min_px": 44,
-    "control_h": 32,
-    "tile_h": 60,
-    "slider_groove": 6,
-    "slider_handle": 20,
-    "check": 18,
+    "touch_min_px": 48,
+    "control_h": 48,
+    "tile_h": 72,
+    "slider_groove": 8,
+    "slider_handle": 24,
+    "check": 24,
     "row_label_w": 138,
     "row_value_w": 40,
-    "tile_small_h": 36,
-    "fans_side_w": 296,
-    "fans_window_w": 740,
-    "fans_window_h": 640,
+    "tile_small_h": 48,
+    "fans_side_w": 300,
+    "fans_side_max_w": 420,
+    "fans_window_w": 1100,
+    "fans_window_h": 760,
     "window_min_h": 480
   }
 }

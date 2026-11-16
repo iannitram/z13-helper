@@ -14,7 +14,7 @@ the device but not yet verified on the Z13. Plan and status: `docs/ROADMAP.md`.
 - 2026-11-11 Docs follow-up (#205): own-release update source (PR #209, #202) and Boondock TDP 28/32/45 W with clamped writes (PR #213, #203) recorded as merged, device checks still owed; ROADMAP §11 row for this project's releases. Post-update armoury fan-attribute check bug filed as #216.
 - 2026-11-11 CI on main fixed (#198, PR #206): ten tests no longer depend on the session user or the machine model. #74 and #75 closed with device evidence; issues #199-#205 filed (acceptance, own-release update source, Boondock TDP, release, docs).
 - 2026-11-11 Docs: replaced dev-machine paths in AGENTS.md and ROADMAP with placeholders (repo-lint, R01).
-
+- 2026-11-07 Reconciled roadmap/spec/pipeline and refreshed the code map against `main` 84f0b1e; state owner (#23) and post-update repair (#27) are implemented, while device acceptance remains open. Added a disposition for the Nov 4 code-audit findings.
 - 2026-11-02 Code map (MAP/README.md, MAP/decky.md) refreshed to match main: repair PRs merged, new modules and tooling listed.
 - 2026-11-01 Phases 15 (goal control) and 16 (hardware as the interface) added after 1.0 on the owner's pick: ROADMAP §10a, §10b; code map MAP/README.md "Planned (after 1.0)"; issues #123-#135 filed (`after-1.0`). SPEC unchanged.
 - 2026-10-26 End-of-night sweep: code map (MAP/README.md, MAP/decky.md) refreshed for PR #49 (`decky/src/profileSwitch.ts`) and PR #3 (`z13_gamemode_report.py`); ROADMAP §1 open-bugs status; PIPELINE notes issue list updated (#16 done, #74-#81 added); #16 closed.
@@ -25,7 +25,14 @@ the device but not yet verified on the Z13. Plan and status: `docs/ROADMAP.md`.
 
 ## Unreleased
 
-(nothing yet)
+- **Post-1.0 build batch (#123, #126, #130, #133, #135):** created `post-1.0` and integrated the goal decision step, fail-closed FPS probe API, lightbar signal wiring, shared touch tokens/layout changes, and desktop/QAM timeline views. Timeline rollback is allowlisted for profiles, Max Fans goals, TDP, charge limit and brightness; backup/OS rollback remains unsupported. Acceptance remains open: #123 traces/review; #126 has no dependable live FPS source; #130 broader event coverage and device soak; #133 rendered touch-target/device evidence; #135 verify supported rollback flows. See `docs/ROADMAP.md` §10a–§10b and `MAP/README.md`.
+- **Triple-press gesture cycles profiles (Refs #131):** one owner per session (the watcher in Game Mode, the app in Desktop); in Game Mode a triple press starts the app when it is absent, then cycles. `ProfileControl.cycle` goes through the normal profile apply; the socket gains a cycle command.
+- **Comfort sensor probe tooling (#127):** the probe is executable and its sample command is tested end to end; the battery reading falls back to the BAT0 hwmon node. The Z13 has no battery temperature source.
+- **Post-update package installs to the host library (Refs #220):** the Updates tab and Repair run from it; the host decides whether the installed copy is complete, an incomplete one stays off `PYTHONPATH`, and `__main__` installs last.
+- **CLI and MCP hardware writes are gated by platform capability (Refs #22),** and `backend_version` is filled.
+- **Goal control safety (Refs #123):** reading safety, APU over-temperature shed, huge integers invalid, a malformed goal sheds then holds; the 95 °C default is documented. Hold FPS no longer steers power the wrong way.
+- **steamos-manager feasibility recorded (Refs #29),** with a `--device-config` route and `SuggestedMinimumLimit`.
+- **Touch layout on the 1.0 design tokens (#133, merge of main into post-1.0):** the touch sizes now live in the #229 `size` tokens (`touch_min_px` 48, `control_h` 48, `tile_h` 72, `tile_small_h` 48, `check` and `slider_handle` 24, Fans + Power window 1100 x 760); the separate post-1.0 palette in `design_tokens.json` is gone, so both themes and the colour-literal test cover the touch work.
 
 ## 1.0.0 — 2026-11-16
 

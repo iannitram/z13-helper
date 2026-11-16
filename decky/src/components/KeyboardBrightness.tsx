@@ -2,7 +2,7 @@ import { DialogButton, Focusable, PanelSectionRow } from "@decky/ui";
 import { toaster } from "@decky/api";
 import { useEffect, useState } from "react";
 import { BrightnessLevel, isWriteTimeout, PowerState, setBrightness } from "../backend";
-import { colour } from "../tokens";
+import { colour, spacing, TOUCH_MIN_PX } from "../tokens";
 
 const LEVELS: { level: BrightnessLevel; label: string }[] = [
   { level: "off", label: "Off" },
@@ -46,7 +46,7 @@ export function KeyboardBrightness({ state }: { state: PowerState | null }) {
   return (
     <>
       <PanelSectionRow>
-        <Focusable style={{ display: "flex", gap: "6px" }} flow-children="horizontal">
+        <Focusable style={{ display: "flex", gap: `${spacing.sm}px` }} flow-children="horizontal">
           {LEVELS.map(({ level, label }) => (
             <DialogButton
               key={level}
@@ -55,7 +55,8 @@ export function KeyboardBrightness({ state }: { state: PowerState | null }) {
               style={{
                 flex: 1,
                 minWidth: 0,
-                padding: "8px 0",
+                padding: `${spacing.sm}px 0`,
+                minHeight: `${TOUCH_MIN_PX}px`,
                 ...(current === level
                   ? { background: colour("accent"), color: colour("on_accent") }
                   : {}),
