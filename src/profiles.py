@@ -37,6 +37,7 @@ CLI:
 
 import argparse
 import contextlib
+import copy
 import stat
 import errno
 import fcntl
@@ -221,6 +222,36 @@ def _sync_goal(p):
             p["goal"] = {"kind": "max"}
     else:
         p["max_fans"] = p["goal"]["kind"] == "max"
+
+
+# z13ctl backend names (Z13CtlClient.backend_profile_name): "z13h-<slug>-<8 hex>".
+# They are the daemon's private identity for a profile, never an app profile name
+# (#227: a backend Balanced once leaked into the list as its own profile).
+BACKEND_NAME = re.compile(r"z13h-[a-z0-9-]+-[0-9a-f]{8}")
+NAME_MAX = 64
+
+
+def is_backend_name(name):
+    return isinstance(name, str) and BACKEND_NAME.fullmatch(name) is not None
+
+
+def check_new_name(name, store, *, own=None):
+    """Return the stripped name for a new or renamed profile, or raise ValueError.
+
+    `own` is the current name of the profile being renamed (it may not clash with itself).
+    Clashes are checked case-insensitively, so "balanced" can't shadow "Balanced".
+    """
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("a profile needs a name")
+    name = name.strip()
+    if len(name) > NAME_MAX or any(ord(c) < 32 for c in name):
+        raise ValueError(f"profile names are 1..{NAME_MAX} printable characters")
+    if is_backend_name(name):
+        raise ValueError(f"{name!r} is a z13ctl backend name, not a profile name")
+    taken = {p["name"].casefold() for p in store["profiles"] if p["name"] != own}
+    if name.casefold() in taken:
+        raise ValueError(f"a profile named {name!r} already exists")
+    return name
 
 
 def default_profiles():
@@ -859,6 +890,60 @@ def upsert_profile(profile):
     return store
 
 
+def create_profile(name, from_name=None):
+    """Add a profile named `name`: a copy of `from_name`, else a Balanced-base profile.
+
+    The copy is a custom profile (never built in) and drops its z13ctl backend
+    pin, so it gets its own named profile when it is first mirrored.
+    """
+    with store_lock():
+        store = load_store()
+        name = check_new_name(name, store)
+        if from_name is None:
+            profile = _profile(name, "balanced")
+        else:
+            src = get_profile(from_name, store)
+            if src is None:
+                raise KeyError(from_name)
+            profile = copy.deepcopy(src)
+            profile.pop("z13ctl_profile", None)
+            profile["name"] = name
+        profile["builtin"] = False
+        validate(profile)
+        store["profiles"].append(profile)
+        save_store(store)
+    return get_profile(name)
+
+
+def rename_profile(old, new_name, *, pin_backend=None):
+    """Rename a custom profile; the active name follows it.
+
+    `pin_backend` is the z13ctl name the profile is mirrored under now. It is
+    stored on the profile (unless one is already pinned) so the rename cannot
+    orphan the daemon's named profile.
+    """
+    with store_lock():
+        store = load_store()
+        p = get_profile(old, store)
+        if p is None:
+            raise KeyError(old)
+        if p.get("builtin"):
+            raise ValueError(f"{old} is built in and keeps its name")
+        new_name = check_new_name(new_name, store, own=old)
+        if new_name == old:
+            raise ValueError(f"{old!r} already has that name")
+        if pin_backend and "z13ctl_profile" not in p:
+            p["z13ctl_profile"] = pin_backend
+        p["name"] = new_name
+        was_active = store.get("active") == old
+        if was_active:
+            store["active"] = new_name
+        save_store(store)
+        if was_active:
+            _mirror_legacy(new_name)
+    return get_profile(new_name)
+
+
 def delete_profile(name):
     with store_lock():
         store = load_store()
@@ -883,6 +968,8 @@ def validate(p):
     name = p.get("name")
     if not isinstance(name, str) or not name.strip():
         raise ValueError("profile needs a name")
+    if is_backend_name(name):
+        raise ValueError(f"{name!r} is a z13ctl backend name, not a profile name")
     if p.get("base") not in BASES:
         raise ValueError(f"base must be one of {BASES}")
     tdp = p.get("tdp")

@@ -15,6 +15,9 @@ EXPECTED_TOOLS = {
     "profile_get",
     "profile_set",
     "profile_apply",
+    "profile_create",
+    "profile_rename",
+    "profile_delete",
     "tdp_get",
     "tdp_set",
     "tdp_reset",
@@ -562,3 +565,32 @@ def test_json_parser_recursion_error_is_reported_and_server_continues(
         },
         {"jsonrpc": "2.0", "id": 1, "result": {}},
     ]
+
+
+def test_profile_create_rename_delete_use_the_owner(owner, profiles_env):
+    calls, record = owner
+    record("create_profile", {"name": "65 watt charger"})
+    record("rename_profile", {"name": "Road"})
+    record("delete_profile", {"removed": "Road", "active": "Balanced", "steps": []})
+    assert payload_of(mcp_server.call_tool(
+        "profile_create", {"name": "65 watt charger", "from": "Turbo"}))["ok"] is True
+    assert payload_of(mcp_server.call_tool(
+        "profile_rename", {"name": "Travel", "new_name": "Road"}))["ok"] is True
+    assert payload_of(mcp_server.call_tool("profile_delete", {"name": "Road"}))["ok"] is True
+    assert calls == [
+        ("create_profile", ("65 watt charger",), {"from_name": "Turbo"}),
+        ("rename_profile", ("Travel", "Road"), {}),
+        ("delete_profile", ("Road",), {}),
+    ]
+
+
+def test_profile_create_needs_a_name(owner, profiles_env):
+    result = mcp_server.call_tool("profile_create", {})
+    assert result["isError"] is True
+
+
+@pytest.mark.parametrize("arguments", [{"name": "-x"}, {"name": "A", "new_name": "-x"}])
+def test_profile_names_cannot_look_like_cli_options(owner, arguments):
+    tool = "profile_rename" if "new_name" in arguments else "profile_delete"
+    result = mcp_server.call_tool(tool, arguments)
+    assert result["isError"] is True

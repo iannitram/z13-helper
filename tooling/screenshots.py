@@ -47,7 +47,7 @@ def main():
     os.makedirs(OUT, exist_ok=True)
     dashboard_ui.DashboardUI._start_side_button_listener = lambda self: None
     dashboard_ui.DashboardUI._check_updates = lambda self, force=False: None
-    fan_watchdog.FanWatchdog.tick = lambda self: None
+    fan_watchdog.FanWatchdog.tick = lambda self, *a, **k: None
     dashboard_ui.FanTrace.to_file = staticmethod(lambda *a, **kw: None)   # not the real trace file
     for name in dir(screen_brightness):
         cls = getattr(screen_brightness, name)

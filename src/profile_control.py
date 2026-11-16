@@ -128,16 +128,28 @@ class ProfileControl(QObject):
             self.changed.emit()
             self._submit("Save profile", lambda: authority.mirror_profile(profile))
 
-    def add_custom(self, from_name):
-        """G-Helper's ＋: copy the selected profile (minus undervolt) as 'Custom N'."""
+    def add_custom(self, from_name, name=None):
+        """＋: copy the selected profile (minus undervolt) as `name`, or 'Custom N'.
+
+        Returns the new profile's name, or None when `name` is refused (the
+        reason goes to the message line).
+        """
         src = self.get(from_name) or self.active()
-        existing = set(self.names())
-        n = 1
-        while f"Custom {n}" in existing:
-            n += 1
+        if name is None:
+            existing = set(self.names())
+            n = 1
+            while f"Custom {n}" in existing:
+                n += 1
+            name = f"Custom {n}"
+        else:
+            try:
+                name = profiles.check_new_name(name, self.store())
+            except ValueError as e:
+                self.message.emit(str(e))
+                return None
         new = dict(src)
         new.pop("z13ctl_profile", None)
-        new.update({"name": f"Custom {n}", "builtin": False, "undervolt": None,
+        new.update({"name": name, "builtin": False, "undervolt": None,
                     "hooks": dict(src.get("hooks") or {"enter": "", "exit": ""})})
         profiles.upsert_profile(new)
         self.changed.emit()
@@ -148,8 +160,10 @@ class ProfileControl(QObject):
         new_name = new_name.strip()
         if not new_name or new_name == old:
             return False
-        if new_name in self.names():
-            self.message.emit(f"A profile named {new_name!r} already exists")
+        try:
+            profiles.check_new_name(new_name, self.store(), own=old)
+        except ValueError as e:
+            self.message.emit(str(e))
             return False
         with profiles.store_lock():
             store = self.store()
