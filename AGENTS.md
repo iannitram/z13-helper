@@ -188,3 +188,5 @@ isn't enough — it re-enumerates under new hidraw nodes and the `z13ctl.service
 the old path, so `profiles.recover_lightbar()` restarts that daemon too after the reset (and
 `recover_lightbar_stale()` restarts it alone, no reset, when the daemon's cached node goes stale
 on its own — ENODEV without a timeout).
+
+**Upstream and peers:** see `PEERS.md` at the repo root. When I say "upstream", I mean the repo in its Upstream section; reuse a peer's code only as that file allows.
